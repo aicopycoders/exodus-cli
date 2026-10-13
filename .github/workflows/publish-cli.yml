@@ -10,7 +10,7 @@ jobs:
   publish:
     # Guard: only the public mirror has trusted publishing configured. This keeps
     # the workflow dormant if it ever lands in the private monorepo.
-    if: github.repository == 'aicopycoders/exodus'
+    if: github.repository == 'aicopycoders/exodus-cli'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

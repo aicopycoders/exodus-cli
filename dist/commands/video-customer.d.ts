@@ -11,6 +11,8 @@ export type CustomerStopReason = {
 } | {
     kind: "openrouter-out-of-credits";
 } | {
+    kind: "plan-too-big";
+} | {
     kind: "keys-missing";
     keys: string[];
 };
@@ -25,6 +27,7 @@ export interface CustomerRun {
     } | null;
     mode: "one-shot" | "guided";
     stage: CustomerRunStage;
+    awaitingSignOff?: boolean;
     waiting: {
         ahead: number;
         stepsDone: number;

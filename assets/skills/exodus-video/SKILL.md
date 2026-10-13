@@ -70,7 +70,7 @@ never how it is made. Every answer to them says `"view": "customer"`, and the
 CLI words it the way the run page does. On their own brands they can:
 
 - `video start --script <file> --conceit <key> --style <slug>` with
-  `--direction`, `--music`, `--review-storyboard` and `--wait`. Any other start
+  `--direction`, `--frame`, `--pacing`, `--music`, `--review-storyboard` and `--wait`. Any other start
   flag is refused with one sentence naming it. The answer is the run id and the
   link to the video's page.
 - `video status <runId>`: where the video is, in plain words (waiting in line,
@@ -125,9 +125,12 @@ exodus workflow run <workflowId|name> --input <field>=@script.txt --voices @voic
 exodus workflow run <workflowId|name> --input <field>=@script.txt --voice-treatment @voice-treatment.json --wait
                                                           same, with the video model speaking voices you WROTE
 exodus video status <runId>                               where it is, per scene
-exodus video start --script <file> --conceit <podcast|ugc|stage|street|personification> --style <slug> [--direction "…"] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--review-storyboard] [--director] [--wait]
-                                                          start from a script, a conceit and a look.
+exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--review-storyboard] [--director] [--wait]
+                                                          start from a script and the kinds the server offers.
                                                           No music bed unless you pass --music.
+                                                          --frame pov (conversation conceits) and --pacing
+                                                          (presenter conceits) change the shots; a conceit
+                                                          that can't follow one refuses it.
                                                           The app approves its own storyboard when its
                                                           checks pass and goes straight on to the clips,
                                                           which is the part that costs. It stops at the
@@ -979,6 +982,10 @@ Read these out of `storyboard.json` before you build anything, in any tool:
   between the two halves.
 - **Overlays and SFX.** `overlays[]` and `audio.sfxCues[]` are cued the same
   way, by `cueLineId`. Nothing renders them for you.
+- **Jump cuts.** When `manifest.json` has `shots.pacing: "jump-cuts"`, every
+  scene was filmed from the same framing on purpose. Punch in about 15% on
+  every other cut between one speaker's scenes, so each cut visibly moves in
+  or out. The bundled script does this for you.
 - **Captions.** Nothing is burned into any clip. Captions belong in post; the
   word timings are what an editor imports to build them.
 
@@ -988,19 +995,28 @@ State this to the user before you run it, so they know what the cut does with
 the pieces:
 
 - **It cuts the picture to the voice, and never the other way round.** A
-  narrated scene's segment runs exactly as long as that scene's voice track plus
-  a beat of air. A clip that runs longer is trimmed; a clip that runs shorter
-  holds its last frame for the difference. The narration is never sped up,
-  slowed down or cut short, so every scene plays at the speed it was recorded,
-  and the word times are handed on as they were measured.
+  narrated scene's segment runs to the narrator's last word plus a beat of air:
+  about 0.25 s before the next scene, 0.5 s when it ends the ad. The last word
+  comes from the voice track's own word timings; when the scene has none, the
+  end of the voice file stands in for it. A clip that runs longer is trimmed; a
+  clip that runs shorter holds its last frame for the difference. The narration
+  is never sped up or slowed down, so every scene plays at the speed it was
+  recorded, and the word times are handed on as they were measured. The voice
+  file is cut only in the silence after its last word, never inside a word.
 - **It closes the dead air at the joins.** A clip that plays its own dialogue
   keeps about 0.15 s after its last word and about 0.1 s before its first (0.25 s
   when a different speaker answers), read from its `words.json`, so one clip
   runs into the next like one conversation. It only ever shortens a clip's
   silence and never cuts into a word. The ad's first clip also opens about 0.1 s
   before its first word, so a hum a clip makes before anyone speaks is not the
-  first thing heard. The ad's last tail, a narrated scene, a still and a
-  reaction beat keep their length.
+  first thing heard. The clip that ends the ad keeps about 0.5 s after its last
+  word, the same beat a narrator line gets there, or longer when the storyboard
+  marks an action after the line. A narrated scene, a still and a reaction beat
+  keep their length.
+- **It shortens long pauses between sentences inside one clip.** A silence over
+  0.6 s between two sentences is cut down to about 0.5 s, picture and sound
+  together, unless the script writes the pause in (an ellipsis or a dash), a
+  direction asks for one, or a reaction's laugh follows the line.
 - **It fades the audience reaction in and out.** A reaction beat fades in
   across any quiet start before its laugh (a generated laugh clip can hum
   there). When a line follows, the picture moves on early and the laugh's own
@@ -1017,11 +1033,17 @@ the pieces:
   proportional estimate when the scene has no word times, and saying which
   method it used), a narrated scene's voice
   replacing whatever the clip recorded, a dialogue scene keeping its performed
-  line, a clip-less scene becoming a still, everything normalized to 1080×1920
+  line, everything normalized to 1080×1920
   at 24 fps and −16 LUFS per segment, a generated room-tone bed under the whole
   ad, and the music bed underneath at low level. Output is H.264 + AAC in an MP4
   with `-movflags +faststart`.
-- Flags: `--out <file>`, `--skip 2,5`, `--no-music`. It prints what went in,
+- **It stops when a scene has no clip.** A scene the storyboard plans that is
+  still being made, never started, or failed stops the cut, which names each
+  one. Wait for the clip and pull again, leave the scene out with `--skip`, or
+  pass `--still-fill` to hold that scene's keyframe on screen instead: under its
+  voice track if it has one, else silent for its planned length. The still is
+  only ever made when asked for, because a run of them reads as a broken ad.
+- Flags: `--out <file>`, `--skip 2,5`, `--no-music`, `--still-fill`. It prints what went in,
   what was left out and why, and the upload command. When a clip hums or
   clicks where nobody speaks at an edge the cut plays, it lists each one under
   "Sound at the edges" with its time in the cut. That is a warning to listen
@@ -1032,8 +1054,12 @@ the pieces:
   timeline, each scene's own word times offset by where that scene starts in the
   cut, less any lead-in trimmed at the join, and otherwise unaltered. Scenes with no word times leave
   gaps and are named in the report; when no scene delivered any, neither file is
-  written. These sidecars are the script's own output — another tool will not
-  produce them.
+  written. It always writes `cut.scenes.json` too: where each scene plays in the
+  cut, one `{scene, startSec, seconds}` entry per placement. `exodus video
+  upload` sends `cut.scenes.json` and `cut.words.json` with the cut when they
+  sit beside it, so the customer's edit list shows each scene's time on screen
+  and their editor folder gets the captions. These sidecars are the script's own
+  output — another tool will not produce them.
 
 Before uploading anything, from any tool, check what you made:
 `ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 cut.mp4`

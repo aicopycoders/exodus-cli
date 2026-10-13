@@ -7,7 +7,7 @@
 // its cued line ends, heard with its own sound while the speaker is silent,
 // fading in across any quiet start and out rather than stopping dead.
 //
-//   node first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music]
+//   node first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]
 //
 // The audio track comes first. A narrated scene (the storyboard gives it
 // narration and no on-camera line) plays its voice track and NOTHING the clip
@@ -16,23 +16,27 @@
 // the voice runs longer. The voice itself is never altered. A dialogue scene
 // keeps the audio it performed; at each join its silence before the first word
 // and after the last is cut back to a short beat, read from its word times.
-// Inside it, a silence over 0.9 s between two sentences is cut down to 0.8 s,
+// Inside it, a silence over 0.6 s between two sentences is cut down to 0.5 s,
 // picture and sound together, unless the script writes that pause in. A
 // sound in such a break that holds no heard word (a burp, a click) is cut
-// out, read from the clip's loudness, and the same rule then applies. A
-// scene with no clip but a keyframe becomes a still for the length of its voice
-// track, else the storyboard's planned duration. Every segment is
-// loudness-normalized to -16 LUFS before the join.
-// --skip drops scenes.
+// out, read from the clip's loudness, and the same rule then applies. Every
+// segment is loudness-normalized to -16 LUFS before the join.
+// A scene with no clip stops the cut (#3365: a customer's ad once ended on 16 s
+// of frozen, silent keyframes). --skip drops scenes. --still-fill instead turns
+// a scene with no clip but a keyframe into a still for the length of its voice
+// track, else the storyboard's planned duration. A run whose Pacing is jump cuts (manifest.shots)
+// punches in on every other cut between one speaker's scenes; a montage does
+// the same where one speaker's scenes in a row play one base shot.
 //
 // After the render it writes the whole ad's word times beside the MP4, as
-// <out>.words.json and <out>.srt, for captioning in post.
+// <out>.words.json and <out>.srt, for captioning in post, and where each scene
+// plays in the cut as <out>.scenes.json (#3300).
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music]";
+const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]";
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const FPS = 24;
@@ -44,6 +48,16 @@ const norm = (label) =>
  * on whole frames, so the picture runs as long as its sound there and the
  * timeline's times are the cut's times.
  */
+/**
+ * #3304: the jump cut's punch-in, a centre crop of the frame scaled up this
+ * much. The planner holds one framing across a jump-cut run's scenes, and a
+ * montage's line-cut pieces keep their parent's (#3323), so without it those
+ * cuts would be the same picture.
+ */
+export const PUNCH_IN_SCALE = 1.15;
+const even = (n) => 2 * Math.round(n / 2);
+const PUNCH_IN =
+  `scale=${even(WIDTH * PUNCH_IN_SCALE)}:${even(HEIGHT * PUNCH_IN_SCALE)},crop=${WIDTH}:${HEIGHT},setsar=1`;
 const floorFrame = (t) => Math.floor(t * FPS + 1e-6) / FPS;
 const ceilFrame = (t) => Math.ceil(t * FPS - 1e-6) / FPS;
 const stereo = "aresample=48000,aformat=channel_layouts=stereo";
@@ -58,8 +72,17 @@ const stereo = "aresample=48000,aformat=channel_layouts=stereo";
 const LOUDNORM = "apad=whole_dur=3,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,asetpts=N/SR/TB";
 /** A fade this short at each edge of a segment's sound stops a hard cut in the room tone clicking. */
 const EDGE_FADE_SEC = 0.015;
-/** Air after the last spoken word of a narrated scene, so the line lands. */
-export const TAIL_AIR_SEC = 0.8;
+/**
+ * Air after a narrator's last word. Sizing by the voice file plus 0.8 s left
+ * ~1.1 s of silence at every narrator join, since the file already runs on
+ * ~0.3 s past the word (#3384).
+ */
+export const NARRATION_JOIN_AIR_SEC = 0.25;
+/**
+ * Air after the last word of the line that ends the ad, spoken or narrated, so
+ * it lands. A dialogue clip's own tail ran ~1.1 s of dead air (#3423).
+ */
+export const END_AIR_SEC = 0.5;
 /** A continuous low bed under the whole ad, so the joins between clips do not read as dead air. */
 const ROOM_TONE =
   "anoisesrc=color=brown:amplitude=0.0035:r=48000,highpass=f=60,lowpass=f=900,aformat=channel_layouts=stereo";
@@ -105,34 +128,188 @@ export function lineWordCounts(storyboard) {
 const wordToken = (word) => String(word ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
 /**
+ * #3175: one spoken word a script and a scribe spell differently ("ok", "Okay").
+ * #3460: "alright" maps to the scribe's "All right" once its halves are joined.
+ */
+const SAME_WORD_SPELLINGS = new Map([
+  ["ok", "okay"],
+  ["alright", "allright"],
+]);
+
+/** The spoken tokens of one written word; empty for pure punctuation. */
+function spokenWords(word) {
+  const core = String(word ?? "").toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  // #3133: a scribe writes a spoken "glowmist dot com" as "Glowmist.com".
+  const parts = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z]{2,})+$/.test(core)
+    ? core.split(".").flatMap((part, i) => (i ? ["dot", part] : [part]))
+    : [core];
+  return parts.map(wordToken).filter(Boolean).map((t) => SAME_WORD_SPELLINGS.get(t) ?? t);
+}
+
+/** { tokens, sourceIndex }: tokens[i] came from written word sourceIndex[i]. */
+function spokenTokens(words) {
+  const tokens = [];
+  const sourceIndex = [];
+  words.forEach((word, i) => {
+    for (const token of spokenWords(word)) {
+      tokens.push(token);
+      sourceIndex.push(i);
+    }
+  });
+  return { tokens, sourceIndex };
+}
+
+/** An ellipsis or a dash, which a writer may type with no space around it (scout scribe.ts PAUSE_MARK). */
+const PAUSE_MARK = /…|\.{3,}|[—–]|-{2,}/g;
+const scriptWords = (text) => (text ?? "").replace(PAUSE_MARK, " $& ").split(/\s+/).filter(Boolean);
+
+const MAX_JOINED_WORDS = 3;
+const MIN_SLIP_WORD_LENGTH = 7;
+
+/**
+ * #2300: a scribe writes a made-up name the script spells as one word
+ * ("FreshKeep") as two ("Fresh keep"), or the other way round. Joins each run
+ * of 2-3 neighbouring tokens whose concatenation is a token of the other side,
+ * longest first. #2520: a run one slip off one of the other side's names joins
+ * too, unless a join also starts at the next token, or (#3058) its first token
+ * is a word the other side already has. Mirrors scout scribe.ts joinSplitWords.
+ */
+function joinSplitWords(side, otherSide, otherNames = []) {
+  const other = new Set(otherSide);
+  const fuzzy = (r) => otherNames.some((name) => sameWord(name, r, true));
+  const run = (i, k) => (i + k <= side.tokens.length ? side.tokens.slice(i, i + k).join("") : undefined);
+  const joinStartsAt = (i) => {
+    for (let k = MAX_JOINED_WORDS; k >= 2; k--) {
+      const r = run(i, k);
+      if (r !== undefined && (other.has(r) || fuzzy(r))) return true;
+    }
+    return false;
+  };
+  const tokens = [];
+  const sourceIndex = [];
+  const lastSourceIndex = [];
+  for (let i = 0; i < side.tokens.length; ) {
+    let take = 1;
+    for (let k = MAX_JOINED_WORDS; k >= 2; k--) {
+      const r = run(i, k);
+      if (r === undefined) continue;
+      if (other.has(r) || (fuzzy(r) && !joinStartsAt(i + 1) && !other.has(side.tokens[i]))) {
+        take = k;
+        break;
+      }
+    }
+    tokens.push(side.tokens.slice(i, i + take).join(""));
+    sourceIndex.push(side.sourceIndex[i]);
+    lastSourceIndex.push(side.sourceIndex[i + take - 1]);
+    i += take;
+  }
+  return { tokens, sourceIndex, lastSourceIndex };
+}
+
+/**
+ * Which written words read as names: a capital inside the word, or a leading
+ * capital where no sentence starts. "I" and "I'm" are never names.
+ */
+function nameLikeWords(words) {
+  return words.map((word, i) => {
+    const bare = word.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+    if (/^I(['’][a-z]+)?$/.test(bare)) return false;
+    if (/[A-Z]/.test(bare.slice(1))) return true;
+    const sentenceStart = i === 0 || /[.!?]["')\]]*$/.test(words[i - 1]);
+    return /^[A-Z]/.test(bare) && !sentenceStart;
+  });
+}
+
+/**
+ * #2441: one letter off on a long name is a slip; #3035: so is a spelling of
+ * the same sound, and #3415 a final z after a vowel for an s ("Inez", "Ines").
+ */
+function sameWord(scripted, heard, nameLike) {
+  if (scripted === heard || soundKey(scripted) === soundKey(heard)) return true;
+  if (!nameLike || scripted.length < MIN_SLIP_WORD_LENGTH) return false;
+  const [short, long] = scripted.length <= heard.length ? [scripted, heard] : [heard, scripted];
+  if (long.length - short.length > 1) return false;
+  let i = 0;
+  while (i < short.length && short[i] === long[i]) i++;
+  const rest = short.length === long.length ? i + 1 : i;
+  return short.slice(rest) === long.slice(i + 1);
+}
+
+const soundKey = (token) =>
+  token
+    .replace(/ph/g, "f")
+    .replace(/ck|q|c(?![eiy])/g, "k")
+    .replace(/(?<=\w{3})oe$/, "o")
+    .replace(/(?<=[aeiou])z$/, "s");
+
+/**
+ * Where the script's first complete, in-order delivery sits in the heard
+ * words, or null. heardTokenOf/heardWordOf give the heard token and word that
+ * deliver each (joined) script token; spokenWords lists every heard word that
+ * carries a token. #3140: one scripted word misheard as another is paired with
+ * the heard word in its place when the next scripted word follows it, but an
+ * exact delivery wins. Mirrors scout scribe.ts alignScript.
+ */
+function alignScript(words, written) {
+  const scripted = spokenTokens(written);
+  const heardWords = spokenTokens(words.map((w) => w.w));
+  const nameLike = nameLikeWords(written);
+  const names = scripted.tokens.filter((_, t) => nameLike[scripted.sourceIndex[t]]);
+  const heard = joinSplitWords(heardWords, scripted.tokens, names);
+  const expected = joinSplitWords(scripted, heard.tokens);
+  if (expected.tokens.length === 0 || heard.tokens.length === 0) return null;
+  const matches = (e, h) =>
+    h < heard.tokens.length && sameWord(expected.tokens[e], heard.tokens[h], nameLike[expected.sourceIndex[e]]);
+  const pair = (allowMisheard) => {
+    const tokenOf = [];
+    let j = 0;
+    for (let e = 0; e < expected.tokens.length; e++) {
+      const misheard = allowMisheard && !matches(e, j) && e + 1 < expected.tokens.length && matches(e + 1, j + 1);
+      if (!misheard) while (j < heard.tokens.length && !matches(e, j)) j++;
+      if (j === heard.tokens.length) return null;
+      tokenOf.push(j++);
+    }
+    return tokenOf;
+  };
+  const heardTokenOf = pair(false) ?? pair(true);
+  if (!heardTokenOf) return null;
+  return {
+    expected,
+    heard,
+    heardTokenOf,
+    heardWordOf: heardTokenOf.map((j) => heard.sourceIndex[j]),
+    spokenWords: [...new Set(heardWords.sourceIndex)],
+  };
+}
+
+/**
  * #2541: the indexes of the heard words that deliver the first and last
  * scripted word, matching the script in order at its earliest delivery, or null
- * when the whole script is not heard that way.
+ * when the whole script is not heard that way. #3058: a last word heard split
+ * in two ends on its second half.
  */
 export function scriptedSpan(words, lineTexts) {
-  const script = lineTexts.flatMap((text) => (text ?? "").split(/\s+/)).map(wordToken).filter(Boolean);
-  const at = heardAt(words, script);
-  return at && at.length > 0 ? { first: at[0], last: at.at(-1) } : null;
+  const aligned = alignScript(words, lineTexts.flatMap(scriptWords));
+  if (!aligned) return null;
+  const { heard, heardWordOf, heardTokenOf } = aligned;
+  return { first: heardWordOf[0], last: heard.lastSourceIndex[heardTokenOf.at(-1)] };
 }
 
-/** The heard word that delivers each script token, in order at its earliest delivery, or null. */
-function heardAt(words, tokens) {
-  const at = [];
-  let j = 0;
-  for (const token of tokens) {
-    while (j < words.length && wordToken(words[j].w) !== token) j++;
-    if (j === words.length) return null;
-    at.push(j++);
-  }
-  return at;
-}
-
-/** #2544: a silence between two sentences longer than this is cut down to the kept length. */
-export const SENTENCE_GAP_MAX_SEC = 0.9;
-export const SENTENCE_GAP_KEEP_SEC = 0.8;
+/** #2544, #3423: a silence between two sentences longer than this is cut down to the kept length. */
+export const SENTENCE_GAP_MAX_SEC = 0.6;
+export const SENTENCE_GAP_KEEP_SEC = 0.5;
 /** A pause the script writes in: an ellipsis, a dash, or a hyphen standing between words. */
 const WRITTEN_PAUSE = /…|\.{3}|[—–-]/;
 const SENTENCE_END = /[.?!]/;
+/** A heard word that ends a sentence; a heard ellipsis does not (scout scribe.ts HEARD_SENTENCE_END). */
+const HEARD_SENTENCE_END = /(?<!\.)[.?!]["'”’)\]]*$/;
+/** A heard abbreviation keeps its period mid-sentence ("2p.m.", "U.S.", "Dr."). */
+const HEARD_ABBREVIATION = /^[\d:]*(?:\p{L}\.){2,}$|^(?:mr|mrs|ms|dr|st|vs|etc|jr|sr)\.$/iu;
+
+function heardSentenceEnd(word) {
+  const bare = String(word ?? "").replace(/^["'“‘(\[]+|["'”’)\]]+$/g, "");
+  return HEARD_SENTENCE_END.test(bare) && !HEARD_ABBREVIATION.test(bare);
+}
 /**
  * #2554: loudness windows, and the levels that read as a sound and as quiet;
  * SETTLED_WINDOWS quiet windows in a row (200 ms) end a sound (scout trim.ts).
@@ -164,8 +341,10 @@ export function asksPause(line) {
  * clip's own time. A heard silence over SENTENCE_GAP_MAX_SEC between two
  * scripted words at a sentence break (a new line, or . ? ! between them) keeps
  * half of SENTENCE_GAP_KEEP_SEC after the earlier word and half before the
- * later one; the rest goes. Kept: a pause the script writes in (a mark between
- * the words, or a direction on either line asking for one), the laugh beat
+ * later one; the rest goes. #3460: a speaker can end a sentence where the
+ * script writes a comma, so an earlier word the scribe heard end one counts.
+ * Kept: a pause the script writes in (a mark between the words, or a
+ * direction on either line asking for one), the laugh beat
  * after a line a reaction is cued to, and any gap with another heard sound in
  * it. Nothing is cut when the script is not heard in order.
  *
@@ -177,32 +356,39 @@ export function asksPause(line) {
  * lines: [{ text, asksPause, cuesBeat }] in the order the clip speaks them.
  */
 export function sentenceGapCuts(words, lines, levels = null) {
-  const tokens = [];
+  const written = [];
+  const pieces = [];
   let between = "";
   lines.forEach((line, li) => {
-    for (const piece of (line.text ?? "").split(/\s+/)) {
-      const token = wordToken(piece);
-      if (!token) {
+    for (const piece of scriptWords(line.text)) {
+      written.push(piece);
+      if (!wordToken(piece)) {
         between += ` ${piece}`;
+        pieces.push(null);
         continue;
       }
       const [, lead, trail] = piece.match(/^([^\p{L}\p{N}]*).*?([^\p{L}\p{N}]*)$/u);
-      tokens.push({ token, li, before: between + lead });
+      pieces.push({ li, before: between + lead });
       between = trail;
     }
     between += " ";
   });
-  const at = heardAt(words ?? [], tokens.map((t) => t.token));
-  if (!at) return [];
+  const aligned = alignScript(words ?? [], written);
+  if (!aligned) return [];
+  const { expected, heardTokenOf, heardWordOf, spokenWords: spoken } = aligned;
   const cuts = [];
-  for (let t = 0; t + 1 < tokens.length; t++) {
-    const [a, b] = [tokens[t], tokens[t + 1]];
-    if (at[t + 1] !== at[t] + 1) continue;
+  for (let t = 0; t + 1 < heardWordOf.length; t++) {
+    if (heardTokenOf[t + 1] !== heardTokenOf[t] + 1) continue;
+    const to = heardWordOf[t + 1];
+    if (heardWordOf[t] === to) continue;
+    // A joined script token keeps its first word's line and lead-in.
+    const [a, b] = [pieces[expected.sourceIndex[t]], pieces[expected.sourceIndex[t + 1]]];
     const newLine = a.li !== b.li;
-    if (!newLine && !SENTENCE_END.test(b.before)) continue;
+    // A name heard split in two (#2300) ends on its last heard word.
+    const [earlier, later] = [words[spoken.findLast((w) => w < to)], words[to]];
+    if (!newLine && !SENTENCE_END.test(b.before) && !heardSentenceEnd(earlier.w)) continue;
     if (WRITTEN_PAUSE.test(b.before) || lines[a.li].asksPause || lines[b.li].asksPause) continue;
     if (newLine && lines[a.li].cuesBeat) continue;
-    const [earlier, later] = [words[at[t]], words[at[t + 1]]];
     const gap = later.s - earlier.e;
     const heard = levels && soundBetween(levels, earlier.e, later.s);
     // A sound's frame edges widen the cut, so none of it is left in.
@@ -367,6 +553,7 @@ export function scenePlans(storyboard) {
     plans.set(scene.sceneIndex, {
       firstSpeaker: speakers[0] ?? null,
       lastSpeaker: speakers.at(-1) ?? null,
+      baseShotId: hasText(scene.baseShotId) ? scene.baseShotId.trim() : null,
       cutaway: CUTAWAY_KINDS.has(scene.kind),
       narrated: narratedScene(scene, storyboard),
       lineIds: Array.isArray(scene.lineIds) ? scene.lineIds : [],
@@ -380,17 +567,18 @@ export function scenePlans(storyboard) {
 }
 
 /**
- * Fit a picture to its voice track. The segment always runs as long as the
- * voice plus a beat of air, to the next whole frame, because the voice is never
- * altered. A clip that runs longer is trimmed; a clip that runs shorter holds
- * its last frame for the difference. A still (no clip) simply runs the voice's length.
- * A scene marked with actionTailSec keeps that long after the voice, up to the clip's
- * end, so the set-down it ends on is seen (#3199).
+ * Fit a picture to its voice track. The segment runs to where the voice stops
+ * speaking (spokenEndSec) plus airSec, to the next whole frame; the voice is
+ * never altered, only cut in the silence after that point. A clip that runs
+ * longer is trimmed; a clip that runs shorter holds its last frame for the
+ * difference. A still (no clip) simply runs that length. A scene marked with
+ * actionTailSec keeps that long after the voice, up to the clip's end, so the
+ * set-down it ends on is seen (#3199).
  */
-export function fitNarration({ clipSeconds, voiceSeconds, actionTailSec = 0 }) {
-  const aired = ceilFrame(voiceSeconds + TAIL_AIR_SEC);
+export function fitNarration({ clipSeconds, spokenEndSec, airSec, actionTailSec = 0 }) {
+  const aired = ceilFrame(spokenEndSec + airSec);
   if (clipSeconds === null) return { seconds: aired, holdSec: 0, trimmedBy: 0 };
-  const target = Math.max(aired, Math.min(clipSeconds, ceilFrame(voiceSeconds + actionTailSec)));
+  const target = Math.max(aired, Math.min(clipSeconds, ceilFrame(spokenEndSec + actionTailSec)));
   if (target <= clipSeconds) {
     return { seconds: target, holdSec: 0, trimmedBy: clipSeconds - target };
   }
@@ -449,10 +637,10 @@ export function cueEndInSegment(seg, counts, cueLineId) {
  * (#2388). Each side comes back to a beat that reads as one conversation, a
  * longer one when someone new answers. Only ever shortens, never into a word.
  * The ad's first lead-in comes back to the same-speaker beat too, since a clip
- * can hum before its first word (#2666); its last tail is left alone, and a
- * clip whose closing line cues a reaction is not the ad's end, since the beat
- * follows it. Trims land on whole frames so the picture and its sound stay the
- * same length.
+ * can hum before its first word (#2666); its last tail comes back to
+ * END_AIR_SEC (#3423), and a clip whose closing line cues a reaction is not the
+ * ad's end, since the beat follows it. Trims land on whole frames so the
+ * picture and its sound stay the same length.
  *
  * The beat is measured from the clip's scripted words when the script is heard
  * in order, and a cut stops short of a sound made up before or after the line
@@ -478,9 +666,8 @@ function trimJoins(spine, reactionCues, scriptLines) {
       inSec = Math.max(inSec, Math.min(clear, floorFrame(firstWord)));
     }
     const endsAd = k === spine.length - 1 && !reactionCues.has(seg.lineIds.at(-1));
-    let outSec = endsAd
-      ? after.length > 0 ? ceilFrame(lastWord + TAIL_AIR_SEC) : seg.seconds
-      : ceilFrame(lastWord + Math.max(JOIN_TAIL_SEC, seg.actionTailSec ?? 0));
+    const tailSec = Math.max(endsAd ? END_AIR_SEC : JOIN_TAIL_SEC, seg.actionTailSec ?? 0);
+    let outSec = ceilFrame(lastWord + tailSec);
     if (after.length > 0) {
       const clear = floorFrame(Math.min(...after.map((w) => w.s)) - EXTRA_CLEARANCE_SEC);
       outSec = Math.min(outSec, Math.max(clear, ceilFrame(lastWord)));
@@ -499,6 +686,19 @@ function trimJoins(spine, reactionCues, scriptLines) {
     seg.words = kept.map((w) => ({ ...w, s: w.s - inSec, e: w.e - inSec }));
     seg.note = withHow(seg.note, how);
   });
+}
+
+/**
+ * Where a narrated segment stops speaking, and the air it keeps after (#3384).
+ * voiceWords are word times taken from the voice track itself. Without them
+ * the end of the voice file stands in for the last word, its own trailing
+ * silence counted as part of the air.
+ */
+function narrationEnd(voiceSeconds, voiceWords, endsAd) {
+  return {
+    spokenEndSec: voiceWords?.length ? Math.max(...voiceWords.map((w) => w.e)) : voiceSeconds,
+    airSec: endsAd ? END_AIR_SEC : NARRATION_JOIN_AIR_SEC,
+  };
 }
 
 const holdFor = (seg) =>
@@ -576,13 +776,66 @@ function quietStart(levels, seconds) {
   return first > 0 ? Math.min(seconds, Math.max(EDGE_FADE_SEC, first * levels.windowSec)) : EDGE_FADE_SEC;
 }
 
-export function buildTimeline({ manifest, storyboard, skip, probe, exists, readWords, readLevels = () => null }) {
+/**
+ * Alternate one speaker's scenes in a row between the plain frame and the
+ * punch-in, so every cut between them visibly moves in or out. Any other cut
+ * starts the alternation again. Marked before reactions split a scene, so both
+ * halves keep their scene's frame.
+ */
+function markPunchIns(spine, sameShot) {
+  let punched = false;
+  spine.forEach((seg, k) => {
+    const prev = spine[k - 1];
+    punched = Boolean(prev) && sameShot(prev, seg) && !punched;
+    if (punched) seg.punchIn = true;
+  });
+}
+
+const sameSpeaker = (prev, seg) => Boolean(prev.lastSpeaker && seg.firstSpeaker === prev.lastSpeaker);
+
+/**
+ * The pacings whose edit punches in, each with when a scene plays on in the
+ * shot of the one before it. Jump cuts film every scene in one framing. A
+ * montage changes shot on every cut, except where the line cut split a long
+ * line into pieces that keep their parent's base shot (#3317, #3323).
+ */
+const PUNCH_IN_RUNS = new Map([
+  ["jump-cuts", sameSpeaker],
+  ["montage", (prev, seg) =>
+    sameSpeaker(prev, seg) && Boolean(seg.baseShotId) && seg.baseShotId === prev.baseShotId],
+]);
+
+/**
+ * #3365: the scenes the cut cannot be made without, by number. A scene the
+ * storyboard plans needs a clip unless --skip names it, even one the pull has
+ * no row for. A scene it does not plan is a row a re-board left behind, so it
+ * is no loss. With no storyboard, every scene the pull lists counts.
+ */
+export function scenesWithNoClip({ manifest, storyboard, skip, exists = Boolean }) {
+  const planned = [...scenePlans(storyboard).keys()];
+  const listed = (manifest?.scenes ?? []).map((scene) => scene.sceneIndex);
+  const clipped = new Set(
+    (manifest?.scenes ?? []).filter((scene) => exists(scene.clip)).map((scene) => scene.sceneIndex),
+  );
+  return [...new Set(planned.length > 0 ? planned : listed)]
+    .filter((n) => !skip.has(n) && !clipped.has(n))
+    .sort((a, b) => a - b);
+}
+
+export function buildTimeline({
+  manifest, storyboard, skip, probe, exists, readWords, readLevels = () => null, stillFill = false,
+}) {
   const plans = scenePlans(storyboard);
   const counts = lineWordCounts(storyboard);
   const spine = [];
   const cutaways = [];
   const waiting = [];
   const dropped = [];
+  const missing = new Set(scenesWithNoClip({ manifest, storyboard, skip, exists }));
+  const filled = new Set();
+  // A narrated segment is first fitted as a join; the one that ends the ad is
+  // refitted once the spine is known.
+  const refits = new Map();
 
   for (const scene of manifest?.scenes ?? []) {
     const n = scene.sceneIndex;
@@ -604,12 +857,13 @@ export function buildTimeline({ manifest, storyboard, skip, probe, exists, readW
           sceneIndex: n, source: "clip", file: scene.clip,
           seconds: clip.seconds, hasAudio: clip.hasAudio, ...cue,
         });
-      } else if (exists(scene.keyframe)) {
+      } else if (stillFill && exists(scene.keyframe)) {
+        filled.add(n);
         waiting.push({
           sceneIndex: n, source: "still", file: scene.keyframe,
           seconds: plan.durationSec ?? 4, hasAudio: false, ...cue,
         });
-      } else {
+      } else if (!missing.has(n)) {
         dropped.push({ n, reason: `cutaway ${n}: ${nothing}` });
       }
       continue;
@@ -624,20 +878,29 @@ export function buildTimeline({ manifest, storyboard, skip, probe, exists, readW
       const base = {
         sceneIndex: n, source: "clip", file: scene.clip, clipSeconds: clip.seconds, inSec: 0,
         lineIds: plan.lineIds, firstSpeaker: plan.firstSpeaker, lastSpeaker: plan.lastSpeaker,
-        actionTailSec: plan.actionTailSec ?? 0,
+        baseShotId: plan.baseShotId ?? null, actionTailSec: plan.actionTailSec ?? 0,
       };
       if (voice && (narrated || !clip.hasAudio)) {
-        const fit = fitNarration({
-          clipSeconds: clip.seconds, voiceSeconds: probe(voice).seconds, actionTailSec: plan.actionTailSec ?? 0,
-        });
-        const how = [];
-        if (fit.trimmedBy > 0.05) how.push(`clip trimmed ${clip.seconds.toFixed(1)}s -> ${fit.seconds.toFixed(1)}s`);
-        if (fit.holdSec > 0.05) how.push(`last frame held ${fit.holdSec.toFixed(1)}s`);
-        spine.push({
-          ...base, audio: "narration", voice, seconds: fit.seconds,
-          holdSec: fit.holdSec, words: readWords(scene.words),
-          note: `${flag}, ${voice} replaces the clip's audio${how.length ? ` (${how.join(", ")})` : ""}`,
-        });
+        const voiceSeconds = probe(voice).seconds;
+        const words = readWords(scene.words);
+        // A clip's own word times describe the clip, not the voice that replaces its audio.
+        const voiceWords = scene.wordsFrom === "voice" ? words : null;
+        const fitted = (endsAd) => {
+          const fit = fitNarration({
+            clipSeconds: clip.seconds, ...narrationEnd(voiceSeconds, voiceWords, endsAd),
+            actionTailSec: plan.actionTailSec ?? 0,
+          });
+          const how = [];
+          if (fit.trimmedBy > 0.05) how.push(`clip trimmed ${clip.seconds.toFixed(1)}s -> ${fit.seconds.toFixed(1)}s`);
+          if (fit.holdSec > 0.05) how.push(`last frame held ${fit.holdSec.toFixed(1)}s`);
+          return {
+            seconds: fit.seconds, holdSec: fit.holdSec,
+            note: `${flag}, ${voice} replaces the clip's audio${how.length ? ` (${how.join(", ")})` : ""}`,
+          };
+        };
+        const seg = { ...base, audio: "narration", voice, words, ...fitted(false) };
+        spine.push(seg);
+        refits.set(seg, fitted);
       } else if (narrated) {
         spine.push({
           ...base, audio: "silence", voice: null, seconds: clip.seconds, holdSec: 0,
@@ -657,23 +920,49 @@ export function buildTimeline({ manifest, storyboard, skip, probe, exists, readW
       }
       continue;
     }
-    if (exists(scene.keyframe)) {
-      const fit = voice
-        ? fitNarration({ clipSeconds: null, voiceSeconds: probe(voice).seconds })
-        : { seconds: plan.durationSec ?? 4, holdSec: 0 };
-      spine.push({
+    if (stillFill && exists(scene.keyframe)) {
+      filled.add(n);
+      const voiceSeconds = voice ? probe(voice).seconds : 0;
+      // #1689: on a narrated scene the words are the voice track's, and the
+      // voice starts where the segment does, so they need no offset here.
+      const words = voice ? readWords(scene.words) : null;
+      const voiceWords = scene.wordsFrom === "voice" ? words : null;
+      const fitted = (endsAd) => {
+        const seconds = voice
+          ? fitNarration({ clipSeconds: null, ...narrationEnd(voiceSeconds, voiceWords, endsAd) }).seconds
+          : plan.durationSec ?? 4;
+        return {
+          seconds,
+          note: `${flag}${voice ? ` + ${voice}` : ", silent"} (${seconds.toFixed(1)}s, clip ${scene.clipStatus})`,
+        };
+      };
+      const seg = {
         sceneIndex: n, source: "still", file: scene.keyframe, clipSeconds: null, inSec: 0,
-        seconds: fit.seconds, audio: voice ? "narration" : "silence", voice, holdSec: 0,
-        lineIds: plan.lineIds,
-        // #1689: on a narrated scene the words are the voice track's, and the
-        // voice starts where the segment does, so they need no offset here.
-        words: voice ? readWords(scene.words) : null,
-        note: `${flag}${voice ? ` + ${voice}` : ", silent"} (${fit.seconds.toFixed(1)}s, clip ${scene.clipStatus})`,
-      });
+        audio: voice ? "narration" : "silence", voice, holdSec: 0,
+        lineIds: plan.lineIds, firstSpeaker: plan.firstSpeaker, lastSpeaker: plan.lastSpeaker,
+        baseShotId: plan.baseShotId ?? null, words, ...fitted(false),
+      };
+      spine.push(seg);
+      if (voice) refits.set(seg, fitted);
       continue;
     }
-    dropped.push({ n, reason: `scene ${n}: ${nothing}` });
+    if (!missing.has(n)) dropped.push({ n, reason: `scene ${n}: ${nothing}` });
   }
+  const unfilled = [...missing].filter((n) => !filled.has(n));
+  if (unfilled.length > 0) {
+    const listed = new Map((manifest?.scenes ?? []).map((scene) => [scene.sceneIndex, scene]));
+    throw new FirstCutError(1, noClipRefusal(unfilled.map((n) => {
+      const scene = listed.get(n);
+      return {
+        n,
+        keyframe: Boolean(scene) && exists(scene.keyframe),
+        status: scene ? `clip ${scene.clipStatus}${scene.error ? `: ${scene.error}` : ""}` : "clip missing",
+      };
+    })));
+  }
+
+  const sameShot = PUNCH_IN_RUNS.get(manifest?.shots?.pacing);
+  if (sameShot) markPunchIns(spine, sameShot);
 
   const noCue = (c) =>
     c.cueLineId ? `${c.cueLineId} is spoken by no scene in the cut` : "the storyboard names no cue line";
@@ -683,6 +972,8 @@ export function buildTimeline({ manifest, storyboard, skip, probe, exists, readW
   // spine, so they go in before any overlay is placed on it.
   const scriptLines = new Map((storyboard?.script ?? []).map((line) => [line?.lineId, line]));
   const reactionCues = new Set(waiting.filter((w) => w.reaction).map((w) => w.cueLineId));
+  const last = spine.at(-1);
+  if (refits.has(last) && !reactionCues.has(last.lineIds.at(-1))) Object.assign(last, refits.get(last)(true));
   tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels);
   trimJoins(spine, reactionCues, scriptLines);
   for (const c of waiting.filter((w) => w.reaction)) {
@@ -738,6 +1029,20 @@ export function buildTimeline({ manifest, storyboard, skip, probe, exists, readW
   };
 }
 
+/** #3365: why the cut stopped on scenes with no clip, and the person's three ways on. */
+function noClipRefusal(missing) {
+  const scenes = missing.map((m) => `scene ${m.n} (${m.status})`).join(", ");
+  const skip = `--skip ${missing.map((m) => m.n).join(",")}`;
+  const bare = missing.filter((m) => !m.keyframe).map((m) => m.n);
+  const ways = bare.length === missing.length
+    ? `Wait for the clips and pull again, or leave them out with ${skip}.`
+    : `Wait for the clips and pull again, leave them out with ${skip}, ` +
+      "or hold each one's keyframe on screen instead with --still-fill (under its voice track if it has one, " +
+      "else silent for its planned length)." +
+      (bare.length > 0 ? ` --still-fill cannot cover scene ${bare.join(", ")}, which has no keyframe either.` : "");
+  return `No clip for ${scenes}. ${ways}`;
+}
+
 function sec(n) {
   return (Number.isFinite(n) ? Math.max(0, n) : 0).toFixed(3);
 }
@@ -789,6 +1094,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out }) {
       }
     }
     if (seg.holdSec > 0.01) fit.push(`tpad=stop_mode=clone:stop_duration=${sec(seg.holdSec)}`);
+    if (seg.punchIn) fit.push(PUNCH_IN);
     filters.push(`${norm(`${i}:v`)}${fit.length ? `,${fit.join(",")}` : ""}[v${i}]`);
     // A segment split around a reaction beat starts partway into its sound too.
     const skipIn = inSec > 0.001 ? `atrim=start=${sec(inSec)},asetpts=PTS-STARTPTS,` : "";
@@ -871,8 +1177,36 @@ export function buildFfmpegArgs(timeline, { resolve, music, out }) {
   ];
 }
 
+const roundMs = (n) => Math.round(n * 1000) / 1000;
+
+/**
+ * #3300: every stretch of the cut where a scene is the picture, in order. A
+ * cutaway covers the whole frame, so the spine scene under it is off screen
+ * there and its placement splits around it. A scene split around a reaction
+ * beat, or shown twice, has one entry per stretch.
+ */
+export function sceneTimes(timeline) {
+  const covers = timeline.cutaways
+    .filter((c) => c.seconds > 0)
+    .map((c) => ({ from: c.startSec, to: c.startSec + c.seconds }));
+  const visible = timeline.spine.flatMap((seg) => {
+    let pieces = [{ from: seg.startSec, to: seg.startSec + seg.seconds }];
+    for (const c of covers) {
+      pieces = pieces.flatMap((p) =>
+        c.to <= p.from || c.from >= p.to
+          ? [p]
+          : [{ from: p.from, to: c.from }, { from: c.to, to: p.to }].filter((q) => q.to > q.from),
+      );
+    }
+    return pieces.map((p) => ({ sceneIndex: seg.sceneIndex, startSec: p.from, seconds: p.to - p.from }));
+  });
+  return [...visible, ...timeline.cutaways]
+    .map((p) => ({ scene: p.sceneIndex, startSec: roundMs(p.startSec), seconds: roundMs(p.seconds) }))
+    .filter((p) => p.seconds > 0)
+    .sort((a, b) => a.startSec - b.startSec);
+}
+
 export function wordRows(timeline) {
-  const ms = (n) => Math.round(n * 1000) / 1000;
   const rows = [];
   for (const seg of timeline.spine) {
     for (const w of seg.words ?? []) {
@@ -880,7 +1214,7 @@ export function wordRows(timeline) {
       const start = seg.startSec + w.s;
       const end = seg.startSec + w.e;
       if (text && end > start) {
-        rows.push({ text, start: ms(start), end: ms(end), scene: seg.sceneIndex });
+        rows.push({ text, start: roundMs(start), end: roundMs(end), scene: seg.sceneIndex });
       }
     }
   }
@@ -931,7 +1265,11 @@ export function toSrt(rows) {
 export function sidecarPaths(outPath) {
   const dir = path.dirname(outPath);
   const base = path.basename(outPath, path.extname(outPath));
-  return { words: path.join(dir, `${base}.words.json`), srt: path.join(dir, `${base}.srt`) };
+  return {
+    words: path.join(dir, `${base}.words.json`),
+    srt: path.join(dir, `${base}.srt`),
+    scenes: path.join(dir, `${base}.scenes.json`),
+  };
 }
 
 export function inTheCut(timeline) {
@@ -1099,12 +1437,13 @@ export class FirstCutError extends Error {
 }
 
 function parseArgs(argv) {
-  const opts = { dir: undefined, out: undefined, skip: new Set(), music: true };
+  const opts = { dir: undefined, out: undefined, skip: new Set(), music: true, stillFill: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--out") opts.out = argv[++i];
     else if (a === "--skip") opts.skip = new Set((argv[++i] ?? "").split(",").filter(Boolean).map(Number));
     else if (a === "--no-music") opts.music = false;
+    else if (a === "--still-fill") opts.stillFill = true;
     else if (a.startsWith("--")) fail(2, `unknown flag ${a}\n${USAGE}`);
     else if (opts.dir === undefined) opts.dir = a;
     else fail(2, `unexpected argument ${a}\n${USAGE}`);
@@ -1119,7 +1458,7 @@ function parseArgs(argv) {
  * sidecars, and throws FirstCutError where the CLI would exit. The CLI's report
  * is printed by main() from what this returns.
  */
-export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = true }) {
+export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = true, stillFill = false }) {
   for (const bin of ["ffmpeg", "ffprobe"]) {
     if (spawnSync(bin, ["-version"]).status !== 0) {
       throw new FirstCutError(2, `${bin} is not installed. Install ffmpeg (brew install ffmpeg / apt install ffmpeg).`);
@@ -1169,6 +1508,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     manifest,
     storyboard,
     skip,
+    stillFill,
     probe,
     exists,
     readWords: (file) => {
@@ -1202,6 +1542,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     rmSync(sidecars.words, { force: true });
     rmSync(sidecars.srt, { force: true });
   }
+  writeFileSync(sidecars.scenes, `${JSON.stringify(sceneTimes(timeline), null, 2)}\n`);
 
   const duration = execFileSync("ffprobe", [
     "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", out,

@@ -39,6 +39,12 @@ function stoppedLines(run, page) {
             "Add credits to your OpenRouter account at openrouter.ai, then try again from the video's page. The OpenRouter key this video uses is in Settings → API Keys.",
         ];
     }
+    if (reason?.kind === "plan-too-big") {
+        return [
+            "This video's plan came out too big to make in one go.",
+            `Try again from the video's page and it will be planned fresh: ${page} If it stops here again, try a shorter script.`,
+        ];
+    }
     if (reason?.kind === "keys-missing") {
         return [
             `This video stopped because ${reason.keys.length === 1 ? "a key is" : "some keys are"} missing (${reason.keys.join(", ")}).`,
@@ -67,7 +73,12 @@ export function customerStageLines(run, page) {
             ];
         case "ready":
             return [
-                `Your video is ready: ${run.video?.url ?? page}`,
+                ...(run.awaitingSignOff
+                    ? [
+                        `Your video is ready to watch: ${run.video?.url ?? page}`,
+                        `When you're happy with it, finish it:  exodus video approve ${id}`,
+                    ]
+                    : [`Your video is ready: ${run.video?.url ?? page}`]),
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),

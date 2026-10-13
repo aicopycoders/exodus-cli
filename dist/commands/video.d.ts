@@ -2,9 +2,19 @@ import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
 import { type CustomerItem, type CustomerRun } from "./video-customer.js";
-declare const CONCEIT_KEYS: readonly ["podcast", "ugc", "stage", "street", "personification"];
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
+export type ScriptRunOptions = {
+    conceits: {
+        key: string;
+        label: string;
+    }[];
+    styles: {
+        slug: string;
+        label: string;
+    }[];
+};
+export declare function scriptRunPickProblem(options: ScriptRunOptions, conceit: string, style: string): string | null;
 export declare const helpText: string;
 export declare const RUN_PATH = "/api/v2/workflow";
 export declare const ITEMS_PATH = "/api/v2/workflow/items";
@@ -168,6 +178,7 @@ export interface VideoRun {
     provenance?: RunProvenance;
     musicBed?: boolean;
     videoChoice?: RunVideoChoice;
+    shots?: RunShots;
     storyboardAutoApproval?: {
         outcome: "approved" | "held";
         at: number;
@@ -231,6 +242,7 @@ export interface ShowRow {
 export interface FlowResult {
     code: number;
     lines: string[];
+    usage?: true;
 }
 export interface VideoDeps {
     get: (path: string) => Promise<ApiResponse<unknown>>;
@@ -390,6 +402,11 @@ export interface VideoManifest {
         videoModel: string;
         voiceMode: string;
     };
+    shots?: RunShots;
+}
+export interface RunShots {
+    frame?: string;
+    pacing?: string;
 }
 export declare const CAST_LEDGER_BASE: number;
 export declare function musicBedState(run: VideoRun): MusicBedState;
@@ -417,7 +434,7 @@ export interface StartOptions {
 }
 export interface ScriptStartOptions {
     scriptFile: string;
-    conceit: (typeof CONCEIT_KEYS)[number];
+    conceit: string;
     style: string;
     direction?: string;
     voicePath?: string;
@@ -426,6 +443,7 @@ export interface ScriptStartOptions {
     music?: boolean;
     reviewStoryboard?: true;
     director?: true;
+    shots?: RunShots;
     wait: boolean;
     json: boolean;
 }
@@ -574,6 +592,21 @@ export declare function pullFlow(runId: string, dir: string, json: boolean, deps
 export declare function parseMvhdDurationSec(bytes: Uint8Array): number | null;
 export declare const NO_DURATION_MESSAGE: string;
 export declare function describeFetchFailure(err: unknown): string;
+export interface CutScene {
+    scene: number;
+    startSec: number;
+    seconds: number;
+}
+export interface CutWord {
+    text: string;
+    start: number;
+    end: number;
+    scene: number;
+}
+export declare function cutSidecars(filePath: string, deps: VideoDeps): {
+    cutScenes?: CutScene[];
+    cutWords?: CutWord[];
+};
 export declare function uploadFlow(runId: string, filePath: string, durationFlag: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function parsePositional(args?: string[]): string[];
 export declare function run(flags: Record<string, string | boolean>, occurrences: FlagOccurrence[]): Promise<void>;

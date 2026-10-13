@@ -31,20 +31,43 @@ import {
   type CustomerVoices,
 } from "./video-customer.js";
 
-const CONCEIT_KEYS = ["podcast", "ugc", "stage", "street", "personification"] as const;
 const VOICE_MODES = ["native", "voice-first"] as const;
 type VoiceMode = (typeof VOICE_MODES)[number];
-const STYLE_SLUGS = [
-  "pixar-3d",
-  "claymation-stop-motion",
-  "lego-toy-brick",
-  "balloon",
-  "video-game-8bit",
-] as const;
 
 function joinedOr(items: readonly string[]): string {
   if (items.length <= 1) return items[0] ?? "";
   return `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
+}
+
+/** The kinds and looks `GET /api/v2/video/script-runs` hands the CLI. */
+export type ScriptRunOptions = {
+  conceits: { key: string; label: string }[];
+  styles: { slug: string; label: string }[];
+};
+
+/**
+ * A usage line when `conceit` or `style` is not one the server offered, or
+ * null when both are. The conceit is judged first. The words are the server's,
+ * in the order it sent them.
+ */
+export function scriptRunPickProblem(
+  options: ScriptRunOptions,
+  conceit: string,
+  style: string,
+): string | null {
+  const keys = options.conceits.map((row) => row.key);
+  if (!keys.includes(conceit)) {
+    return keys.length === 0
+      ? "This Exodus server offers no kinds of ad yet."
+      : `video start --conceit must be one of ${joinedOr(keys)}.`;
+  }
+  const slugs = options.styles.map((row) => row.slug);
+  if (!slugs.includes(style)) {
+    return slugs.length === 0
+      ? "This Exodus server offers no looks yet."
+      : `video start --style must be one of ${joinedOr(slugs)}.`;
+  }
+  return null;
 }
 
 function cantSayNames(names: readonly string[]): string {
@@ -131,7 +154,7 @@ Usage:
   exodus video voices <runId> [--set <character>=<voiceId>] [--clear <character>] [--from <file.json>] [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <${CONCEIT_KEYS.join("|")}> --style <${STYLE_SLUGS.join("|")}> [--direction "<note>"] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--review-storyboard] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--review-storyboard] [--director] [--wait] [--json]
   exodus video director <runId> <on|off|follow> [--json]
 
 Options:
@@ -163,9 +186,16 @@ Options:
   --rejected-draft     Print the storyboard draft the system turned down
                        (status). It was thrown away — a record only
   --script <file>      Text file of what the ad says (start)
-  --conceit <key>      Kind of ad: ${joinedOr(CONCEIT_KEYS)} (start)
-  --style <slug>       Look: ${joinedOr(STYLE_SLUGS)} (start)
+  --conceit <kind>     Kind of ad (start)
+  --style <look>       Look (start)
+                       The server lists the kinds and looks it offers. An unknown word prints them.
   --direction "<note>" Note for the whole ad (start)
+  --frame pov          Camera-as-character POV: the camera is a person in the
+                       scene (start, with --conceit). Leave it off for a
+                       single frame. Conversation ads only
+  --pacing <pace>      jump-cuts, long-take or montage (start, with
+                       --conceit). Leave it off for natural pacing. Presenter
+                       ads only
   --voice-path <path>  How the voices are made (start)
   --video-model <id>   Which video model films this ad, instead of the kind of
                        ad's own default (start, with --conceit)
@@ -189,8 +219,8 @@ Options:
 
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
---style, --direction, --music, --review-storyboard), status, storyboard,
-approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
+--style, --direction, --frame, --pacing, --music, --review-storyboard),
+status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
 picture while the storyboard waits), pull (the finished video, each scene's
 clip and voice, and the music) and upload. These stay admin-only:
 start --video-model / --voice / --voice-path / --director, director,
@@ -551,6 +581,9 @@ export interface VideoRun {
   /** #2282: the video model and voice mode a paste-a-script run used. Absent on
    *  every other run and on backends older than #2282. */
   videoChoice?: RunVideoChoice;
+  /** #3304: the Frame and Pacing a paste-a-script run asked for. Absent means
+   *  Single frame and Natural, and on backends older than #3304. */
+  shots?: RunShots;
   /** #2587: the app's one-time verdict on approving a paste-a-script run's
    *  storyboard itself. Absent on a run the member chose to review by hand, on
    *  every other kind of run, and on backends older than #2587. */
@@ -631,6 +664,8 @@ export interface ShowRow {
 export interface FlowResult {
   code: number;
   lines: string[];
+  /** Set when `lines` is a usage error, printed on stderr the way `usage` does. */
+  usage?: true;
 }
 
 export interface VideoDeps {
@@ -1370,6 +1405,15 @@ export interface VideoManifest {
   /** #2282: which video model and voice mode made the clips. Written only when
    *  the run recorded them. */
   videoChoice?: { videoModel: string; voiceMode: string };
+  /** #3304: the run's Frame and Pacing, which the cut follows (a "jump-cuts"
+   *  pacing is cut with punch-ins). Written only when the run asked for one. */
+  shots?: RunShots;
+}
+
+/** #3304: the run's Frame ("pov") and Pacing ("jump-cuts", "long-take", "montage"). */
+export interface RunShots {
+  frame?: string;
+  pacing?: string;
 }
 
 export const CAST_LEDGER_BASE = HELPER_LEDGER_BASE + 10000;
@@ -1916,6 +1960,7 @@ export function planPull(
             },
           }
         : {}),
+      ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
     },
   };
 }
@@ -2053,7 +2098,7 @@ export interface StartOptions {
 
 export interface ScriptStartOptions {
   scriptFile: string;
-  conceit: (typeof CONCEIT_KEYS)[number];
+  conceit: string;
   style: string;
   direction?: string;
   voicePath?: string;
@@ -2066,6 +2111,9 @@ export interface ScriptStartOptions {
   reviewStoryboard?: true;
   /** #2675: start with the trial director on for this run (admins only). */
   director?: true;
+  /** #3304: --frame / --pacing, sent as typed. The server judges them against
+   *  the kind of ad and refuses one it can't follow. */
+  shots?: RunShots;
   wait: boolean;
   json: boolean;
 }
@@ -2134,10 +2182,6 @@ function nonBlank(value: string | undefined): string | undefined {
 
 function isVoiceMode(value: string): value is VoiceMode {
   return VOICE_MODES.some((mode) => mode === value);
-}
-
-function isConceit(value: string): value is (typeof CONCEIT_KEYS)[number] {
-  return CONCEIT_KEYS.some((key) => key === value);
 }
 
 export type MusicChoice = { ok: true; music: boolean | undefined } | { ok: false; line: string };
@@ -2230,6 +2274,10 @@ export function planVideoStart(
   if (!videoModelFlag.ok) return { kind: "usage", line: videoModelFlag.line };
   const voiceFlag = planValueFlag(occurrences, "voice");
   if (!voiceFlag.ok) return { kind: "usage", line: voiceFlag.line };
+  const frameFlag = planValueFlag(occurrences, "frame");
+  if (!frameFlag.ok) return { kind: "usage", line: frameFlag.line };
+  const pacingFlag = planValueFlag(occurrences, "pacing");
+  if (!pacingFlag.ok) return { kind: "usage", line: pacingFlag.line };
   const videoModel = videoModelFlag.value;
   const voiceMode = voiceFlag.value;
   const reviewStoryboard = occurrences.some((o) => o.flag === "review-storyboard");
@@ -2252,6 +2300,12 @@ export function planVideoStart(
     return {
       kind: "usage",
       line: "--director works with --conceit, not --show.",
+    };
+  }
+  if (showId && (frameFlag.value || pacingFlag.value)) {
+    return {
+      kind: "usage",
+      line: "--frame and --pacing work with --conceit, not --show.",
     };
   }
   if (showId && (videoModel || voiceMode)) {
@@ -2282,19 +2336,13 @@ export function planVideoStart(
   if (!conceit) {
     return {
       kind: "usage",
-      line: `video start needs --conceit <${CONCEIT_KEYS.join("|")}>.`,
-    };
-  }
-  if (!isConceit(conceit)) {
-    return {
-      kind: "usage",
-      line: `video start --conceit must be one of ${joinedOr(CONCEIT_KEYS)}.`,
+      line: "video start needs --conceit <kind>.",
     };
   }
   if (!style) {
     return {
       kind: "usage",
-      line: `video start needs --style <${STYLE_SLUGS.join("|")}>.`,
+      line: "video start needs --style <look>.",
     };
   }
 
@@ -2314,6 +2362,12 @@ export function planVideoStart(
   if (musicChoice.music !== undefined) opts.music = musicChoice.music;
   if (reviewStoryboard) opts.reviewStoryboard = true;
   if (director) opts.director = true;
+  if (frameFlag.value || pacingFlag.value) {
+    opts.shots = {
+      ...(frameFlag.value ? { frame: frameFlag.value } : {}),
+      ...(pacingFlag.value ? { pacing: pacingFlag.value } : {}),
+    };
+  }
   return { kind: "script", opts };
 }
 
@@ -2326,6 +2380,24 @@ interface ResolvedCard {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The options body, or null when it is not `{ conceits, styles }` of labeled rows. */
+function scriptRunOptionsOf(data: unknown): ScriptRunOptions | null {
+  if (!isRecord(data) || !Array.isArray(data.conceits) || !Array.isArray(data.styles)) {
+    return null;
+  }
+  const conceits: ScriptRunOptions["conceits"] = [];
+  for (const row of data.conceits) {
+    if (!isRecord(row) || typeof row.key !== "string" || typeof row.label !== "string") return null;
+    conceits.push({ key: row.key, label: row.label });
+  }
+  const styles: ScriptRunOptions["styles"] = [];
+  for (const row of data.styles) {
+    if (!isRecord(row) || typeof row.slug !== "string" || typeof row.label !== "string") return null;
+    styles.push({ slug: row.slug, label: row.label });
+  }
+  return { conceits, styles };
 }
 
 function isResolvedCard(value: unknown): value is ResolvedCard {
@@ -2412,6 +2484,22 @@ export async function startScriptFlow(
     return { code: 1, lines: [`The script file "${opts.scriptFile}" is empty.`] };
   }
 
+  // The list only lets the CLI refuse a bad word before the upload. When it
+  // can't be read (an older server without the route, a failing one, or no
+  // answer at all), post
+  // anyway: the server refuses a word it does not offer.
+  const listed = await deps.get(SCRIPT_RUNS_PATH).catch(() => null);
+  if (listed?.ok) {
+    const options = scriptRunOptionsOf(listed.data);
+    if (!options) {
+      return adminOnlyResult("The server's list of kinds and looks could not be read.", opts.json);
+    }
+    const problem = scriptRunPickProblem(options, opts.conceit, opts.style);
+    if (problem) {
+      return opts.json ? adminOnlyResult(problem, true) : { code: 1, lines: [problem], usage: true };
+    }
+  }
+
   const res = await deps.post(SCRIPT_RUNS_PATH, {
     script,
     conceit: opts.conceit,
@@ -2425,6 +2513,7 @@ export async function startScriptFlow(
     ...(opts.music === true ? { music: true } : {}),
     ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
     ...(opts.director ? { director: true } : {}),
+    ...(opts.shots ? { shots: opts.shots } : {}),
   });
   if (!res.ok) return errorResult(res, opts.json);
   const customerStart = customerAnswer<CustomerStart>(res.data);
@@ -4332,6 +4421,72 @@ function uploadRetryResult(
   };
 }
 
+/** #3300: one placement of a scene in the cut, as first-cut's <base>.scenes.json writes it. */
+export interface CutScene {
+  scene: number;
+  startSec: number;
+  seconds: number;
+}
+
+/** #3300: one spoken word on the cut's timeline, as first-cut's <base>.words.json writes it. */
+export interface CutWord {
+  text: string;
+  start: number;
+  end: number;
+  scene: number;
+}
+
+// The server's caps (convex/lib/video/cutTiming.ts). A sidecar past them is
+// left behind, so the cut still uploads.
+const CUT_SCENES_MAX = 200;
+const CUT_WORDS_MAX = 2000;
+
+const isTime = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+
+function cutScene(row: unknown): CutScene | null {
+  const r = row as Partial<CutScene> | null;
+  return r && Number.isInteger(r.scene) && isTime(r.startSec) && isTime(r.seconds) && r.seconds > 0
+    ? { scene: r.scene!, startSec: r.startSec, seconds: r.seconds }
+    : null;
+}
+
+function cutWord(row: unknown): CutWord | null {
+  const r = row as Partial<CutWord> | null;
+  return r &&
+    typeof r.text === "string" &&
+    r.text.trim() !== "" &&
+    isTime(r.start) &&
+    isTime(r.end) &&
+    r.end >= r.start &&
+    Number.isInteger(r.scene)
+    ? { text: r.text, start: r.start, end: r.end, scene: r.scene! }
+    : null;
+}
+
+/** Every row of a sidecar, or null when it is missing, malformed, empty or too long. */
+function readSidecar<T>(file: string, parse: (row: unknown) => T | null, max: number, deps: VideoDeps): T[] | null {
+  let rows: unknown;
+  try {
+    rows = JSON.parse(deps.readFile(file));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(rows) || rows.length === 0 || rows.length > max) return null;
+  const parsed = rows.map(parse);
+  return parsed.every((r): r is T => r !== null) ? parsed : null;
+}
+
+/**
+ * #3300: the timing first-cut wrote beside the cut, for the customer's edit
+ * list and editor folder. A hand-edited cut has none, and uploads without it.
+ */
+export function cutSidecars(filePath: string, deps: VideoDeps): { cutScenes?: CutScene[]; cutWords?: CutWord[] } {
+  const base = path.join(path.dirname(filePath), path.basename(filePath, path.extname(filePath)));
+  const cutScenes = readSidecar(`${base}.scenes.json`, cutScene, CUT_SCENES_MAX, deps);
+  const cutWords = readSidecar(`${base}.words.json`, cutWord, CUT_WORDS_MAX, deps);
+  return { ...(cutScenes ? { cutScenes } : {}), ...(cutWords ? { cutWords } : {}) };
+}
+
 export async function uploadFlow(
   runId: string,
   filePath: string,
@@ -4382,6 +4537,7 @@ export async function uploadFlow(
   const durationSec =
     asked ?? deps.probeDurationSec(filePath) ?? parseMvhdDurationSec(bytes);
   if (durationSec === null) return { code: 1, lines: [NO_DURATION_MESSAGE] };
+  const timing = cutSidecars(filePath, deps);
 
   const minting = await withUploadRetry("mint", deps, () => deps.post(ASSET_UPLOAD_URL_PATH, {}));
   if (!minting.ok) return uploadRetryResult(minting, json);
@@ -4428,6 +4584,7 @@ export async function uploadFlow(
       runId,
       assetId,
       durationSec,
+      ...timing,
     }),
   );
   if (!attaching.ok) return uploadRetryResult(attaching, json);
@@ -4484,6 +4641,8 @@ const VALUE_FLAGS = new Set([
   "voice-path",
   "video-model",
   "voice",
+  "frame",
+  "pacing",
   "note",
   "out",
   "file",
@@ -4545,7 +4704,9 @@ export async function run(
     const plan = planVideoStart(flags, occurrences);
     if (plan.kind === "usage") usage(plan.line);
     if (plan.kind === "show") return printResult(await startFlow(plan.opts, defaultDeps));
-    return printResult(await startScriptFlow(plan.opts, defaultDeps));
+    const started = await startScriptFlow(plan.opts, defaultDeps);
+    if (started.usage) usage(started.lines[0] ?? "");
+    return printResult(started);
   }
 
   const runId = rest[0];

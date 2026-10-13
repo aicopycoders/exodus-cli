@@ -30,6 +30,7 @@ export interface CustomerRunScene {
 export type CustomerStopReason =
   | { kind: "out-of-credits" }
   | { kind: "openrouter-out-of-credits" }
+  | { kind: "plan-too-big" }
   | { kind: "keys-missing"; keys: string[] };
 
 export interface CustomerRun {
@@ -40,6 +41,8 @@ export interface CustomerRun {
   card: { conceit: string; style: string } | null;
   mode: "one-shot" | "guided";
   stage: CustomerRunStage;
+  /** #3299: a Guided video's cut is ready and waits for `exodus video approve`. Absent from older servers. */
+  awaitingSignOff?: boolean;
   waiting: { ahead: number; stepsDone: number } | null;
   scenes: CustomerRunScene[] | null;
   video: { url: string; wordsOff: boolean } | null;
@@ -148,6 +151,12 @@ function stoppedLines(run: CustomerRun, page: string): string[] {
       "Add credits to your OpenRouter account at openrouter.ai, then try again from the video's page. The OpenRouter key this video uses is in Settings → API Keys.",
     ];
   }
+  if (reason?.kind === "plan-too-big") {
+    return [
+      "This video's plan came out too big to make in one go.",
+      `Try again from the video's page and it will be planned fresh: ${page} If it stops here again, try a shorter script.`,
+    ];
+  }
   if (reason?.kind === "keys-missing") {
     return [
       `This video stopped because ${reason.keys.length === 1 ? "a key is" : "some keys are"} missing (${reason.keys.join(", ")}).`,
@@ -178,7 +187,12 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
       ];
     case "ready":
       return [
-        `Your video is ready: ${run.video?.url ?? page}`,
+        ...(run.awaitingSignOff
+          ? [
+              `Your video is ready to watch: ${run.video?.url ?? page}`,
+              `When you're happy with it, finish it:  exodus video approve ${id}`,
+            ]
+          : [`Your video is ready: ${run.video?.url ?? page}`]),
         ...(run.video?.wordsOff
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),

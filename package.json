@@ -4,9 +4,9 @@
   "description": "CLI + Claude Code skills for the Copycoders Exodus ad pipeline",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aicopycoders/exodus.git"
+    "url": "git+https://github.com/aicopycoders/exodus-cli.git"
   },
-  "homepage": "https://github.com/aicopycoders/exodus#readme",
+  "homepage": "https://github.com/aicopycoders/exodus-cli#readme",
   "type": "module",
   "bin": {
     "exodus": "dist/bin/exodus.js"

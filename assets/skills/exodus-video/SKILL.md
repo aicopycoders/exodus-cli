@@ -38,6 +38,37 @@ storyboard itself when its checks pass (see "What costs money"). The full line i
 note cannot contain a colon. "The script file" shows the right form and the
 wrong one.
 
+**The kinds of ad.** `--conceit` takes one of the kinds the server offers. The
+server's list is the truth, and nothing prints it on request. Pass a key it
+doesn't offer and the refusal names every key it does: `video start --conceit
+must be one of …`. Nothing is spent on a refused start. Today the server offers
+15 formats and then Custom:
+
+| Key | Kind |
+|---|---|
+| `podcast` | Podcast |
+| `ugc` | UGC talking head |
+| `stage` | Speaking on stage |
+| `street` | Street interview |
+| `personification` | Personification |
+| `news-broadcast` | News Broadcast |
+| `court-tv` | Court TV |
+| `soap-opera` | Soap Opera |
+| `storytime` | Storytime While Doing a Task |
+| `customer-service-call` | Customer Service Call |
+| `debate-circle` | Debate Circle |
+| `talk-show-panel` | Talk Show Panel |
+| `infomercial` | Infomercial |
+| `dating-show` | Dating Show |
+| `game-show` | Game Show |
+| `custom` | Custom |
+
+Custom builds the ad from the script itself. A script with no `CAST:` runs as a
+voice-over, and a script with people runs as a scene. Voice-over and Scene are
+not on the menu by name; Custom is the way to them. A narrator-only script fits
+Custom alone. If the refusal lists different keys from this table, the server
+is right and this table is stale.
+
 The Rig box on that workflow is where the run's Conceit and Style come from.
 Conceit is the family plus Wrapper, Narrator Person, and Delivery. Style is the
 look. Narrated Story is the voice-over family and Acted Story is the dialogue
@@ -367,6 +398,78 @@ dash on cast lines. A reader who strips it makes the line fail.
 Do not use a long dash in words a character says, or in words shown on screen.
 Synthesised speech reads a long dash oddly, and so does burned-in text. A spoken
 line stays `NAME: what they say`.
+
+### Directing a line
+
+A spoken line can carry two kinds of note. Neither is required.
+
+- **How the line is said goes in parentheses.** The voice acts it out.
+- **What happens on camera goes in square brackets.** The storyboard plans the
+  shot around it.
+
+```
+MIA: (whispering, excited) I can't believe this actually worked.
+MIA: [holds the jar up to the camera] This is the one.
+MIA: [leans in] (quietly) Don't tell my sister.
+```
+
+A note may sit anywhere on the line. It comes out of the spoken words, so the
+voice never says it. Several notes of one kind on a line are joined. Notes work
+on `CTA:` lines and on narrator lines too. They do not work on `CAST:` lines,
+where anything in brackets is just part of the description.
+
+How the voice uses a delivery note. By default a run records each line first,
+on the Eleven v4 voices, which take the note as a short cue in front of the
+line. The cue is the note's first clause, at most six words. A full stop,
+colon, semicolon, question mark, exclamation mark, or a dash with a space on
+each side ends the clause. A comma does not, so `whispering, excited` reaches
+the voice whole. Keep the note short and put the part that matters first. Put
+one delivery note on a line: two are joined with a semicolon, so the voice
+hears only the first.
+
+Right.
+
+```
+MIA: (whispering, excited) I can't believe this actually worked.
+```
+
+Wrong.
+
+```
+MIA: (She is whispering. She can barely contain how excited she is) I can't believe this actually worked.
+```
+
+The wrong note reaches the voice as `[she is whispering]`. The excitement is
+lost.
+
+In a narrated scene the whole narration is read as one part, so it takes one
+cue: the note on the first narrator line in that scene.
+
+What the reader refuses, with the code `malformed-direction`:
+
+- an empty note, `()` or `[]`
+- a square bracket that is never closed, or a stray `]`
+- a line with no spoken words left once the notes come out
+
+An unclosed `(` is not refused. It is read as ordinary words, and the voice
+says it. Check every `(` has its `)`.
+
+Both ways in read the file the same way: `exodus video start --script` and
+`exodus workflow run --input <field>=@script.txt`. The second holds only when
+the script goes straight from a Brief into the Storyboard. In a workflow where a
+bot writes or rewrites the script first, the notes are not read this way, and
+the bot may drop them or leave them in the spoken words.
+
+With `--voice native` (admins only) the video model speaks the lines itself and
+nothing is recorded first, so the six-word cue above does not apply.
+
+**A line with no note still gets a natural read.** A note is the surest way to
+get a particular delivery. The storyboard planner may add a note of its own to
+a line you left plain. A note you wrote always wins over the planner's.
+
+When you help the user write or tidy a script, suggest a delivery note where
+the tone carries the ad: the hook, the turn, the CTA. Do not put a note on every
+line. A note on every line reads as a script nobody trusted.
 
 **How many speakers you may have depends on the rig.** Three by default. A rig
 that carries saved format rules sets its own number: an ensemble rig seats more,

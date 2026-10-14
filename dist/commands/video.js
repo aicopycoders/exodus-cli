@@ -639,6 +639,7 @@ export function planFailureLines(node, runId) {
 }
 export const MUSIC_HEARD_CODE = "music-heard";
 export const CAST_LEDGER_BASE = HELPER_LEDGER_BASE + 10000;
+export const CAST_VIEW_LEDGER_BASE = CAST_LEDGER_BASE + 1000;
 export function musicBedState(run) {
     if (run.musicBed === undefined)
         return "unknown";
@@ -737,9 +738,25 @@ function castVoicePins(artifact) {
     }
     return pins;
 }
+function lockViews(member, viewRows) {
+    return (member.identityRefs ?? []).flatMap((ref) => {
+        if (!ref.view)
+            return [];
+        const row = viewRows.find(({ artifact: art }) => art?.type !== "image"
+            ? false
+            : art.storageId
+                ? art.storageId === ref.storageId
+                : !!art.imageUrl && art.imageUrl === ref.imageUrl);
+        const url = (row?.artifact?.type === "image" ? row.artifact.imageUrl : undefined) ?? ref.imageUrl;
+        return url ? [{ view: ref.view, url }] : [];
+    });
+}
 function planCastRefs(run, items, pins) {
     const ledger = reservedCastFrames(items);
-    const ledgerRows = [...ledger.entries()].sort(([a], [b]) => a - b);
+    const isViewRow = ([sceneIndex, row]) => sceneIndex >= CAST_VIEW_LEDGER_BASE || (row.artifact?.type === "image" && row.artifact.view !== undefined);
+    const sorted = [...ledger.entries()].sort(([a], [b]) => a - b);
+    const ledgerRows = sorted.filter((r) => !isViewRow(r));
+    const viewRows = sorted.filter(isViewRow).map(([, row]) => row);
     const locked = run.castLock?.cast;
     const rows = [];
     if (locked !== undefined && locked.length > 0) {
@@ -765,6 +782,7 @@ function planCastRefs(run, items, pins) {
                 status: item?.status ?? (url ? "done" : "missing"),
                 error: item?.error ?? null,
                 stem: `cast-${member.characterId}`,
+                views: lockViews(member, viewRows),
             });
         }
         for (const [sceneIndex, item] of ledgerRows) {
@@ -780,6 +798,7 @@ function planCastRefs(run, items, pins) {
                 status: item.status,
                 error: item.error ?? null,
                 stem: `cast-ref-${String(sceneIndex - CAST_LEDGER_BASE).padStart(2, "0")}`,
+                views: [],
             });
         }
     }
@@ -794,6 +813,7 @@ function planCastRefs(run, items, pins) {
                 status: item.status,
                 error: item.error ?? null,
                 stem: `cast-ref-${String(sceneIndex - CAST_LEDGER_BASE).padStart(2, "0")}`,
+                views: [],
             });
         }
     }
@@ -802,6 +822,7 @@ function planCastRefs(run, items, pins) {
     for (const row of rows) {
         const file = row.url ? `${row.stem}.${extFor(row.url, "image")}` : null;
         const pin = row.characterId ? pins.get(row.characterId) : undefined;
+        const views = row.views.map((v) => ({ view: v.view, file: `${row.stem}-${v.view}.${extFor(v.url, "image")}`, url: v.url }));
         cast.push({
             characterId: row.characterId,
             name: row.name,
@@ -811,9 +832,12 @@ function planCastRefs(run, items, pins) {
             voiceId: pin?.voiceId ?? null,
             voiceLabel: pin?.voiceLabel ?? null,
             voiceDescription: pin?.voiceDescription ?? null,
+            ...(views.length ? { views: views.map(({ view, file: viewFile }) => ({ view, file: viewFile })) } : {}),
         });
         if (file && row.url)
             downloads.push({ file, url: row.url });
+        for (const v of views)
+            downloads.push({ file: v.file, url: v.url });
     }
     return { cast, downloads };
 }
@@ -1105,6 +1129,10 @@ export function markPullFailure(manifest, failure) {
     for (const ref of manifest.cast) {
         if (ref.file === failure.file)
             ref.file = null;
+        for (const view of ref.views ?? []) {
+            if (view.file === failure.file)
+                view.file = null;
+        }
     }
     if (manifest.narration?.file === failure.file)
         manifest.narration = null;

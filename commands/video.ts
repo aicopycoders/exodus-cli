@@ -420,11 +420,15 @@ export type ArtifactSubset =
       type: "image";
       imageUrl?: string;
       storageId?: string;
-      anchor?: "set-plate" | "product-sheet" | "filled-plate";
+      anchor?: "set-plate" | "product-sheet" | "filled-plate" | "product-plate" | "layout-plate";
       /** #2868: a filled plate's objects, as their lines read. */
       holds?: string[];
       /** #3080: a filled plate drawn with its holder's lid closed. */
       lid?: "closed";
+      /** COP-6: a layout plate's camera: "wide" or "seat:<characterId>". */
+      camera?: string;
+      /** COP-6: a cast member's view from another angle, on its own row in the cast band. */
+      view?: "side" | "back" | "three-quarter";
     }
   | {
       type: "video";
@@ -544,7 +548,8 @@ export interface PullCastLockMember {
   characterId: string;
   name: string;
   look?: string;
-  identityRefs?: Array<{ storageId?: string; imageUrl?: string }>;
+  /** The front still first; COP-6: then the member's views from other angles, each naming its view. */
+  identityRefs?: Array<{ storageId?: string; imageUrl?: string; view?: string }>;
 }
 
 export interface PullCastLock {
@@ -1336,6 +1341,14 @@ export interface ManifestCastRef {
   /** #1869: how this character is meant to SOUND, in words, on a run whose video
    *  model speaks the lines itself. Null when nobody wrote one. */
   voiceDescription: string | null;
+  /** COP-6: the character's views from other angles, beside its front still. Only when there are any. */
+  views?: ManifestCastView[];
+}
+
+/** COP-6: one view of a character, in its own file; null when its download failed. */
+export interface ManifestCastView {
+  view: string;
+  file: string | null;
 }
 
 export type MusicBedState = "on" | "off" | "unknown";
@@ -1417,6 +1430,13 @@ export interface RunShots {
 }
 
 export const CAST_LEDGER_BASE = HELPER_LEDGER_BASE + 10000;
+
+/**
+ * COP-6: the cast band's view rows: a member's side, back and three-quarter
+ * views at CAST_VIEW_LEDGER_BASE + 10 * slot + 1..3, beside its front still at
+ * CAST_LEDGER_BASE + slot (scout character-views.ts viewRow).
+ */
+export const CAST_VIEW_LEDGER_BASE = CAST_LEDGER_BASE + 1000;
 
 export function musicBedState(run: VideoRun): MusicBedState {
   if (run.musicBed === undefined) return "unknown";
@@ -1570,13 +1590,41 @@ function castVoicePins(
   return pins;
 }
 
+/**
+ * COP-6: a lock member's views, in the lock's order (side, back, three-quarter).
+ * Each is the member's own entry on the lock, never a row's slot: rows outlive
+ * a re-run, so a slot can still hold an earlier member's view. Like the front,
+ * a view downloads from the ledger row holding the same picture (the same
+ * storage id, or the same link on a row with none), else from the lock's own
+ * link. A view row no member holds is never listed, nor one with no picture.
+ */
+function lockViews(member: PullCastLockMember, viewRows: ReadonlyArray<NodeItem>): Array<{ view: string; url: string }> {
+  return (member.identityRefs ?? []).flatMap((ref) => {
+    if (!ref.view) return [];
+    const row = viewRows.find(({ artifact: art }) =>
+      art?.type !== "image"
+        ? false
+        : art.storageId
+          ? art.storageId === ref.storageId
+          : !!art.imageUrl && art.imageUrl === ref.imageUrl,
+    );
+    const url = (row?.artifact?.type === "image" ? row.artifact.imageUrl : undefined) ?? ref.imageUrl;
+    return url ? [{ view: ref.view, url }] : [];
+  });
+}
+
 function planCastRefs(
   run: VideoRun,
   items: NodeItem[],
   pins: Map<string, CastVoiceRecord>,
 ): { cast: ManifestCastRef[]; downloads: PullDownload[] } {
   const ledger = reservedCastFrames(items);
-  const ledgerRows = [...ledger.entries()].sort(([a], [b]) => a - b);
+  // COP-6: a view row rides its member's entry, never one of its own.
+  const isViewRow = ([sceneIndex, row]: [number, NodeItem]) =>
+    sceneIndex >= CAST_VIEW_LEDGER_BASE || (row.artifact?.type === "image" && row.artifact.view !== undefined);
+  const sorted = [...ledger.entries()].sort(([a], [b]) => a - b);
+  const ledgerRows = sorted.filter((r) => !isViewRow(r));
+  const viewRows = sorted.filter(isViewRow).map(([, row]) => row);
   const locked = run.castLock?.cast;
   const rows: Array<{
     characterId: string | null;
@@ -1585,6 +1633,7 @@ function planCastRefs(
     status: string;
     error: string | null;
     stem: string;
+    views: Array<{ view: string; url: string }>;
   }> = [];
 
   if (locked !== undefined && locked.length > 0) {
@@ -1614,6 +1663,7 @@ function planCastRefs(
         status: item?.status ?? (url ? "done" : "missing"),
         error: item?.error ?? null,
         stem: `cast-${member.characterId}`,
+        views: lockViews(member, viewRows),
       });
     }
     for (const [sceneIndex, item] of ledgerRows) {
@@ -1628,6 +1678,7 @@ function planCastRefs(
         status: item.status,
         error: item.error ?? null,
         stem: `cast-ref-${String(sceneIndex - CAST_LEDGER_BASE).padStart(2, "0")}`,
+        views: [],
       });
     }
   } else {
@@ -1641,6 +1692,7 @@ function planCastRefs(
         status: item.status,
         error: item.error ?? null,
         stem: `cast-ref-${String(sceneIndex - CAST_LEDGER_BASE).padStart(2, "0")}`,
+        views: [],
       });
     }
   }
@@ -1650,6 +1702,8 @@ function planCastRefs(
   for (const row of rows) {
     const file = row.url ? `${row.stem}.${extFor(row.url, "image")}` : null;
     const pin = row.characterId ? pins.get(row.characterId) : undefined;
+    // COP-6: cast-<characterId>-<view>, beside the front's cast-<characterId>.
+    const views = row.views.map((v) => ({ view: v.view, file: `${row.stem}-${v.view}.${extFor(v.url, "image")}`, url: v.url }));
     cast.push({
       characterId: row.characterId,
       name: row.name,
@@ -1659,8 +1713,10 @@ function planCastRefs(
       voiceId: pin?.voiceId ?? null,
       voiceLabel: pin?.voiceLabel ?? null,
       voiceDescription: pin?.voiceDescription ?? null,
+      ...(views.length ? { views: views.map(({ view, file: viewFile }) => ({ view, file: viewFile })) } : {}),
     });
     if (file && row.url) downloads.push({ file, url: row.url });
+    for (const v of views) downloads.push({ file: v.file, url: v.url });
   }
   return { cast, downloads };
 }
@@ -1977,6 +2033,9 @@ export function markPullFailure(manifest: VideoManifest, failure: PullFailure): 
   if (manifest.music === failure.file) manifest.music = null;
   for (const ref of manifest.cast) {
     if (ref.file === failure.file) ref.file = null;
+    for (const view of ref.views ?? []) {
+      if (view.file === failure.file) view.file = null;
+    }
   }
   if (manifest.narration?.file === failure.file) manifest.narration = null;
   for (const scene of manifest.scenes) {

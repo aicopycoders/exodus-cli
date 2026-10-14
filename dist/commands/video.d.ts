@@ -79,9 +79,11 @@ export type ArtifactSubset = {
     type: "image";
     imageUrl?: string;
     storageId?: string;
-    anchor?: "set-plate" | "product-sheet" | "filled-plate";
+    anchor?: "set-plate" | "product-sheet" | "filled-plate" | "product-plate" | "layout-plate";
     holds?: string[];
     lid?: "closed";
+    camera?: string;
+    view?: "side" | "back" | "three-quarter";
 } | {
     type: "video";
     sceneIndex?: number;
@@ -158,6 +160,7 @@ export interface PullCastLockMember {
     identityRefs?: Array<{
         storageId?: string;
         imageUrl?: string;
+        view?: string;
     }>;
 }
 export interface PullCastLock {
@@ -363,6 +366,11 @@ export interface ManifestCastRef {
     voiceId: string | null;
     voiceLabel: string | null;
     voiceDescription: string | null;
+    views?: ManifestCastView[];
+}
+export interface ManifestCastView {
+    view: string;
+    file: string | null;
 }
 export type MusicBedState = "on" | "off" | "unknown";
 export interface RunVideoChoice {
@@ -409,6 +417,7 @@ export interface RunShots {
     pacing?: string;
 }
 export declare const CAST_LEDGER_BASE: number;
+export declare const CAST_VIEW_LEDGER_BASE: number;
 export declare function musicBedState(run: VideoRun): MusicBedState;
 export interface PullPlan {
     downloads: PullDownload[];

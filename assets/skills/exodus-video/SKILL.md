@@ -32,8 +32,8 @@ workflow run`. From there the same nodes render, `video status` reads the run,
 `video pull` writes the folder, and `video upload` and `approve` finish it.
 
 A Show is no longer required. `exodus video start` starts from a script, a
-conceit, and a style. The same parks follow, except that the app approves the
-storyboard itself when its checks pass (see "What costs money"). The full line is under
+conceit, and a style. The same parks follow: it stops at the storyboard for the
+user's yes, unless it was started with `--one-shot` (see "What costs money"). The full line is under
 "Starting a run". An optional `--direction` note is whole-ad rules, and that
 note cannot contain a colon. "The script file" shows the right form and the
 wrong one.
@@ -101,9 +101,11 @@ never how it is made. Every answer to them says `"view": "customer"`, and the
 CLI words it the way the run page does. On their own brands they can:
 
 - `video start --script <file> --conceit <key> --style <slug>` with
-  `--direction`, `--frame`, `--pacing`, `--music`, `--review-storyboard` and `--wait`. Any other start
+  `--direction`, `--frame`, `--pacing`, `--music`, `--one-shot`, `--review-storyboard`, `--stop-at-script` and `--wait`. Any other start
   flag is refused with one sentence naming it. The answer is the run id and the
-  link to the video's page.
+  link to the video's page, plus what the server did to the script: laid a
+  plain transcript out, or wrote a script from a description (see "The script
+  file"). `--stop-at-script` prints that script and starts nothing.
 - `video status <runId>`: where the video is, in plain words (waiting in line,
   planning, drawing, storyboard ready for review, filming, ready with its link,
   or stopped and why). `--json` prints the server's answer as it came.
@@ -156,17 +158,24 @@ exodus workflow run <workflowId|name> --input <field>=@script.txt --voices @voic
 exodus workflow run <workflowId|name> --input <field>=@script.txt --voice-treatment @voice-treatment.json --wait
                                                           same, with the video model speaking voices you WROTE
 exodus video status <runId>                               where it is, per scene
-exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--review-storyboard] [--director] [--wait]
+exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--one-shot] [--director] [--stop-at-script] [--wait]
                                                           start from a script and the kinds the server offers.
+                                                          The file can be a plain transcript, a draft or a
+                                                          description: the server tidies it (see "The script
+                                                          file"). --stop-at-script prints the tidied or
+                                                          written script and starts nothing.
                                                           No music bed unless you pass --music.
                                                           --frame pov (conversation conceits) and --pacing
                                                           (presenter conceits) change the shots; a conceit
                                                           that can't follow one refuses it.
-                                                          The app approves its own storyboard when its
-                                                          checks pass and goes straight on to the clips,
-                                                          which is the part that costs. It stops at the
-                                                          gate only when a check finds a problem, and says
-                                                          why. --review-storyboard always stops there.
+                                                          It stops at the storyboard for the user's yes
+                                                          (Guided, the default). --one-shot makes the
+                                                          whole video: the app approves its own storyboard
+                                                          when its checks pass and goes straight on to the
+                                                          clips, which is the part that costs. It stops
+                                                          then only when a check finds a problem, and says
+                                                          why. --review-storyboard is the default and
+                                                          changes nothing.
                                                           Each conceit has its own video model and voice;
                                                           --video-model / --voice override them for one run.
                                                           --director turns the trial director on (admins only)
@@ -261,14 +270,16 @@ a dollar on a longer ad. The expensive part comes after the storyboard: the
 voices and the clips. What happens at that point depends on how the run
 started.
 
-- A paste-a-script run (`exodus video start --conceit …`) checks its own
-  storyboard once the pictures are drawn. When every check passes, the app
-  approves the storyboard itself and goes straight on to the voices and the
-  clips, with no stop. It stops for the user only when a check finds a problem,
-  and the stop block says why in plain words. Started with
-  `--review-storyboard`, it always stops at the storyboard instead. `status`
-  prints "the app checks the storyboard and approves it itself if the checks
-  pass" on a run headed that way.
+- A paste-a-script run (`exodus video start --conceit …`) stops at the
+  storyboard for the user's yes by default (Guided). Started with
+  `--one-shot`, it checks its own storyboard once the pictures are drawn. When
+  every check passes, the app approves the storyboard itself and goes straight
+  on to the voices and the clips, with no stop. It stops for the user only when
+  a check finds a problem, and the stop block says why in plain words. Ask the
+  user before passing `--one-shot`: it spends the whole video in one go.
+  `status` prints "the app checks the storyboard and approves it itself if the
+  checks pass" on a run headed that way. `--review-storyboard` is the default
+  and changes nothing.
 - A Show run (`video start --show`) and a saved workflow run (`workflow run`)
   still pause at the storyboard for approval. Approving is what releases the
   voices and the clips. `status` prints "This run will pause for your approval
@@ -341,6 +352,59 @@ things worth knowing before you promise a user anything:
 
 ## The script file
 
+**Pass the user's text as it is.** `exodus video start --script <file> --conceit …`
+takes whatever the user gave you: a plain transcript, a rough draft, lines with
+no names, voice-over labels, a title line, notes, a colon inside a spoken line,
+or just a description of the ad they want. Save it to a file unchanged and start.
+Do not add `CAST:`, `CTA:` or `NAME:` labels by hand, and do not rewrite it into
+the format below first. The server tidies it the same way the dashboard does
+when a person pastes a script, and it never changes a spoken word.
+
+What the CLI prints, and what you tell the user:
+
+- **Already in the format:** it starts as it is. No AI call, nothing printed
+  about the script.
+- **Laid out:** "We laid your script out in the format the video needs.", any
+  speaker label it added (`SPEAKER`, `SPEAKER 1`), a short note on who each
+  person is, and any line it left out as not part of the ad (a title, a stage
+  note, a timestamp). The run has already started. Tell the user about a
+  left-out line in one sentence. `--json` carries the same facts under
+  `tidied` (`setAside`, `added.names`, `added.descriptions`).
+- **Written from a description:** the file only described the ad, so the
+  server wrote a script for it, printed it in full, and started the run on it.
+  Show the user that script. `--json` carries it under `written`.
+- **A question (`SCRIPT_QUESTION`, exit 1, nothing started):** the server
+  can't tell who says a line. The error names the line, and `--json` lists them
+  under `lines`. Ask the user who says it, put the name in front of that line
+  (`SAM: …`), and run the same command again.
+- **Today's refusal (exit 1, nothing started):** the description was too thin
+  to write from, the user has no working AI key for the tidy, or the AI call
+  failed. The answer is the format's own message (for example "Line 1 has no
+  speaker"). Ask the user for more detail about the ad, or for their AI key in
+  Settings, or lay the file out in the format below yourself. A description
+  that reports what someone says ("a guy says it stopped his crash") is
+  sometimes refused this way (#3747): describe the ad without the reported
+  words, or give the lines as a draft, and run it again.
+- **The start refused the tidied script** (for example two speakers for a
+  one-person kind of ad): the notes come first, then the refusal, and `--json`
+  carries the tidied script under `script`. Fix that script and send it. It is
+  already in the format, so it is not tidied or paid for again.
+
+**`--stop-at-script`** prints the script the run would start on and starts
+nothing (exit 0). Use it when the user wants to read a written or laid-out
+script before anything is spent. To go ahead, save the printed script to a file
+and run the same command with `--script <that file>` and without the flag.
+`--json` answers `{ stoppedAtScript: true, script, tidied?, written? }`.
+
+The tidy spends the user's own AI key, one short call. A Show run (`--show`)
+is not tidied: a Show reads the script as written.
+
+### The exact format (optional)
+
+A file already in this format skips the tidy: no AI call. You never need to
+write it, but use it when you are writing a script from scratch for the user,
+or when the tidy can't run.
+
 Plain text. An optional `DIRECTION:` block may open the file, before `CAST:` or
 the first spoken line. Then a `CAST:` block naming the speakers, one line per
 turn, then a `CTA:` block.
@@ -396,8 +460,9 @@ with an em dash, an en dash, or a hyphen with a space on each side. Keep that
 dash on cast lines. A reader who strips it makes the line fail.
 
 Do not use a long dash in words a character says, or in words shown on screen.
-Synthesised speech reads a long dash oddly, and so does burned-in text. A spoken
-line stays `NAME: what they say`.
+Synthesised speech reads a long dash oddly, and so does burned-in text. In the
+exact format a spoken line is `NAME: what they say`; a file that is not in the
+format is tidied into it.
 
 ### Directing a line
 
@@ -454,8 +519,9 @@ What the reader refuses, with the code `malformed-direction`:
 An unclosed `(` is not refused. It is read as ordinary words, and the voice
 says it. Check every `(` has its `)`.
 
-Both ways in read the file the same way: `exodus video start --script` and
-`exodus workflow run --input <field>=@script.txt`. The second holds only when
+Both ways in read the notes the same way: `exodus video start --script` and
+`exodus workflow run --input <field>=@script.txt`. Only `video start` tidies a
+file that is not in the format; a workflow's Brief must already be in it. The second holds only when
 the script goes straight from a Brief into the Storyboard. In a workflow where a
 bot writes or rewrites the script first, the notes are not read this way, and
 the bot may drop them or leave them in the spoken words.

@@ -222,6 +222,7 @@ export interface NodeItem {
         outcome: string;
         label: string;
         reason?: string;
+        voiceFirstBlockedBy?: string[];
         displacedHistory?: {
             title: string;
             lines: string[];
@@ -440,6 +441,7 @@ export interface StartOptions {
     music?: boolean;
     wait: boolean;
     json: boolean;
+    onProgressLine?: (line: string) => void;
 }
 export interface ScriptStartOptions {
     scriptFile: string;
@@ -453,8 +455,10 @@ export interface ScriptStartOptions {
     reviewStoryboard?: true;
     director?: true;
     shots?: RunShots;
+    stopAtScript?: true;
     wait: boolean;
     json: boolean;
+    onProgressLine?: (line: string) => void;
 }
 export type VideoStartPlan = {
     kind: "usage";
@@ -482,6 +486,7 @@ export declare function waitFlow(runId: string, opts: {
     url?: string;
     intervalMs?: number;
     maxPolls?: number;
+    onProgressLine?: (line: string) => void;
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function statusFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function directorLines(director: RunDirector): string[];
@@ -531,7 +536,7 @@ export interface CastVoiceRow {
         voiceId: string;
         label?: string;
     } | null;
-    voiceFrom?: "own-pin" | "run-default";
+    voiceFrom?: "own-pin" | "planner-pick" | "run-default";
     availability?: {
         state: "available";
         providerName: string;
@@ -542,6 +547,18 @@ export interface CastVoiceRow {
         why: string;
     };
     description?: string;
+    fit?: {
+        note: string;
+        clash: boolean;
+    };
+    catalogPicks?: Array<{
+        voiceId: string;
+        name: string;
+        fit?: {
+            note: string;
+            clash: boolean;
+        };
+    }>;
     spokenScenes: number;
     spokenSeconds: number;
 }
@@ -576,7 +593,18 @@ export type VoiceMap = Record<string, string | {
     label?: string;
 } | null>;
 export declare function parseVoiceFlags(occurrences: FlagOccurrence[], readFile: (path: string) => string): VoiceMap | null;
+export interface CatalogVoiceEntry {
+    voiceId: string;
+    name: string;
+    gender: string;
+    age: string;
+    accent: string;
+    qualities: string[];
+    characterVoice: boolean;
+}
+export declare function voiceCatalogFlow(runId: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function voicesFlow(runId: string, voices: VoiceMap | null, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare const VOICE_CLASH_HINT: string;
 export declare function voiceSheetLines(sheet: CastVoiceSheet): string[];
 export interface CustomerManifest {
     runId: string;

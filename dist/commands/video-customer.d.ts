@@ -41,10 +41,22 @@ export interface CustomerRun {
     stopReason: CustomerStopReason | null;
     detailsPath: string | null;
 }
+export interface ScriptTidied {
+    setAside: string[];
+    added: {
+        names: string[];
+        descriptions: {
+            name: string;
+            description: string;
+        }[];
+    };
+}
 export interface CustomerStart {
     view: "customer";
     runId: string;
     dashboardUrl: string;
+    tidied?: ScriptTidied;
+    written?: string;
 }
 export interface CustomerStoryboard {
     view: "customer";

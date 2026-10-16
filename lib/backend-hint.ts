@@ -10,6 +10,26 @@ export function isPlaceholderApiUrl(apiUrl: string): boolean {
   return !apiUrl || apiUrl.includes(PLACEHOLDER_MARK);
 }
 
+function hostLabel(apiUrl: string): string {
+  try {
+    return new URL(apiUrl).host;
+  } catch {
+    return apiUrl || "(no EXODUS_API_URL set)";
+  }
+}
+
+/** #3237: which server a command talks to, by host, naming the two Exodus stacks. */
+export function describeServer(apiUrl: string): string {
+  const host = hostLabel(apiUrl);
+  if (isConvexHostOf(host, PROD_BACKEND)) return `${host} (live, xo.copycoders.ai)`;
+  if (isConvexHostOf(host, DEV_BACKEND)) return `${host} (dev, dev.xo.copycoders.ai)`;
+  return host;
+}
+
+function isConvexHostOf(host: string, deployment: string): boolean {
+  return host === `${deployment}.convex.site` || host === `${deployment}.convex.cloud`;
+}
+
 /**
  * Actionable message for an auth failure. A bare "HTTP 401" sent a prior
  * operator chasing a "dead key"; the real cause is almost always a key sent
@@ -17,12 +37,7 @@ export function isPlaceholderApiUrl(apiUrl: string): boolean {
  * EXODUS_API_URL for each environment.
  */
 export function auth401Hint(apiUrl: string): string {
-  let host = apiUrl || "(no EXODUS_API_URL set)";
-  try {
-    host = new URL(apiUrl).host;
-  } catch {
-    // keep the raw string as the host label
-  }
+  const host = hostLabel(apiUrl);
   return [
     `This API key was rejected by ${host} (HTTP 401).`,
     `Keys are environment-bound — this key may belong to the other environment.`,

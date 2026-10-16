@@ -14,6 +14,11 @@ function joinedOr(items) {
         return items[0] ?? "";
     return `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
 }
+function joinedAnd(items) {
+    if (items.length <= 1)
+        return items[0] ?? "";
+    return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
 export function scriptRunPickProblem(options, conceit, style) {
     const keys = options.conceits.map((row) => row.key);
     if (!keys.includes(conceit)) {
@@ -64,6 +69,8 @@ The whole loop, in order:
      and who pays. Add --set to give someone a voice, before any clip is made.
 
   6. exodus video approve <runId>          (looks right — keep going)
+     Guided runs only. A One-shot run approves its own storyboard and stops
+     here only when its checks find a problem.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
 
@@ -95,9 +102,9 @@ The whole loop, in order:
 
   10. exodus video upload <runId> --file cut.mp4
       Attaches your cut to the run and prints the page to watch it on. On a
-      One-shot run the upload delivers the ad, so step 11 is not needed.
+      One-shot run the upload delivers the ad and you are done.
 
-  11. exodus video approve <runId>
+  11. Guided runs only: exodus video approve <runId>
       Or click Approve on the page from step 10. If you redid a clip after
       uploading, this stops and says which scenes changed. Upload a fresh cut,
       or add --approve-stale-cut to deliver the cut you already uploaded.
@@ -109,10 +116,11 @@ Usage:
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
-  exodus video voices <runId> [--set <character>=<voiceId>] [--clear <character>] [--from <file.json>] [--json]
+  exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
+  exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--review-storyboard] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--one-shot] [--director] [--wait] [--json]
   exodus video director <runId> <on|off|follow> [--json]
 
 Options:
@@ -135,15 +143,29 @@ Options:
   --approve-stale-cut  Deliver the cut you uploaded even though a clip changed
                        after you uploaded it (approve). Without it, approving
                        stops and names the scenes that changed
-  --set <who>=<id>     Give a character an ElevenLabs voice (voices). Name the
-                       character by its ID or by the name your script uses.
-                       Repeat it once per character
+  --set <who>=<voice>  Give a character a voice (voices). The voice is a
+                       catalog voice's name, like George, or an ElevenLabs
+                       voice ID. Name the character by its ID or by the name
+                       your script uses. Repeat it once per character
   --clear <who>        Take a character's voice off again (voices). Repeatable
-  --from <file.json>   A file of characters and voice IDs (voices). --set and
-                       --clear win over the same name in the file
+  --from <file.json>   A file of characters and voices, by name or ID (voices).
+                       --set and --clear win over the same name in the file
+  --catalog            List the voices you can pick by name (voices). No run
+                       needed. With a run, also the best few for each
+                       character who speaks
   --rejected-draft     Print the storyboard draft the system turned down
                        (status). It was thrown away — a record only
-  --script <file>      Text file of what the ad says (start)
+  --script <file>      Text file of what the ad says (start). Anything works:
+                       a plain transcript, a rough draft, or a description of
+                       the ad. With --conceit, the server lays it out in the
+                       format the video needs without changing a spoken word,
+                       and says what it did. A description gets a script
+                       written from it, printed, and the run starts on it. If
+                       the server can't tell who says a line, it asks and
+                       starts nothing
+  --stop-at-script     Print the script the run would start on, and start
+                       nothing (start, with --conceit). To read a written or
+                       laid-out script first; send it back with --script
   --conceit <kind>     Kind of ad (start)
   --style <look>       Look (start)
                        The server lists the kinds and looks it offers. An unknown word prints them.
@@ -163,9 +185,14 @@ Options:
   --music              Put a music bed under the ad (start). An ad has no music
                        unless you ask for it here
   --no-music           Leave the music bed off (start), which it already is
+  --one-shot           Make the whole video with no stop (start, with
+                       --conceit). The app approves its own storyboard when
+                       its checks pass and goes straight on to the clips,
+                       which is the part that costs. Without it the run is
+                       Guided: it stops at the storyboard for your yes
   --review-storyboard  Stop at the storyboard so you can approve it yourself
-                       (start, with --conceit). By default the app approves its
-                       own storyboard when its checks pass
+                       (start, with --conceit). This is the default, so the
+                       flag changes nothing. Kept for scripts that pass it
   --director           Turn the trial director on for this ad (start, with
                        --conceit). Admins only. To switch it on or off later:
                        exodus video director <runId> on|off|follow, where
@@ -177,7 +204,8 @@ Options:
 
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
---style, --direction, --frame, --pacing, --music, --review-storyboard),
+--style, --direction, --frame, --pacing, --music, --one-shot,
+--review-storyboard, --stop-at-script),
 status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
 picture while the storyboard waits), pull (the finished video, each scene's
 clip and voice, and the music) and upload. These stay admin-only:
@@ -197,7 +225,9 @@ Examples:
   exodus video retry-clip run_123 --scene 3 --voice-first
   exodus video revoice run_123 --all
   exodus video voices run_123
-  exodus video voices run_123 --set C1=abc123voiceid --set "HOST 2=def456voiceid"
+  exodus video voices --catalog
+  exodus video voices run_123 --catalog
+  exodus video voices run_123 --set C1=George --set "HOST 2=def456voiceid"
   exodus video voices run_123 --from voices.json
   exodus video pull run_123 --out ./ad-run_123
   exodus video upload run_123 --file ./cut.mp4
@@ -1276,11 +1306,17 @@ export async function startFlow(opts, deps) {
             lines: opts.json ? [JSON.stringify({ runId, url })] : lines,
         };
     }
-    const waited = await waitFlow(runId, { json: opts.json, url }, deps);
-    return {
-        code: waited.code,
-        lines: opts.json ? waited.lines : [`Started ad run ${runId}`, `Watch it: ${url}`, "", ...waited.lines],
-    };
+    return startedThenWait(runId, [`Started ad run ${runId}`, `Watch it: ${url}`], { ...opts, url }, deps);
+}
+async function startedThenWait(runId, head, opts, deps) {
+    const stream = opts.json ? undefined : opts.onProgressLine;
+    if (stream)
+        for (const line of [...head, ""])
+            stream(line);
+    const waited = await waitFlow(runId, { json: opts.json, url: opts.url, onProgressLine: stream }, deps);
+    if (opts.json || stream)
+        return waited;
+    return { code: waited.code, lines: [...head, "", ...waited.lines] };
 }
 function nonBlank(value) {
     if (value === undefined || value.trim().length === 0)
@@ -1362,11 +1398,30 @@ export function planVideoStart(flags, occurrences) {
         return { kind: "usage", line: pacingFlag.line };
     const videoModel = videoModelFlag.value;
     const voiceMode = voiceFlag.value;
-    const reviewStoryboard = occurrences.some((o) => o.flag === "review-storyboard");
-    if (showId && reviewStoryboard) {
+    const reviewStoryboardFlag = occurrences.some((o) => o.flag === "review-storyboard");
+    const oneShot = occurrences.some((o) => o.flag === "one-shot");
+    if (showId && reviewStoryboardFlag) {
         return {
             kind: "usage",
             line: "--review-storyboard works with --conceit, not --show. A Show's ad always stops at the storyboard for you.",
+        };
+    }
+    if (showId && oneShot) {
+        return {
+            kind: "usage",
+            line: "--one-shot works with --conceit, not --show. A Show's ad always stops at the storyboard for you.",
+        };
+    }
+    if (oneShot && reviewStoryboardFlag) {
+        return {
+            kind: "usage",
+            line: "Pass --one-shot or --review-storyboard, not both.",
+        };
+    }
+    if (occurrences.some((o) => o.flag === "one-shot" && o.value !== undefined && !o.value.startsWith("--"))) {
+        return {
+            kind: "usage",
+            line: "--one-shot takes no value. Leave it off to stop at the storyboard.",
         };
     }
     const directorFlags = occurrences.filter((o) => o.flag === "director");
@@ -1377,6 +1432,20 @@ export function planVideoStart(flags, occurrences) {
         };
     }
     const director = directorFlags.length > 0;
+    const stopFlags = occurrences.filter((o) => o.flag === "stop-at-script");
+    if (stopFlags.some((o) => o.value !== undefined && !o.value.startsWith("--"))) {
+        return {
+            kind: "usage",
+            line: "--stop-at-script takes no value. Leave it off to start the run.",
+        };
+    }
+    const stopAtScript = stopFlags.length > 0;
+    if (showId && stopAtScript) {
+        return {
+            kind: "usage",
+            line: "--stop-at-script works with --conceit, not --show. A Show's script is read as you wrote it.",
+        };
+    }
     if (showId && director) {
         return {
             kind: "usage",
@@ -1445,10 +1514,12 @@ export function planVideoStart(flags, occurrences) {
         opts.voiceMode = voiceMode;
     if (musicChoice.music !== undefined)
         opts.music = musicChoice.music;
-    if (reviewStoryboard)
+    if (!oneShot)
         opts.reviewStoryboard = true;
     if (director)
         opts.director = true;
+    if (stopAtScript)
+        opts.stopAtScript = true;
     if (frameFlag.value || pacingFlag.value) {
         opts.shots = {
             ...(frameFlag.value ? { frame: frameFlag.value } : {}),
@@ -1502,6 +1573,135 @@ function startedVideoChoice(value) {
         return null;
     return { videoModel: value.videoModel, voiceMode: value.voiceMode };
 }
+function stringsOf(value) {
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+function isCastNote(value) {
+    return isRecord(value) && typeof value.name === "string" && typeof value.description === "string";
+}
+function scriptTidiedOf(value) {
+    if (!isRecord(value))
+        return null;
+    const added = isRecord(value.added) ? value.added : {};
+    return {
+        setAside: stringsOf(value.setAside),
+        added: {
+            names: stringsOf(added.names),
+            descriptions: Array.isArray(added.descriptions) ? added.descriptions.filter(isCastNote) : [],
+        },
+    };
+}
+function scriptTidiedHead(tidied) {
+    if (!tidied)
+        return [];
+    const { setAside } = tidied;
+    const { names, descriptions } = tidied.added;
+    return [
+        "We laid your script out in the format the video needs. " +
+            (setAside.length === 0
+                ? "Every spoken word is unchanged."
+                : "Every spoken line we kept is word for word what you wrote."),
+        ...(names.length === 1 ? [`We called the person your script doesn't name ${names[0]}.`] : []),
+        ...(names.length > 1 ? [`We called the people your script doesn't name ${joinedAnd(names)}.`] : []),
+        ...(descriptions.length > 0
+            ? [
+                "We added a short note on who each person is. It's never spoken; it only guides the video:",
+                ...descriptions.map(({ name, description }) => `  ${name} — ${description}`),
+            ]
+            : []),
+        ...(setAside.length > 0
+            ? [
+                "We left out these lines because they don't look like part of the ad:",
+                ...setAside.map((line) => `  "${line}"`),
+            ]
+            : []),
+        "",
+    ];
+}
+function scriptWrittenHead(written, started) {
+    if (written === null)
+        return [];
+    return [
+        started
+            ? "Your file described the ad, so we wrote this script from it and started the run on it:"
+            : "Your file described the ad, so we wrote this script from it:",
+        "",
+        ...written.split("\n").map((line) => (line ? `  ${line}` : "")),
+        "",
+    ];
+}
+function writtenOf(value) {
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+function scriptQuestionResult(res, json) {
+    const data = res.data;
+    if (!isRecord(data) || !isRecord(data.error) || data.error.code !== "SCRIPT_QUESTION")
+        return null;
+    const message = formatApiError(res);
+    const lines = stringsOf(data.lines);
+    if (json) {
+        return {
+            code: 1,
+            lines: [JSON.stringify({ ok: false, status: res.status, code: "SCRIPT_QUESTION", error: message, lines })],
+        };
+    }
+    return { code: 1, lines: [message] };
+}
+function scriptStartRefused(res, json) {
+    const data = isRecord(res.data) ? res.data : {};
+    const tidied = data.tidied === undefined ? null : scriptTidiedOf(data.tidied);
+    const written = writtenOf(data.written);
+    if (!tidied && written === null)
+        return errorResult(res, json);
+    const script = typeof data.script === "string" ? data.script : null;
+    const error = videoApiError(res);
+    return {
+        code: 1,
+        lines: json
+            ? [
+                JSON.stringify({
+                    ok: false,
+                    status: res.status,
+                    error,
+                    ...(tidied ? { tidied } : {}),
+                    ...(written !== null ? { written } : {}),
+                    ...(script !== null ? { script } : {}),
+                }),
+            ]
+            : [...scriptTidiedHead(tidied), ...scriptWrittenHead(written, false), error],
+    };
+}
+function stoppedAtScriptResult(data, json) {
+    const script = typeof data.script === "string" ? data.script : "";
+    const tidied = data.tidied === undefined ? null : scriptTidiedOf(data.tidied);
+    const written = writtenOf(data.written);
+    if (json) {
+        return {
+            code: 0,
+            lines: [
+                JSON.stringify({
+                    stoppedAtScript: true,
+                    script,
+                    ...(tidied ? { tidied } : {}),
+                    ...(written !== null ? { written } : {}),
+                }),
+            ],
+        };
+    }
+    return {
+        code: 0,
+        lines: [
+            ...scriptTidiedHead(tidied),
+            written !== null
+                ? "Your file described the ad, so we wrote this script from it. Nothing has started."
+                : "This is the script the run would start on. Nothing has started.",
+            "",
+            ...script.split("\n").map((line) => (line ? `  ${line}` : "")),
+            "",
+            "To start it, save it to a file and run the same command with --script <that file> and without --stop-at-script.",
+        ],
+    };
+}
 function scriptStartedLines(runId, url, card, video, director) {
     return [
         `Started ad run ${runId}`,
@@ -1518,7 +1718,7 @@ function scriptStartedLines(runId, url, card, video, director) {
         `Watch it: ${url}`,
     ];
 }
-function waitJsonWithCard(waited, card, video) {
+function waitJsonWith(waited, facts) {
     const first = waited.lines[0];
     if (typeof first !== "string")
         return waited;
@@ -1533,7 +1733,7 @@ function waitJsonWithCard(waited, card, video) {
         return waited;
     return {
         code: waited.code,
-        lines: [JSON.stringify({ ...parsed, card, ...(video ? { videoChoice: video } : {}) })],
+        lines: [JSON.stringify({ ...parsed, ...facts })],
     };
 }
 export async function startScriptFlow(opts, deps) {
@@ -1575,9 +1775,13 @@ export async function startScriptFlow(opts, deps) {
         ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
         ...(opts.director ? { director: true } : {}),
         ...(opts.shots ? { shots: opts.shots } : {}),
+        ...(opts.stopAtScript ? { stopAtScript: true } : {}),
     });
     if (!res.ok)
-        return errorResult(res, opts.json);
+        return scriptQuestionResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
+    if (isRecord(res.data) && res.data.stoppedAtScript === true) {
+        return stoppedAtScriptResult(res.data, opts.json);
+    }
     const customerStart = customerAnswer(res.data);
     if (customerStart)
         return customerStartedResult(customerStart, opts, deps);
@@ -1589,12 +1793,22 @@ export async function startScriptFlow(opts, deps) {
     const url = typeof started.url === "string" ? started.url : "";
     const card = isResolvedCard(started.card) ? started.card : null;
     const video = startedVideoChoice(started.videoChoice);
+    const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
+    const written = writtenOf(started.written);
+    const facts = {
+        card,
+        ...(video ? { videoChoice: video } : {}),
+        ...(tidied ? { tidied } : {}),
+        ...(written !== null ? { written } : {}),
+    };
+    const head = [...scriptTidiedHead(tidied), ...scriptWrittenHead(written, true)];
     if (!opts.wait) {
         return {
             code: 0,
             lines: opts.json
-                ? [JSON.stringify({ runId, url, card, ...(video ? { videoChoice: video } : {}) })]
+                ? [JSON.stringify({ runId, url, ...facts })]
                 : [
+                    ...head,
                     ...scriptStartedLines(runId, url, card, video, opts.director === true),
                     "",
                     ...(opts.reviewStoryboard
@@ -1607,20 +1821,23 @@ export async function startScriptFlow(opts, deps) {
                 ],
         };
     }
-    const waited = await waitFlow(runId, { json: opts.json, url }, deps);
-    if (opts.json)
-        return waitJsonWithCard(waited, card, video);
-    return {
-        code: waited.code,
-        lines: [...scriptStartedLines(runId, url, card, video, opts.director === true), "", ...waited.lines],
-    };
+    const waited = await startedThenWait(runId, [...head, ...scriptStartedLines(runId, url, card, video, opts.director === true)], { ...opts, url }, deps);
+    return opts.json ? waitJsonWith(waited, facts) : waited;
 }
 async function customerStartedResult(started, opts, deps) {
     const { runId, dashboardUrl } = started;
-    const head = [`Started video ${runId}`, `Watch it: ${dashboardUrl}`];
+    const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
+    const written = writtenOf(started.written);
+    const head = [
+        ...scriptTidiedHead(tidied),
+        ...scriptWrittenHead(written, true),
+        `Started video ${runId}`,
+        `Watch it: ${dashboardUrl}`,
+    ];
     if (opts.wait) {
-        const waited = await waitFlow(runId, { json: opts.json, url: dashboardUrl }, deps);
-        return opts.json ? waited : { code: waited.code, lines: [...head, "", ...waited.lines] };
+        const waited = await startedThenWait(runId, head, { ...opts, url: dashboardUrl }, deps);
+        const facts = { ...(tidied ? { tidied } : {}), ...(written !== null ? { written } : {}) };
+        return opts.json && (tidied || written !== null) ? waitJsonWith(waited, facts) : waited;
     }
     if (opts.json)
         return { code: 0, lines: [JSON.stringify(started)] };
@@ -1644,6 +1861,17 @@ export async function waitFlow(runId, opts, deps) {
     const lines = [];
     let lastProgress = null;
     let redoSeen = false;
+    const progress = (line) => {
+        if (line === lastProgress)
+            return;
+        lastProgress = line;
+        if (opts.json)
+            return;
+        if (opts.onProgressLine)
+            opts.onProgressLine(line);
+        else
+            lines.push(line);
+    };
     for (let poll = 0; poll < maxPolls; poll++) {
         if (poll > 0)
             await deps.sleep(interval);
@@ -1656,12 +1884,7 @@ export async function waitFlow(runId, opts, deps) {
         if (customer) {
             const page = customerRunPage(deps.dashboardUrl, runId);
             if (customerStageIsWorking(customer.stage)) {
-                const progress = customerStageLines(customer, page)[0];
-                if (progress !== lastProgress) {
-                    lastProgress = progress;
-                    if (!opts.json)
-                        lines.push(progress);
-                }
+                progress(customerStageLines(customer, page)[0]);
                 continue;
             }
             return {
@@ -1674,14 +1897,9 @@ export async function waitFlow(runId, opts, deps) {
         const run = asVideoRun(res.data);
         const stop = classifyRun(run);
         if (stop.at === "running") {
-            const progress = stop.autoRedoScenes?.length
+            progress(stop.autoRedoScenes?.length
                 ? autoRedoLine(stop.autoRedoScenes, stop.autoRedoReasons)
-                : `Working: ${stageWord(stop.stage)}…`;
-            if (progress !== lastProgress) {
-                lastProgress = progress;
-                if (!opts.json)
-                    lines.push(progress);
-            }
+                : `Working: ${stageWord(stop.stage)}…`);
             continue;
         }
         let items = null;
@@ -1693,12 +1911,7 @@ export async function waitFlow(runId, opts, deps) {
             const redoing = items ? scenesBeingRedone(run, items) : [];
             redoSeen = redoing.length > 0;
             if (redoSeen) {
-                const progress = `Working: redoing scene${redoing.length === 1 ? "" : "s"} ${redoing.join(", ")}…`;
-                if (progress !== lastProgress) {
-                    lastProgress = progress;
-                    if (!opts.json)
-                        lines.push(progress);
-                }
+                progress(`Working: redoing scene${redoing.length === 1 ? "" : "s"} ${redoing.join(", ")}…`);
                 continue;
             }
         }
@@ -1846,6 +2059,10 @@ export async function statusFlow(runId, json, deps) {
             lines.push(`${String(sceneIndex).padEnd(5)}  ${itemWord(row.clip).padEnd(8)}  ${itemWord(row.voiceover).padEnd(8)}  ${itemWord(row.frame)}`);
             if (row.clip?.lastRedo) {
                 lines.push(`       clip: ${redoLine(row.clip.lastRedo)}`);
+                const blocked = row.clip.lastRedo.voiceFirstBlockedBy;
+                if (blocked?.length) {
+                    lines.push(`       clip: asked for voice first, but redone the usual way — ${cantSayNames(blocked)}`);
+                }
                 printDisplacedHistory(lines, row.clip.lastRedo);
             }
             if (row.clip?.lastRedo || row.clip?.flagged) {
@@ -1889,6 +2106,9 @@ export async function statusFlow(runId, json, deps) {
         if (outputsOfNodeKind(run, "voiceover").some(isNarrationMaster)) {
             lines.push("Narration  master take");
         }
+    }
+    if (run.nodes.some((n) => n.kind === "storyboard" && n.status === "done")) {
+        lines.push(...(await statusVoiceLines(runId, deps)));
     }
     lines.push("", hasFinal && stop.at === "finished"
         ? "Final cut: approved and delivered."
@@ -2055,7 +2275,7 @@ export async function storyboardFlow(runId, json, deps) {
             if (summary.length > 0) {
                 lines.push("", ...summary);
                 if (canChange) {
-                    lines.push(`set voices with: exodus video voices ${runId} --set <character>=<voiceId>`);
+                    lines.push(`set voices with: exodus video voices ${runId} --set <character>=<voice name or ID>`);
                 }
             }
         }
@@ -2540,8 +2760,8 @@ export function parseVoiceFlags(occurrences, readFile) {
             const raw = valueFor(occurrence);
             const eq = raw.lastIndexOf("=");
             if (eq <= 0 || eq === raw.length - 1) {
-                throw new Error("--set must look like <character>=<voice id>, for example " +
-                    `--set C1=abc123voiceid (got "${raw}").`);
+                throw new Error("--set must look like <character>=<voice>, where the voice is a catalog voice's name " +
+                    `or an ElevenLabs voice ID, for example --set C1=George (got "${raw}").`);
             }
             typed[raw.slice(0, eq).trim()] = raw.slice(eq + 1).trim();
             asked = true;
@@ -2579,6 +2799,57 @@ export function parseVoiceFlags(occurrences, readFile) {
     }
     return { ...merged, ...typed };
 }
+function catalogLines(catalog) {
+    const width = (pick) => Math.max(0, ...catalog.map((voice) => pick(voice).length));
+    const nameWidth = width((voice) => voice.name);
+    const genderWidth = width((voice) => voice.gender);
+    const ageWidth = width((voice) => voice.age);
+    const accentWidth = width((voice) => voice.accent);
+    return [
+        "Voices you can pick by name (ElevenLabs voices every account has)",
+        ...catalog.map((voice) => {
+            const qualities = [...voice.qualities, ...(voice.characterVoice ? ["character voice"] : [])];
+            return (`  ${voice.name.padEnd(nameWidth)}  ${voice.gender.padEnd(genderWidth)}  ` +
+                `${voice.age.padEnd(ageWidth)}  ${voice.accent.padEnd(accentWidth)}  ${qualities.join(", ")}`).trimEnd();
+        }),
+    ];
+}
+function catalogPickLines(cast) {
+    const lines = [];
+    for (const row of cast) {
+        if (!row.catalogPicks || row.catalogPicks.length === 0)
+            continue;
+        const width = Math.max(...row.catalogPicks.map((pick) => pick.name.length));
+        lines.push("", `Best fits for ${row.name} (${row.characterId})`);
+        for (const pick of row.catalogPicks) {
+            lines.push(`  ${pick.name.padEnd(width)}${pick.fit ? `  ${pick.fit.note}` : ""}`.trimEnd());
+        }
+    }
+    return lines;
+}
+export async function voiceCatalogFlow(runId, json, deps) {
+    const query = runId ? `runId=${encodeURIComponent(runId)}&check=none&catalog=1` : "catalog=1";
+    const res = await deps.get(`${VOICES_PATH}?${query}`);
+    if (!res.ok)
+        return errorResult(res, json);
+    const data = (res.data ?? {});
+    if (!Array.isArray(data.catalog)) {
+        return { code: 1, lines: ["This server can't list the voice catalog yet. Voice IDs still work with --set."] };
+    }
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, ...data })] };
+    const cast = Array.isArray(data.cast) ? data.cast : [];
+    const set = runId ? `exodus video voices ${runId}` : "exodus video voices <runId>";
+    return {
+        code: 0,
+        lines: [
+            ...catalogLines(data.catalog),
+            ...catalogPickLines(cast),
+            "",
+            `Pick one by name: ${set} --set <character>=<Name>`,
+        ],
+    };
+}
 export async function voicesFlow(runId, voices, json, deps) {
     const res = voices
         ? await deps.post(VOICES_PATH, { runId, voices })
@@ -2613,7 +2884,30 @@ function voiceWords(row) {
     if (!voice)
         return "—";
     const words = voice.label ? `${voice.label} (${voice.voiceId})` : voice.voiceId;
-    return row.voiceFrom === "run-default" ? `${words}, the run's default voice` : words;
+    if (row.voiceFrom === "run-default")
+        return `${words}, the run's default voice`;
+    if (row.voiceFrom === "planner-pick")
+        return `${words}, picked by the planner`;
+    return words;
+}
+function fitWords(row) {
+    return row.fit ? `  — ${row.fit.note}` : "";
+}
+export const VOICE_CLASH_HINT = 'To choose a voice yourself, write "voice: <Name>" on that character\'s CAST line in the script, ' +
+    "or launch with --review-storyboard and change it at the storyboard stop.";
+async function statusVoiceLines(runId, deps) {
+    const res = await deps
+        .get(`${VOICES_PATH}?runId=${encodeURIComponent(runId)}&check=none`)
+        .catch(() => null);
+    if (!res?.ok)
+        return [];
+    const sheet = (res.data ?? {});
+    const cast = Array.isArray(sheet.cast) ? sheet.cast : [];
+    const summary = voiceSummaryLines(cast, []);
+    if (summary.length === 0)
+        return [];
+    const clash = cast.some((row) => row.fit?.clash === true);
+    return ["", ...summary, ...(clash ? [VOICE_CLASH_HINT] : [])];
 }
 function voiceSummaryLines(cast, notices) {
     const rows = cast.filter((row) => row.spokenScenes > 0 || row.voice !== null);
@@ -2621,7 +2915,7 @@ function voiceSummaryLines(cast, notices) {
     const lines = rows.length > 0 ? ["Voices"] : [];
     for (const row of rows) {
         lines.push(row.voice
-            ? `  ${row.name.padEnd(width)}  →  ${voiceWords(row)}  ${availabilityWords(row)}`
+            ? `  ${row.name.padEnd(width)}  →  ${voiceWords(row)}  ${availabilityWords(row)}${fitWords(row)}`
             : `  ${row.name.padEnd(width)}  →  no voice chosen (keeps the generated voice)`);
     }
     for (const notice of notices)
@@ -2639,7 +2933,7 @@ export function voiceSheetLines(sheet) {
         const voice = voiceWords(row);
         lines.push(`  ${row.characterId}  ${row.name}  ${voice}  ${availabilityWords(row)}  ` +
             `speaks in ${row.spokenScenes} scene${row.spokenScenes === 1 ? "" : "s"}, ` +
-            `about ${row.spokenSeconds}s`);
+            `about ${row.spokenSeconds}s${fitWords(row)}`);
         if (row.description)
             lines.push(`      written voice: ${row.description}`);
     }
@@ -3214,9 +3508,11 @@ export async function run(flags, occurrences) {
         const plan = planVideoStart(flags, occurrences);
         if (plan.kind === "usage")
             usage(plan.line);
-        if (plan.kind === "show")
-            return printResult(await startFlow(plan.opts, defaultDeps));
-        const started = await startScriptFlow(plan.opts, defaultDeps);
+        const onProgressLine = (line) => console.log(line);
+        if (plan.kind === "show") {
+            return printResult(await startFlow({ ...plan.opts, onProgressLine }, defaultDeps));
+        }
+        const started = await startScriptFlow({ ...plan.opts, onProgressLine }, defaultDeps);
         if (started.usage)
             usage(started.lines[0] ?? "");
         return printResult(started);
@@ -3235,6 +3531,9 @@ export async function run(flags, occurrences) {
         "upload",
         "director",
     ];
+    if (sub === "voices" && flags["catalog"] !== undefined && flags["catalog"] !== false) {
+        return printResult(await voiceCatalogFlow(runId, json, defaultDeps));
+    }
     if (needsRunId.includes(sub) && !runId) {
         usage(`video ${sub} needs a run id: exodus video ${sub} <runId>`);
     }

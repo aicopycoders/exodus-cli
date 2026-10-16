@@ -130,20 +130,143 @@ const wordToken = (word) => String(word ?? "").toLowerCase().replace(/[^\p{L}\p{
 /**
  * #3175: one spoken word a script and a scribe spell differently ("ok", "Okay").
  * #3460: "alright" maps to the scribe's "All right" once its halves are joined.
+ * #3671: the #3558 words that sound the same ("your", "you're") are one spoken
+ * word, as in scout scribe.ts.
  */
 const SAME_WORD_SPELLINGS = new Map([
   ["ok", "okay"],
   ["alright", "allright"],
+  ["youre", "your"],
+  ["theyre", "their"],
+  ["there", "their"],
+  ["too", "to"],
 ]);
+
+/**
+ * #3433: the number reading of scout spokenNumbers.ts, so a script's "$29" and a
+ * scribe's "twenty nine dollars" line up here as they do in the server's cut.
+ * Mirrors numericWords and its tables.
+ */
+const ONES = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+  "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+  "sixteen", "seventeen", "eighteen", "nineteen",
+];
+const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+const ORDINAL_ONES = [
+  "zeroth", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+  "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth",
+  "fourteenth", "fifteenth", "sixteenth", "seventeenth", "eighteenth",
+  "nineteenth",
+];
+const ORDINAL_TENS = [
+  "", "", "twentieth", "thirtieth", "fortieth", "fiftieth", "sixtieth",
+  "seventieth", "eightieth", "ninetieth",
+];
+const NUMBER_WORDS = new Set([
+  ...ONES,
+  ...TENS.filter(Boolean),
+  "hundred",
+  ...ORDINAL_ONES,
+  ...ORDINAL_TENS.filter(Boolean),
+]);
+
+/** Null from 1000 up: "2026" has no single spoken form, so it stays written on both sides. */
+function cardinalWords(n) {
+  if (!Number.isInteger(n) || n < 0 || n >= 1000) return null;
+  if (n < 20) return [ONES[n]];
+  if (n < 100) {
+    const unit = n % 10;
+    const tens = TENS[Math.floor(n / 10)];
+    return unit === 0 ? [tens] : [tens, ONES[unit]];
+  }
+  const rest = n % 100 === 0 ? [] : (cardinalWords(n % 100) ?? []);
+  return [ONES[Math.floor(n / 100)], "hundred", ...rest];
+}
+
+function ordinalWords(n) {
+  if (!Number.isInteger(n) || n < 0 || n >= 100) return null;
+  if (n < 20) return [ORDINAL_ONES[n]];
+  const unit = n % 10;
+  const tens = Math.floor(n / 10);
+  return unit === 0 ? [ORDINAL_TENS[tens]] : [TENS[tens], ORDINAL_ONES[unit]];
+}
+
+const asInt = (digits) => Number.parseInt(digits.replace(/,/g, ""), 10);
+
+function clockWords(hourDigits, minuteDigits) {
+  const hour = cardinalWords(asInt(hourDigits));
+  if (!hour) return null;
+  if (minuteDigits === undefined) return hour;
+  const minute = asInt(minuteDigits);
+  if (minute === 0) return hour;
+  if (minute < 10) return [...hour, "oh", ONES[minute]];
+  return [...hour, ...(cardinalWords(minute) ?? [])];
+}
+
+/** Spoken words for a written number form ("2:30", "2pm", "20%", "$5.50", "3rd", "1,000"), or null. */
+function numericWords(core) {
+  const time = /^(\d{1,2}):(\d{2})$/.exec(core);
+  if (time) return clockWords(time[1], time[2]);
+
+  const meridiem = /^(\d{1,2})(?::(\d{2}))?([ap])\.?m\.?$/.exec(core);
+  if (meridiem) {
+    const clock = clockWords(meridiem[1], meridiem[2]);
+    return clock ? [...clock, `${meridiem[3]}m`] : null;
+  }
+
+  const percent = /^(\d[\d,]*)%$/.exec(core);
+  if (percent) {
+    const amount = cardinalWords(asInt(percent[1]));
+    return amount ? [...amount, "percent"] : null;
+  }
+
+  const money = /^\$(\d[\d,]*)(?:\.(\d{2}))?$/.exec(core);
+  if (money) {
+    const amount = asInt(money[1]);
+    const dollars = cardinalWords(amount);
+    if (!dollars) return null;
+    const unit = amount === 1 ? "dollar" : "dollars";
+    const cents = money[2] === undefined ? 0 : asInt(money[2]);
+    if (cents === 0) return [...dollars, unit];
+    return [...dollars, unit, ...(cardinalWords(cents) ?? [])];
+  }
+
+  const ordinal = /^(\d+)(?:st|nd|rd|th)$/.exec(core);
+  if (ordinal) return ordinalWords(asInt(ordinal[1]));
+
+  if (/^\d[\d,]*$/.test(core)) return cardinalWords(asInt(core));
+  return null;
+}
+
+/** The spoken tokens of one written word, before SAME_WORD_SPELLINGS; empty for pure punctuation. */
+function spokenForms(word) {
+  const lower = String(word ?? "").toLowerCase();
+  // "twenty-five", "3-pack", "F-150" split; "e-mail" stays whole.
+  if (lower.includes("-")) {
+    const parts = lower.split("-").filter(Boolean);
+    const isNumber = (p) => /\d/.test(p) || NUMBER_WORDS.has(p.replace(/[^a-z]/g, ""));
+    if (parts.length > 1 && parts.some(isNumber)) return parts.flatMap(spokenForms);
+  }
+  // Keep a leading "$" and a trailing "%". They decide how the number is said.
+  const core = lower.replace(/^[^\p{L}\p{N}$]+/u, "").replace(/[^\p{L}\p{N}%]+$/u, "");
+  const numeric = numericWords(core);
+  if (numeric) return numeric;
+  // #3133: a scribe writes a spoken "glowmist dot com" as "Glowmist.com".
+  if (/^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z]{2,})+$/.test(core)) {
+    return core.split(".").flatMap((part, i) => [...(i ? ["dot"] : []), ...spokenForms(part)]);
+  }
+  const plain = wordToken(core);
+  // "F150" must read the same as "F-150", which the hyphen split above expands.
+  if (/\p{L}/u.test(plain) && /\p{N}/u.test(plain)) {
+    return (plain.match(/\p{L}+|\p{N}+/gu) ?? []).flatMap(spokenForms);
+  }
+  return plain ? [plain] : [];
+}
 
 /** The spoken tokens of one written word; empty for pure punctuation. */
 function spokenWords(word) {
-  const core = String(word ?? "").toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-  // #3133: a scribe writes a spoken "glowmist dot com" as "Glowmist.com".
-  const parts = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z]{2,})+$/.test(core)
-    ? core.split(".").flatMap((part, i) => (i ? ["dot", part] : [part]))
-    : [core];
-  return parts.map(wordToken).filter(Boolean).map((t) => SAME_WORD_SPELLINGS.get(t) ?? t);
+  return spokenForms(word).map((t) => SAME_WORD_SPELLINGS.get(t) ?? t);
 }
 
 /** { tokens, sourceIndex }: tokens[i] came from written word sourceIndex[i]. */
@@ -561,6 +684,7 @@ export function scenePlans(storyboard) {
       cutawayType: typeof scene.cutawayType === "string" ? scene.cutawayType : null,
       durationSec: typeof scene.durationSec === "number" ? scene.durationSec : null,
       actionTailSec: typeof scene.actionTailSec === "number" && scene.actionTailSec > 0 ? scene.actionTailSec : 0,
+      actionLeadSec: typeof scene.actionLeadSec === "number" && scene.actionLeadSec > 0 ? scene.actionLeadSec : 0,
     });
   }
   return plans;
@@ -646,7 +770,9 @@ export function cueEndInSegment(seg, counts, cueLineId) {
  * in order, and a cut stops short of a sound made up before or after the line
  * ("Hmm", "Um"), even at the ad's own edges (#2541). Sounds inside the line stay.
  * A scene the storyboard marks with actionTailSec keeps that long after its last
- * word, so the action it ends on (her setting the mat down, #3199) is seen.
+ * word, so the action it ends on (her setting the mat down, #3199) is seen, and
+ * one marked with actionLeadSec keeps that long before its first word, so the
+ * action it opens on (the dog stepping onto the mat, #3272) is seen.
  */
 function trimJoins(spine, reactionCues, scriptLines) {
   spine.forEach((seg, k) => {
@@ -660,7 +786,7 @@ function trimJoins(spine, reactionCues, scriptLines) {
     const after = span ? seg.words.slice(span.last + 1) : [];
     const firstWord = Math.min(...line.map((w) => w.s));
     const lastWord = Math.max(...line.map((w) => w.e));
-    let inSec = Math.max(0, floorFrame(firstWord - lead));
+    let inSec = Math.max(0, floorFrame(firstWord - Math.max(lead, seg.actionLeadSec ?? 0)));
     if (before.length > 0) {
       const clear = ceilFrame(Math.max(...before.map((w) => w.e)) + EXTRA_CLEARANCE_SEC);
       inSec = Math.max(inSec, Math.min(clear, floorFrame(firstWord)));
@@ -879,6 +1005,7 @@ export function buildTimeline({
         sceneIndex: n, source: "clip", file: scene.clip, clipSeconds: clip.seconds, inSec: 0,
         lineIds: plan.lineIds, firstSpeaker: plan.firstSpeaker, lastSpeaker: plan.lastSpeaker,
         baseShotId: plan.baseShotId ?? null, actionTailSec: plan.actionTailSec ?? 0,
+        actionLeadSec: plan.actionLeadSec ?? 0,
       };
       if (voice && (narrated || !clip.hasAudio)) {
         const voiceSeconds = probe(voice).seconds;

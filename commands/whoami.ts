@@ -1,6 +1,6 @@
 import { apiGet, getApiUrl } from "../lib/client.js";
 import { resolveActiveBrand } from "../lib/layout.js";
-import { auth401Hint } from "../lib/backend-hint.js";
+import { auth401Hint, describeServer } from "../lib/backend-hint.js";
 
 interface WhoamiResponse {
   userId: string | null;
@@ -22,6 +22,7 @@ Usage:
 
 Reads EXODUS_API_KEY from your .env (or env var) and asks the dashboard which
 workspace this key is bound to. Prints:
+  • Server (the EXODUS_API_URL host it talks to, and whether that is live or dev)
   • Brand (workspace slug + name)
   • User email + role
   • Whether the brand has full Genesis foundation knowledge filled in
@@ -63,6 +64,7 @@ export async function run(): Promise<void> {
       ? `\nactive:     (key default)`
       : "";
   console.log(`
+server:     ${describeServer(getApiUrl())}
 brand:      ${d.workspaceName ?? "—"} (${d.workspaceSlug ?? "—"})
 user:       ${d.userEmail ?? "—"} (${d.userRole ?? "—"})
 key:        ${d.keyPrefix ?? "—"}${activeLine}

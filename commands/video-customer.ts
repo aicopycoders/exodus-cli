@@ -51,10 +51,25 @@ export interface CustomerRun {
   detailsPath: string | null;
 }
 
+/**
+ * COP-47: what the server's tidy did to a script it laid out before the start,
+ * on both tiers' start answers (ScriptRunTidied in convex/videoRunView.ts).
+ */
+export interface ScriptTidied {
+  /** Lines of the file left out as not part of the ad. */
+  setAside: string[];
+  /** Cast words the file never said: labels for unnamed speakers, and descriptions. */
+  added: { names: string[]; descriptions: { name: string; description: string }[] };
+}
+
 export interface CustomerStart {
   view: "customer";
   runId: string;
   dashboardUrl: string;
+  /** Only when the server laid the script out (COP-47). */
+  tidied?: ScriptTidied;
+  /** Only when the file described an ad: the script written from it, which the run started on (COP-47). */
+  written?: string;
 }
 
 export interface CustomerStoryboard {

@@ -205,7 +205,8 @@ Options:
                        and says what it did. A description gets a script
                        written from it, printed, and the run starts on it. If
                        the server can't tell who says a line, it asks and
-                       starts nothing
+                       starts nothing. If a description is too thin to write
+                       from, it says what is missing and starts nothing
   --stop-at-script     Print the script the run would start on, and start
                        nothing (start, with --conceit). To read a written or
                        laid-out script first; send it back with --script
@@ -2633,18 +2634,25 @@ function writtenOf(value: unknown): string | null {
 }
 
 /**
- * COP-47: the answer that starts nothing because the script needs the caller
- * first: a line nobody says (SCRIPT_QUESTION). Null for any other refusal.
+ * COP-47: an answer that starts nothing because the script needs the caller
+ * first, with the field that says where: a line nobody says (SCRIPT_QUESTION,
+ * the lines under `lines`) or, COP-49, a description too thin to write a script
+ * from (SCRIPT_TOO_THIN, what it lacks under `missing`). Null for any other
+ * refusal.
  */
-function scriptQuestionResult(res: ApiResponse<unknown>, json: boolean): FlowResult | null {
+function scriptNeedsCallerResult(res: ApiResponse<unknown>, json: boolean): FlowResult | null {
   const data = res.data;
-  if (!isRecord(data) || !isRecord(data.error) || data.error.code !== "SCRIPT_QUESTION") return null;
+  if (!isRecord(data) || !isRecord(data.error)) return null;
+  const code = data.error.code;
+  const field = code === "SCRIPT_QUESTION" ? "lines" : code === "SCRIPT_TOO_THIN" ? "missing" : null;
+  if (field === null) return null;
   const message = formatApiError(res);
-  const lines = stringsOf(data.lines);
   if (json) {
     return {
       code: 1,
-      lines: [JSON.stringify({ ok: false, status: res.status, code: "SCRIPT_QUESTION", error: message, lines })],
+      lines: [
+        JSON.stringify({ ok: false, status: res.status, code, error: message, [field]: stringsOf(data[field]) }),
+      ],
     };
   }
   return { code: 1, lines: [message] };
@@ -2803,7 +2811,7 @@ export async function startScriptFlow(
     ...(opts.shots ? { shots: opts.shots } : {}),
     ...(opts.stopAtScript ? { stopAtScript: true } : {}),
   });
-  if (!res.ok) return scriptQuestionResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
+  if (!res.ok) return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
   if (isRecord(res.data) && res.data.stoppedAtScript === true) {
     return stoppedAtScriptResult(res.data, opts.json);
   }

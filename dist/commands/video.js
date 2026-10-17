@@ -162,7 +162,8 @@ Options:
                        and says what it did. A description gets a script
                        written from it, printed, and the run starts on it. If
                        the server can't tell who says a line, it asks and
-                       starts nothing
+                       starts nothing. If a description is too thin to write
+                       from, it says what is missing and starts nothing
   --stop-at-script     Print the script the run would start on, and start
                        nothing (start, with --conceit). To read a written or
                        laid-out script first; send it back with --script
@@ -1633,16 +1634,21 @@ function scriptWrittenHead(written, started) {
 function writtenOf(value) {
     return typeof value === "string" && value.trim() !== "" ? value : null;
 }
-function scriptQuestionResult(res, json) {
+function scriptNeedsCallerResult(res, json) {
     const data = res.data;
-    if (!isRecord(data) || !isRecord(data.error) || data.error.code !== "SCRIPT_QUESTION")
+    if (!isRecord(data) || !isRecord(data.error))
+        return null;
+    const code = data.error.code;
+    const field = code === "SCRIPT_QUESTION" ? "lines" : code === "SCRIPT_TOO_THIN" ? "missing" : null;
+    if (field === null)
         return null;
     const message = formatApiError(res);
-    const lines = stringsOf(data.lines);
     if (json) {
         return {
             code: 1,
-            lines: [JSON.stringify({ ok: false, status: res.status, code: "SCRIPT_QUESTION", error: message, lines })],
+            lines: [
+                JSON.stringify({ ok: false, status: res.status, code, error: message, [field]: stringsOf(data[field]) }),
+            ],
         };
     }
     return { code: 1, lines: [message] };
@@ -1778,7 +1784,7 @@ export async function startScriptFlow(opts, deps) {
         ...(opts.stopAtScript ? { stopAtScript: true } : {}),
     });
     if (!res.ok)
-        return scriptQuestionResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
+        return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
     if (isRecord(res.data) && res.data.stoppedAtScript === true) {
         return stoppedAtScriptResult(res.data, opts.json);
     }

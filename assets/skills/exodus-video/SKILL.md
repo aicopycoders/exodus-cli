@@ -377,11 +377,19 @@ What the CLI prints, and what you tell the user:
   can't tell who says a line. The error names the line, and `--json` lists them
   under `lines`. Ask the user who says it, put the name in front of that line
   (`SAM: …`), and run the same command again.
-- **Today's refusal (exit 1, nothing started):** the description was too thin
-  to write from, the user has no working AI key for the tidy, or the AI call
-  failed. The answer is the format's own message (for example "Line 1 has no
-  speaker"). Ask the user for more detail about the ad, or for their AI key in
-  Settings, or lay the file out in the format below yourself. A description
+- **Too thin (`SCRIPT_TOO_THIN`, exit 1, nothing started):** the file only
+  described the ad, and there wasn't enough in it to write a script from. The
+  error says what is missing, in the dashboard's words ("There isn't enough
+  here to write a script from. Tell us what the product is."), and `--json`
+  lists the gaps under `missing` (`product`, `speaker`, `what-happens`). Ask
+  the user for what it names, add it to the file, and run the same command
+  again.
+- **Today's refusal (exit 1, nothing started):** the user has no working AI
+  key for the tidy, the AI call failed, or the server could not write a usable
+  script from a description. The answer is the format's own message (for
+  example "Line 1 has no speaker"). Ask the user for more detail about the ad,
+  or for their AI key in Settings, or lay the file out in the format below
+  yourself. A description
   that reports what someone says ("a guy says it stopped his crash") is
   sometimes refused this way (#3747): describe the ad without the reported
   words, or give the lines as a draft, and run it again.
@@ -391,8 +399,9 @@ What the CLI prints, and what you tell the user:
   already in the format, so it is not tidied or paid for again.
 
 **`--stop-at-script`** prints the script the run would start on and starts
-nothing (exit 0). Use it when the user wants to read a written or laid-out
-script before anything is spent. To go ahead, save the printed script to a file
+nothing (exit 0). A question or a description too thin to write from answers
+as above instead (exit 1). Use it when the user wants to read a written or
+laid-out script before anything is spent. To go ahead, save the printed script to a file
 and run the same command with `--script <that file>` and without the flag.
 `--json` answers `{ stoppedAtScript: true, script, tidied?, written? }`.
 

@@ -17,7 +17,7 @@ Run options:
   --mode auto|manual              Generation mode (default: auto)
   --render-mode images|prompts    Skip render and return prompts only (default: images)
   --aspect 1:1|9:16               Image aspect ratio (default: 1:1)
-  --model gpt-image-2.5|gpt-image-2.5-sunburst|gpt-image-2|nano-banana-pro
+  --model gpt-image-2.5|gpt-image-2.5-sunburst|gpt-image-2|nano-banana-pro|nano-banana-2-1
                                   Kie.ai model (default: gpt-image-2.5)
   --realism off|realistic         Realism enforcement (default: off)
   --quantities <slug:N,slug:N>    Manual-mode per-type counts (e.g. "testimonial:3,hero:2")
@@ -109,6 +109,7 @@ async function runTemplate(flags) {
         "gpt-image-2.5-sunburst",
         "gpt-image-2",
         "nano-banana-pro",
+        "nano-banana-2-1",
     ];
     const model = typeof flags["model"] === "string" ? flags["model"] : "gpt-image-2.5";
     if (!TEMPLATE_MODELS.includes(model)) {

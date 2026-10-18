@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { apiGet, apiPost, getDashboardUrl, type ApiResponse } from "../lib/client.js";
 import { displayRunStatus, formatApiError } from "../lib/format.js";
+import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { hasBinary } from "../lib/preflight.js";
 import type { FlagOccurrence } from "../lib/args.js";
@@ -839,7 +840,17 @@ export type RunStop =
   // died and `exodus workflow repair <run> retry` redoes it; absent ⇒ no step
   // in the list failed, the server refuses that retry, and only a fresh run
   // moves this ad on.
-  | { at: "failed"; error?: string; repair?: true; nodeId?: string; step?: string }
+  // #3820: `workerStopped` is the one repair park with no dead step that the
+  // retry still carries on: the worker went silent, and retry continues the
+  // run from its first unfinished step.
+  | {
+      at: "failed";
+      error?: string;
+      repair?: true;
+      nodeId?: string;
+      step?: string;
+      workerStopped?: true;
+    }
   | { at: "finished"; status: string };
 
 /**
@@ -894,6 +905,8 @@ export function classifyRun(run: VideoRun): RunStop {
   if (run.status === "failed") return { at: "failed", error: run.error };
   if (run.isTerminal) return { at: "finished", status: run.status };
   if (isAwaitingApproval(run.status)) {
+    // #3820: the sweep's park for a silent worker has no dead step to name.
+    if (isWorkerStoppedPark(run)) return { at: "failed", repair: true, workerStopped: true };
     // #1687: a "repair" park is a FAILURE wearing a park's clothes. The
     // storyboard node died, its siblings were skipped, and the run stalled on
     // the collector waiting for someone to retry or skip — so the run status
@@ -1173,6 +1186,13 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string): st
     // #1687: a repair park names the step that died and offers the retry,
     // instead of the old "waiting on someone (repair)" — nobody was waiting,
     // and there was nothing to wait for.
+    if (stop.workerStopped) {
+      return [
+        "The worker making this ad stopped partway. Finished steps are kept.",
+        `Carry on from where it stopped: exodus workflow repair ${runId} retry`,
+        `Or open the run:                ${runUrl}`,
+      ];
+    }
     if (stop.repair) {
       // #2168: the retry redoes the steps that FAILED, and the server refuses
       // it outright when none did. With no step named there is nothing to
@@ -3159,7 +3179,9 @@ export async function statusFlow(
   // headline read "Awaiting approval" over a run whose storyboard was dead.
   // The classification is the honest headline for that one case.
   const headline =
-    stop.at === "failed" && stop.repair
+    stop.at === "failed" && stop.workerStopped
+      ? `Ad run ${runId} — Stopped, its worker went quiet`
+      : stop.at === "failed" && stop.repair
       ? `Ad run ${runId} — Stopped, a step failed`
       : `Ad run ${runId} — ${displayRunStatus(run.status)}`;
   const lines = [

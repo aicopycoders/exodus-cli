@@ -20,3 +20,9 @@ export declare function workflowRunPresentation(rawStatus: string | null | undef
     tone: RunStatusTone;
     detail?: string;
 };
+export declare const WORKER_STOPPED_PARK_ERROR = "timeout-zombie-sweep: worker stopped heartbeating; finished steps are kept";
+export declare function isWorkerStoppedPark(run: {
+    status?: string | null;
+    pauseReason?: string | null;
+    error?: string | null;
+}): boolean;

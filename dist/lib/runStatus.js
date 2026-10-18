@@ -137,3 +137,9 @@ export function workflowRunPresentation(rawStatus, pauseReason) {
         detail,
     };
 }
+export const WORKER_STOPPED_PARK_ERROR = "timeout-zombie-sweep: worker stopped heartbeating; finished steps are kept";
+export function isWorkerStoppedPark(run) {
+    return (normalizeRunStatus(run.status) === "awaiting-approval" &&
+        run.pauseReason === "repair" &&
+        run.error === WORKER_STOPPED_PARK_ERROR);
+}

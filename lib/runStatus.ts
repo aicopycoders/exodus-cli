@@ -238,3 +238,23 @@ export function workflowRunPresentation(
     detail,
   };
 }
+
+/**
+ * #3820: the zombie sweep's park for a run whose worker stopped heartbeating.
+ * A repair park with no dead step: retry carries the whole run on from its
+ * first unfinished step, and the server refuses skip.
+ */
+export const WORKER_STOPPED_PARK_ERROR =
+  "timeout-zombie-sweep: worker stopped heartbeating; finished steps are kept";
+
+export function isWorkerStoppedPark(run: {
+  status?: string | null;
+  pauseReason?: string | null;
+  error?: string | null;
+}): boolean {
+  return (
+    normalizeRunStatus(run.status) === "awaiting-approval" &&
+    run.pauseReason === "repair" &&
+    run.error === WORKER_STOPPED_PARK_ERROR
+  );
+}

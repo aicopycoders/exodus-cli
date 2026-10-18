@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { apiGet, apiPost, getDashboardUrl } from "../lib/client.js";
 import { displayRunStatus, formatApiError } from "../lib/format.js";
+import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { hasBinary } from "../lib/preflight.js";
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, } from "./workflow.js";
@@ -411,6 +412,8 @@ export function classifyRun(run) {
     if (run.isTerminal)
         return { at: "finished", status: run.status };
     if (isAwaitingApproval(run.status)) {
+        if (isWorkerStoppedPark(run))
+            return { at: "failed", repair: true, workerStopped: true };
         if (run.pauseReason === "repair") {
             const deadNode = run.nodes.find((n) => n.status === "failed");
             const why = deadNode?.error ?? run.error;
@@ -591,6 +594,13 @@ export function stopLines(stop, runId, runUrl) {
         ];
     }
     if (stop.at === "failed") {
+        if (stop.workerStopped) {
+            return [
+                "The worker making this ad stopped partway. Finished steps are kept.",
+                `Carry on from where it stopped: exodus workflow repair ${runId} retry`,
+                `Or open the run:                ${runUrl}`,
+            ];
+        }
         if (stop.repair) {
             if (!stop.step) {
                 return [
@@ -2043,9 +2053,11 @@ export async function statusFlow(runId, json, deps) {
         row[item.itemKind] = item;
         byScene.set(item.sceneIndex, row);
     }
-    const headline = stop.at === "failed" && stop.repair
-        ? `Ad run ${runId} — Stopped, a step failed`
-        : `Ad run ${runId} — ${displayRunStatus(run.status)}`;
+    const headline = stop.at === "failed" && stop.workerStopped
+        ? `Ad run ${runId} — Stopped, its worker went quiet`
+        : stop.at === "failed" && stop.repair
+            ? `Ad run ${runId} — Stopped, a step failed`
+            : `Ad run ${runId} — ${displayRunStatus(run.status)}`;
     const lines = [
         headline,
         ...(carryingOn(run) ? [CARRYING_ON_LINE] : []),

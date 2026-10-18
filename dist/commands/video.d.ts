@@ -298,6 +298,7 @@ export type RunStop = {
     repair?: true;
     nodeId?: string;
     step?: string;
+    workerStopped?: true;
 } | {
     at: "finished";
     status: string;

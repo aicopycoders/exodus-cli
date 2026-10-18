@@ -508,7 +508,9 @@ interface RunFlowOptions {
     onProgressLine?: (line: string) => void;
     onWarningLine?: (line: string) => void;
 }
-export declare function formatPauseNotice(pauseReason: WorkflowPauseReason | undefined, runId: string, dashboardUrl: string): string[];
+export declare function formatPauseNotice(pauseReason: WorkflowPauseReason | undefined, runId: string, dashboardUrl: string, { workerStopped }?: {
+    workerStopped?: boolean;
+}): string[];
 export declare function parseRawInputFlags(occurrences: FlagOccurrence[]): Record<string, string>;
 export declare function parseInputFlags(occurrences: FlagOccurrence[], readFile?: (path: string) => string): Record<string, string>;
 export declare const ASSET_UPLOAD_POLICY: Record<WorkflowMediaType, {

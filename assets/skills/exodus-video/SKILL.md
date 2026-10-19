@@ -101,7 +101,7 @@ never how it is made. Every answer to them says `"view": "customer"`, and the
 CLI words it the way the run page does. On their own brands they can:
 
 - `video start --script <file> --conceit <key> --style <slug>` with
-  `--direction`, `--frame`, `--pacing`, `--music`, `--one-shot`, `--review-storyboard`, `--stop-at-script` and `--wait`. Any other start
+  `--direction`, `--frame`, `--pacing`, `--music`, `--one-shot`, `--review-storyboard`, `--stop-at-script`, `--rewrite-to-fit` and `--wait`. Any other start
   flag is refused with one sentence naming it. The answer is the run id and the
   link to the video's page, plus what the server did to the script: laid a
   plain transcript out, or wrote a script from a description (see "The script
@@ -158,7 +158,7 @@ exodus workflow run <workflowId|name> --input <field>=@script.txt --voices @voic
 exodus workflow run <workflowId|name> --input <field>=@script.txt --voice-treatment @voice-treatment.json --wait
                                                           same, with the video model speaking voices you WROTE
 exodus video status <runId>                               where it is, per scene
-exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--one-shot] [--director] [--stop-at-script] [--wait]
+exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--one-shot] [--director] [--stop-at-script] [--rewrite-to-fit] [--wait]
                                                           start from a script and the kinds the server offers.
                                                           The file can be a plain transcript, a draft or a
                                                           description: the server tidies it (see "The script
@@ -397,6 +397,16 @@ What the CLI prints, and what you tell the user:
   one-person kind of ad): the notes come first, then the refusal, and `--json`
   carries the tidied script under `script`. Fix that script and send it. It is
   already in the format, so it is not tidied or paid for again.
+- **The script doesn't fit the kind of ad** (too many speakers, or a rule the
+  kind of ad has): the refusal says `--rewrite-to-fit` can fix it, and
+  `--json` carries `rewriteOffered: true`. Ask the user before you add the
+  flag: the server then writes a new script for that kind of ad from theirs
+  (the dashboard's "Rewrite to fit"), which can change every line and the
+  names, starts the run on it, and prints it (`rewritten` in `--json`). Show
+  the user that script. To let them read it first, add `--stop-at-script` too.
+  If the rewrite can't be made, nothing starts and the error says why
+  (`SCRIPT_NOT_REWRITTEN`). The other way out is a kind of ad made for the
+  script's cast.
 
 **`--stop-at-script`** prints the script the run would start on and starts
 nothing (exit 0). A question or a description too thin to write from answers

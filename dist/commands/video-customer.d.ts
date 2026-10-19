@@ -57,6 +57,7 @@ export interface CustomerStart {
     dashboardUrl: string;
     tidied?: ScriptTidied;
     written?: string;
+    rewritten?: string;
 }
 export interface CustomerStoryboard {
     view: "customer";

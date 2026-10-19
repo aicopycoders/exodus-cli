@@ -7,7 +7,11 @@
 //
 // Pure module: no Node imports, no HTTP, no I/O.
 
-import { RUN_STATUS_LABELS, workflowRunPresentation } from "./runStatus.js";
+import {
+  RUN_STATUS_LABELS,
+  isWorkerStoppedPark,
+  workflowRunPresentation,
+} from "./runStatus.js";
 
 /**
  * How many of a run's PROMISED delivery slots actually arrived (#1002's exit
@@ -35,6 +39,8 @@ export interface RunVerdictDelivery {
 export interface RunVerdictInput {
   status?: string | null;
   pauseReason?: string | null;
+  /** Tells a worker-stopped repair park from a failed step's (#3825). */
+  error?: string | null;
   /** The run's node rollup. Only `failed` is consulted; the rest is shape. */
   counts?: {
     done?: number;
@@ -84,7 +90,11 @@ export function summarizeDeliveries(
  *     nodes) keeps the wire's own word.
  */
 export function runVerdict(run: RunVerdictInput): string {
-  const presented = workflowRunPresentation(run.status, run.pauseReason);
+  const presented = workflowRunPresentation(
+    run.status,
+    run.pauseReason,
+    isWorkerStoppedPark(run),
+  );
   const delivery =
     summarizeDeliveries(run.deliveries) ?? run.deliverySummary ?? undefined;
   if (

@@ -70,6 +70,8 @@ export interface CustomerStart {
   tidied?: ScriptTidied;
   /** Only when the file described an ad: the script written from it, which the run started on (COP-47). */
   written?: string;
+  /** Only with --rewrite-to-fit, when the script didn't fit: the script rewritten to fit, which the run started on (COP-75). */
+  rewritten?: string;
 }
 
 export interface CustomerStoryboard {

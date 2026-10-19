@@ -457,6 +457,7 @@ export interface ScriptStartOptions {
     director?: true;
     shots?: RunShots;
     stopAtScript?: true;
+    rewriteToFit?: true;
     wait: boolean;
     json: boolean;
     onProgressLine?: (line: string) => void;

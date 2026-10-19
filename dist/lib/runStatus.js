@@ -115,7 +115,7 @@ export function storedWorkflowStatusForms(status) {
     const twin = LEGACY_WORKFLOW_TWIN[status];
     return twin ? [status, twin] : [status];
 }
-export function workflowRunPresentation(rawStatus, pauseReason) {
+export function workflowRunPresentation(rawStatus, pauseReason, workerStopped) {
     let status = normalizeRunStatus(rawStatus);
     let detail;
     if (status === "awaiting-approval") {
@@ -127,7 +127,7 @@ export function workflowRunPresentation(rawStatus, pauseReason) {
             detail = "needs inputs";
         }
         else if (pauseReason === "repair") {
-            detail = "needs repair";
+            detail = workerStopped ? "worker stopped" : "needs repair";
         }
     }
     return {

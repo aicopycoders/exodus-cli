@@ -1,4 +1,4 @@
-import { RUN_STATUS_LABELS, workflowRunPresentation } from "./runStatus.js";
+import { RUN_STATUS_LABELS, isWorkerStoppedPark, workflowRunPresentation, } from "./runStatus.js";
 export function summarizeDeliveries(deliveries) {
     if (deliveries === undefined || deliveries === null)
         return undefined;
@@ -8,7 +8,7 @@ export function summarizeDeliveries(deliveries) {
     };
 }
 export function runVerdict(run) {
-    const presented = workflowRunPresentation(run.status, run.pauseReason);
+    const presented = workflowRunPresentation(run.status, run.pauseReason, isWorkerStoppedPark(run));
     const delivery = summarizeDeliveries(run.deliveries) ?? run.deliverySummary ?? undefined;
     if ((presented.status === "succeeded" || presented.status === "succeeded-with-warnings") &&
         (run.counts?.failed ?? 0) > 0 &&

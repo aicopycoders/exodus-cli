@@ -214,10 +214,14 @@ export function storedWorkflowStatusForms(status: RunStatus): string[] {
  *
  * #861: a parent parked on pauseReason "call" is waiting on a child run, not
  * on a human — it presents as busy (running), not as an approval.
+ *
+ * #3825: `workerStopped` (isWorkerStoppedPark, or a projection's flag) makes
+ * that repair park read "worker stopped", not "needs repair": nothing failed.
  */
 export function workflowRunPresentation(
   rawStatus: string | null | undefined,
   pauseReason?: string | null,
+  workerStopped?: boolean,
 ): { status: RunStatus; label: string; tone: RunStatusTone; detail?: string } {
   let status = normalizeRunStatus(rawStatus);
   let detail: string | undefined;
@@ -228,7 +232,7 @@ export function workflowRunPresentation(
     } else if (pauseReason === "slots") {
       detail = "needs inputs";
     } else if (pauseReason === "repair") {
-      detail = "needs repair";
+      detail = workerStopped ? "worker stopped" : "needs repair";
     }
   }
   return {

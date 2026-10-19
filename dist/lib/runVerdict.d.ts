@@ -8,6 +8,7 @@ export interface RunVerdictDelivery {
 export interface RunVerdictInput {
     status?: string | null;
     pauseReason?: string | null;
+    error?: string | null;
     counts?: {
         done?: number;
         failed?: number;

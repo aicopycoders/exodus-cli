@@ -14,7 +14,7 @@ export declare function isActiveRunStatus(raw: string | null | undefined): boole
 export declare const WORKFLOW_RUN_STATUS_VALUES: readonly ["queued", "running", "awaiting-approval", "succeeded", "succeeded-with-warnings", "failed", "cancelled"];
 export declare const LEGACY_WORKFLOW_RUN_STATUS_VALUES: readonly ["awaiting-review", "completed", "partial", "canceled"];
 export declare function storedWorkflowStatusForms(status: RunStatus): string[];
-export declare function workflowRunPresentation(rawStatus: string | null | undefined, pauseReason?: string | null): {
+export declare function workflowRunPresentation(rawStatus: string | null | undefined, pauseReason?: string | null, workerStopped?: boolean): {
     status: RunStatus;
     label: string;
     tone: RunStatusTone;

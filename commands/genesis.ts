@@ -22,6 +22,11 @@ Usage:
                                              at the hook gate
   exodus genesis continue --id <runId> --hooks 1,3,5   Pick hooks and resume
   exodus genesis regenerate --id <runId> [--steering "…"]   Re-roll the hook pool
+  exodus genesis --list-swipes [--limit <n>]  List saved swipes with their ids
+  exodus genesis --show-swipe <id>[,<id>…] [--json]
+                                             Print a saved swipe's words (read only,
+                                             writes nothing)
+  exodus genesis --swipe <id>                Write from a saved swipe
 
 Every run must know whether you review hooks: pass --stop-at-hooks or
 --auto-hooks, or save a default once with hook-pref. A flagless run with no
@@ -38,12 +43,14 @@ Options:
   --passes <n>                Writing passes per bot — Mario + Infeed (1-5, default 1 = 2 variants)
   --variants <n>              Advanced: raw total variant count (1-10); overrides --passes
   --ad-account <id>           Meta ad account ID for the top-ads-biased track
+  --json                      With --show-swipe: print the raw swipe rows as JSON
   --no-wait                   Return immediately with the run ID
   --wait                      Poll until the run completes (default)
 
 Examples:
   exodus genesis run --brief "joint pain relief in 30 days" --variants 6
   exodus genesis run --brief brief.txt --seeds seeds.txt
+  exodus genesis --show-swipe k57abc123
 `.trim();
 
 /** Resolve --brief / --seeds: returns inline value, file contents, or empty. */
@@ -245,6 +252,7 @@ export type GenesisAction =
   | { kind: "from-bank"; ideaId: string; opts: GenesisOpts }
   | { kind: "list-swipes"; limit: number }
   | { kind: "from-swipe"; swipeId: string; opts: GenesisOpts }
+  | { kind: "show-swipe"; swipeIds: string[]; json: boolean }
   | { kind: "error"; message: string };
 
 function parseOpts(flags: Record<string, string | boolean>): GenesisOpts {
@@ -302,6 +310,15 @@ export function resolveGenesisAction(flags: Record<string, string | boolean>): G
   // Bare --swipe (no id) and --list-swipes both browse the library, mirroring
   // how bare --from-bank lists the bank.
   const wantsSwipe = flags["list-swipes"] === true || flags["swipe"] === true || !!swipeId;
+  // --show-swipe <id>[,<id>…] reads a saved swipe's words without writing.
+  const showSwipeIds =
+    typeof flags["show-swipe"] === "string"
+      ? (flags["show-swipe"] as string)
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : [];
+  const wantsShowSwipe = flags["show-swipe"] !== undefined;
 
   const sources = [
     reel ? "reel" : null,
@@ -309,19 +326,29 @@ export function resolveGenesisAction(flags: Record<string, string | boolean>): G
     brief ? "brief" : null,
     wantsBank ? "bank" : null,
     wantsSwipe ? "swipe" : null,
+    wantsShowSwipe ? "show-swipe" : null,
   ].filter(Boolean);
   if (sources.length === 0) {
     return {
       kind: "error",
       message:
-        'No source. Use one of: --brief <file|"text">, --reel "<url>", --swipe-url "<fb-url>", --from-bank [--idea <id>], or --swipe <id> / --list-swipes.',
+        'No source. Use one of: --brief <file|"text">, --reel "<url>", --swipe-url "<fb-url>", --from-bank [--idea <id>], or --swipe <id> / --list-swipes / --show-swipe <id>.',
     };
   }
   if (sources.length > 1) {
     return {
       kind: "error",
-      message: "Choose one source: --brief, --reel, --swipe-url, --from-bank/--idea, or --swipe/--list-swipes.",
+      message: "Choose one source: --brief, --reel, --swipe-url, --from-bank/--idea, or --swipe/--list-swipes/--show-swipe.",
     };
+  }
+  if (wantsShowSwipe) {
+    if (showSwipeIds.length === 0) {
+      return {
+        kind: "error",
+        message: "--show-swipe needs a swipe id. Find one with: exodus genesis --list-swipes",
+      };
+    }
+    return { kind: "show-swipe", swipeIds: showSwipeIds, json: flags["json"] === true };
   }
 
   const limit =
@@ -402,6 +429,8 @@ export async function run(flags: Record<string, string | boolean>): Promise<void
       return listSwipes(action.limit);
     case "from-swipe":
       return runFromSwipe(action.swipeId, action.opts, { noWait, cc });
+    case "show-swipe":
+      return showSwipes(action.swipeIds, action.json, cc);
     case "submit":
       return submitGenesis(action.body, { noWait, cc });
   }
@@ -548,7 +577,74 @@ async function listSwipes(limit: number): Promise<void> {
     console.log(`    id: ${s._id ?? "?"}`);
   }
   console.log("");
+  console.log("Read one:        exodus genesis --show-swipe <id>");
   console.log("Write from one:  exodus genesis --swipe <id>");
+}
+
+/**
+ * Render one saved swipe for reading. The transcript comes first when there is
+ * one (video swipes). A video without one yet says so, because mined videos are
+ * transcribed about a minute after they land. The on-ad copy (headline, body,
+ * CTA) follows whenever the transcript is missing.
+ */
+export function formatSwipe(swipe: SwipeRow): string {
+  const brand = swipe.brandName ?? "(unknown brand)";
+  const fmt = swipe.format ? ` [${swipe.format}]` : "";
+  const lines = [`## ${brand}${fmt}`, `id: ${swipe._id ?? "?"}`, ""];
+  const clean = (s: string | undefined) => (typeof s === "string" ? s.trim() : "");
+  const transcript = clean(swipe.transcript);
+  if (transcript) {
+    lines.push("Transcript:", transcript);
+    return lines.join("\n");
+  }
+  if (swipe.format === "video") {
+    lines.push("Transcript: none yet (Exodus transcribes mined videos about a minute after they land)");
+  }
+  const parts: Array<[string, string]> = [
+    ["Headline", clean(swipe.headline)],
+    ["Body", clean(swipe.bodyText)],
+    ["CTA", clean(swipe.ctaText)],
+  ];
+  const present = parts.filter(([, v]) => v.length > 0);
+  if (present.length === 0) {
+    lines.push("No headline, body or CTA text on this ad.");
+  }
+  for (const [label, value] of present) {
+    if (lines[lines.length - 1] !== "") lines.push("");
+    lines.push(`${label}:`, value);
+  }
+  return lines.join("\n");
+}
+
+/** `exodus genesis --show-swipe <id>[,<id>…]` — print saved swipes by id. Read only. */
+async function showSwipes(swipeIds: string[], json: boolean, cc: string | undefined): Promise<void> {
+  const res = await apiPost<{ swipes?: SwipeListRow[]; error?: string }>(
+    "/api/v2/swipe-library/get",
+    { ids: swipeIds },
+    { ccCommand: cc },
+  );
+  if (!res.ok) {
+    // --json errors use the sibling commands' shape (swipe.ts, segment.ts).
+    console.log(json ? JSON.stringify({ ok: false, status: res.status, data: res.data }) : formatError(res));
+    process.exit(1);
+  }
+  const swipes = Array.isArray(res.data.swipes) ? res.data.swipes : [];
+  const found = new Set(swipes.map((s) => s._id));
+  const missing = swipeIds.filter((id) => !found.has(id));
+  if (json) {
+    console.log(JSON.stringify({ swipes, missing }, null, 2));
+  } else {
+    swipes.forEach((s, i) => {
+      if (i > 0) console.log("");
+      console.log(formatSwipe(s));
+    });
+    for (const id of missing) {
+      console.error(`No saved swipe found for id "${id}". List them: exodus genesis --list-swipes`);
+    }
+  }
+  // Any id that didn't come back is a failure, so a script never mistakes a
+  // partial read for a whole one.
+  if (missing.length > 0) process.exit(1);
 }
 
 /** Resolve a saved swipe's text, then write it through the Genesis paste path. */

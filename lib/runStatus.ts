@@ -214,10 +214,14 @@ export function storedWorkflowStatusForms(status: RunStatus): string[] {
  *
  * #861: a parent parked on pauseReason "call" is waiting on a child run, not
  * on a human — it presents as busy (running), not as an approval.
+ *
+ * #3825: `workerStopped` (isWorkerStoppedPark, or a projection's flag) makes
+ * that repair park read "worker stopped", not "needs repair": nothing failed.
  */
 export function workflowRunPresentation(
   rawStatus: string | null | undefined,
   pauseReason?: string | null,
+  workerStopped?: boolean,
 ): { status: RunStatus; label: string; tone: RunStatusTone; detail?: string } {
   let status = normalizeRunStatus(rawStatus);
   let detail: string | undefined;
@@ -228,7 +232,7 @@ export function workflowRunPresentation(
     } else if (pauseReason === "slots") {
       detail = "needs inputs";
     } else if (pauseReason === "repair") {
-      detail = "needs repair";
+      detail = workerStopped ? "worker stopped" : "needs repair";
     }
   }
   return {
@@ -237,4 +241,24 @@ export function workflowRunPresentation(
     tone: RUN_STATUS_TONES[status],
     detail,
   };
+}
+
+/**
+ * #3820: the zombie sweep's park for a run whose worker stopped heartbeating.
+ * A repair park with no dead step: retry carries the whole run on from its
+ * first unfinished step, and the server refuses skip.
+ */
+export const WORKER_STOPPED_PARK_ERROR =
+  "timeout-zombie-sweep: worker stopped heartbeating; finished steps are kept";
+
+export function isWorkerStoppedPark(run: {
+  status?: string | null;
+  pauseReason?: string | null;
+  error?: string | null;
+}): boolean {
+  return (
+    normalizeRunStatus(run.status) === "awaiting-approval" &&
+    run.pauseReason === "repair" &&
+    run.error === WORKER_STOPPED_PARK_ERROR
+  );
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { apiGet, apiPost, getDashboardUrl, type ApiResponse } from "../lib/client.js";
 import { displayRunStatus, formatApiError } from "../lib/format.js";
+import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { hasBinary } from "../lib/preflight.js";
 import type { FlagOccurrence } from "../lib/args.js";
@@ -210,6 +211,13 @@ Options:
   --stop-at-script     Print the script the run would start on, and start
                        nothing (start, with --conceit). To read a written or
                        laid-out script first; send it back with --script
+  --rewrite-to-fit     If the script doesn't fit the kind of ad (more speakers
+                       than it takes, or a rule it has), write a new script for
+                       it from yours, print it, and start on it (start, with
+                       --conceit). That can change every line and the names.
+                       A script that fits starts as it is. With
+                       --stop-at-script, it prints the new script and starts
+                       nothing
   --conceit <kind>     Kind of ad (start)
   --style <look>       Look (start)
                        The server lists the kinds and looks it offers. An unknown word prints them.
@@ -249,7 +257,7 @@ Options:
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
 --style, --direction, --frame, --pacing, --music, --one-shot,
---review-storyboard, --stop-at-script),
+--review-storyboard, --stop-at-script, --rewrite-to-fit),
 status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
 picture while the storyboard waits), pull (the finished video, each scene's
 clip and voice, and the music) and upload. These stay admin-only:
@@ -839,7 +847,17 @@ export type RunStop =
   // died and `exodus workflow repair <run> retry` redoes it; absent ⇒ no step
   // in the list failed, the server refuses that retry, and only a fresh run
   // moves this ad on.
-  | { at: "failed"; error?: string; repair?: true; nodeId?: string; step?: string }
+  // #3820: `workerStopped` is the one repair park with no dead step that the
+  // retry still carries on: the worker went silent, and retry continues the
+  // run from its first unfinished step.
+  | {
+      at: "failed";
+      error?: string;
+      repair?: true;
+      nodeId?: string;
+      step?: string;
+      workerStopped?: true;
+    }
   | { at: "finished"; status: string };
 
 /**
@@ -894,6 +912,8 @@ export function classifyRun(run: VideoRun): RunStop {
   if (run.status === "failed") return { at: "failed", error: run.error };
   if (run.isTerminal) return { at: "finished", status: run.status };
   if (isAwaitingApproval(run.status)) {
+    // #3820: the sweep's park for a silent worker has no dead step to name.
+    if (isWorkerStoppedPark(run)) return { at: "failed", repair: true, workerStopped: true };
     // #1687: a "repair" park is a FAILURE wearing a park's clothes. The
     // storyboard node died, its siblings were skipped, and the run stalled on
     // the collector waiting for someone to retry or skip — so the run status
@@ -1173,6 +1193,13 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string): st
     // #1687: a repair park names the step that died and offers the retry,
     // instead of the old "waiting on someone (repair)" — nobody was waiting,
     // and there was nothing to wait for.
+    if (stop.workerStopped) {
+      return [
+        "The worker making this ad stopped partway. Finished steps are kept.",
+        `Carry on from where it stopped: exodus workflow repair ${runId} retry`,
+        `Or open the run:                ${runUrl}`,
+      ];
+    }
     if (stop.repair) {
       // #2168: the retry redoes the steps that FAILED, and the server refuses
       // it outright when none did. With no step named there is nothing to
@@ -2211,6 +2238,8 @@ export interface ScriptStartOptions {
   shots?: RunShots;
   /** COP-47: print the script the run would start on, and start nothing. */
   stopAtScript?: true;
+  /** COP-75: a script that doesn't fit the kind of ad is rewritten to fit, and the run starts on that. */
+  rewriteToFit?: true;
   wait: boolean;
   json: boolean;
   onProgressLine?: (line: string) => void;
@@ -2440,6 +2469,20 @@ export function planVideoStart(
       line: "--stop-at-script works with --conceit, not --show. A Show's script is read as you wrote it.",
     };
   }
+  const refitFlags = occurrences.filter((o) => o.flag === "rewrite-to-fit");
+  if (refitFlags.some((o) => o.value !== undefined && !o.value.startsWith("--"))) {
+    return {
+      kind: "usage",
+      line: "--rewrite-to-fit takes no value. Leave it off to start the script as you wrote it.",
+    };
+  }
+  const rewriteToFit = refitFlags.length > 0;
+  if (showId && rewriteToFit) {
+    return {
+      kind: "usage",
+      line: "--rewrite-to-fit works with --conceit, not --show. A Show's script is read as you wrote it.",
+    };
+  }
   if (showId && director) {
     return {
       kind: "usage",
@@ -2507,6 +2550,7 @@ export function planVideoStart(
   if (!oneShot) opts.reviewStoryboard = true;
   if (director) opts.director = true;
   if (stopAtScript) opts.stopAtScript = true;
+  if (rewriteToFit) opts.rewriteToFit = true;
   if (frameFlag.value || pacingFlag.value) {
     opts.shots = {
       ...(frameFlag.value ? { frame: frameFlag.value } : {}),
@@ -2633,6 +2677,24 @@ function writtenOf(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
+/** COP-75: a script the server rewrote to fit the kind of ad (--rewrite-to-fit), printed in full. */
+function scriptRewrittenHead(rewritten: string | null, started: boolean): string[] {
+  if (rewritten === null) return [];
+  return [
+    started
+      ? "Your script didn't fit this kind of ad, so we wrote a new one from it and started the run on it:"
+      : "Your script didn't fit this kind of ad, so we wrote a new one from it:",
+    "",
+    ...rewritten.split("\n").map((line) => (line ? `  ${line}` : "")),
+    "",
+  ];
+}
+
+/** COP-75: the way out the dashboard offers a script that doesn't fit the kind of ad. */
+const REWRITE_OFFER =
+  "To have a new script written from yours for this kind of ad, run the same command with --rewrite-to-fit. " +
+  "That can change every line and the names.";
+
 /**
  * COP-47: an answer that starts nothing because the script needs the caller
  * first, with the field that says where: a line nobody says (SCRIPT_QUESTION,
@@ -2667,7 +2729,10 @@ function scriptStartRefused(res: ApiResponse<unknown>, json: boolean): FlowResul
   const data = isRecord(res.data) ? res.data : {};
   const tidied = data.tidied === undefined ? null : scriptTidiedOf(data.tidied);
   const written = writtenOf(data.written);
-  if (!tidied && written === null) return errorResult(res, json);
+  const rewritten = writtenOf(data.rewritten);
+  // COP-75: the start refused a script that doesn't fit, and a rewrite can fix that.
+  const offered = data.rewriteOffered === true;
+  if (!tidied && written === null && rewritten === null && !offered) return errorResult(res, json);
   const script = typeof data.script === "string" ? data.script : null;
   const error = videoApiError(res);
   return {
@@ -2680,10 +2745,18 @@ function scriptStartRefused(res: ApiResponse<unknown>, json: boolean): FlowResul
             error,
             ...(tidied ? { tidied } : {}),
             ...(written !== null ? { written } : {}),
+            ...(rewritten !== null ? { rewritten } : {}),
             ...(script !== null ? { script } : {}),
+            ...(offered ? { rewriteOffered: true } : {}),
           }),
         ]
-      : [...scriptTidiedHead(tidied), ...scriptWrittenHead(written, false), error],
+      : [
+          ...scriptTidiedHead(tidied),
+          ...scriptWrittenHead(written, false),
+          ...scriptRewrittenHead(rewritten, false),
+          error,
+          ...(offered ? [REWRITE_OFFER] : []),
+        ],
   };
 }
 
@@ -2692,6 +2765,7 @@ function stoppedAtScriptResult(data: Record<string, unknown>, json: boolean): Fl
   const script = typeof data.script === "string" ? data.script : "";
   const tidied = data.tidied === undefined ? null : scriptTidiedOf(data.tidied);
   const written = writtenOf(data.written);
+  const rewritten = writtenOf(data.rewritten);
   if (json) {
     return {
       code: 0,
@@ -2701,6 +2775,7 @@ function stoppedAtScriptResult(data: Record<string, unknown>, json: boolean): Fl
           script,
           ...(tidied ? { tidied } : {}),
           ...(written !== null ? { written } : {}),
+          ...(rewritten !== null ? { rewritten } : {}),
         }),
       ],
     };
@@ -2709,9 +2784,11 @@ function stoppedAtScriptResult(data: Record<string, unknown>, json: boolean): Fl
     code: 0,
     lines: [
       ...scriptTidiedHead(tidied),
-      written !== null
-        ? "Your file described the ad, so we wrote this script from it. Nothing has started."
-        : "This is the script the run would start on. Nothing has started.",
+      rewritten !== null
+        ? "Your script didn't fit this kind of ad, so we wrote a new one from it. Nothing has started."
+        : written !== null
+          ? "Your file described the ad, so we wrote this script from it. Nothing has started."
+          : "This is the script the run would start on. Nothing has started.",
       "",
       ...script.split("\n").map((line) => (line ? `  ${line}` : "")),
       "",
@@ -2810,6 +2887,7 @@ export async function startScriptFlow(
     ...(opts.director ? { director: true } : {}),
     ...(opts.shots ? { shots: opts.shots } : {}),
     ...(opts.stopAtScript ? { stopAtScript: true } : {}),
+    ...(opts.rewriteToFit ? { rewriteToFit: true } : {}),
   });
   if (!res.ok) return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
   if (isRecord(res.data) && res.data.stoppedAtScript === true) {
@@ -2824,6 +2902,7 @@ export async function startScriptFlow(
     videoChoice?: unknown;
     tidied?: unknown;
     written?: unknown;
+    rewritten?: unknown;
   };
   if (!started.runId) {
     return { code: 1, lines: ["The server started the ad but did not say which run it is."] };
@@ -2834,13 +2913,19 @@ export async function startScriptFlow(
   const video = startedVideoChoice(started.videoChoice);
   const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
   const written = writtenOf(started.written);
+  const rewritten = writtenOf(started.rewritten);
   const facts = {
     card,
     ...(video ? { videoChoice: video } : {}),
     ...(tidied ? { tidied } : {}),
     ...(written !== null ? { written } : {}),
+    ...(rewritten !== null ? { rewritten } : {}),
   };
-  const head = [...scriptTidiedHead(tidied), ...scriptWrittenHead(written, true)];
+  const head = [
+    ...scriptTidiedHead(tidied),
+    ...scriptWrittenHead(written, true),
+    ...scriptRewrittenHead(rewritten, true),
+  ];
 
   if (!opts.wait) {
     return {
@@ -2879,16 +2964,22 @@ async function customerStartedResult(
   const { runId, dashboardUrl } = started;
   const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
   const written = writtenOf(started.written);
+  const rewritten = writtenOf(started.rewritten);
   const head = [
     ...scriptTidiedHead(tidied),
     ...scriptWrittenHead(written, true),
+    ...scriptRewrittenHead(rewritten, true),
     `Started video ${runId}`,
     `Watch it: ${dashboardUrl}`,
   ];
   if (opts.wait) {
     const waited = await startedThenWait(runId, head, { ...opts, url: dashboardUrl }, deps);
-    const facts = { ...(tidied ? { tidied } : {}), ...(written !== null ? { written } : {}) };
-    return opts.json && (tidied || written !== null) ? waitJsonWith(waited, facts) : waited;
+    const facts = {
+      ...(tidied ? { tidied } : {}),
+      ...(written !== null ? { written } : {}),
+      ...(rewritten !== null ? { rewritten } : {}),
+    };
+    return opts.json && (tidied || written !== null || rewritten !== null) ? waitJsonWith(waited, facts) : waited;
   }
   if (opts.json) return { code: 0, lines: [JSON.stringify(started)] };
   return {
@@ -3148,7 +3239,8 @@ export async function statusFlow(
     if (item.itemKind !== "clip" && item.itemKind !== "voiceover" && item.itemKind !== "frame") {
       continue;
     }
-    if (item.sceneIndex < 0) continue;
+    // #3834: the frames node's redrawn plates sit in the helper band.
+    if (!isPullSceneIndex(item.sceneIndex)) continue;
     if (item.itemKind === "frame" && !sceneFrameNodeIds.has(item.nodeId)) continue;
     const row = byScene.get(item.sceneIndex) ?? {};
     row[item.itemKind] = item;
@@ -3159,7 +3251,9 @@ export async function statusFlow(
   // headline read "Awaiting approval" over a run whose storyboard was dead.
   // The classification is the honest headline for that one case.
   const headline =
-    stop.at === "failed" && stop.repair
+    stop.at === "failed" && stop.workerStopped
+      ? `Ad run ${runId} — Stopped, its worker went quiet`
+      : stop.at === "failed" && stop.repair
       ? `Ad run ${runId} — Stopped, a step failed`
       : `Ad run ${runId} — ${displayRunStatus(run.status)}`;
   const lines = [

@@ -18,6 +18,7 @@ import {
   normalizeRunStatus,
   isTerminalRunStatus,
   storedWorkflowStatusForms,
+  isWorkerStoppedPark,
   LEGACY_WORKFLOW_RUN_STATUS_VALUES,
   TERMINAL_RUN_STATUSES,
   type RunStatus,
@@ -386,9 +387,11 @@ Notes:
   its own box on the canvas, sitting on a wire between two steps, so the diagram
   shows exactly where a run will stop. A require-all collector that stalled
   on a dead input is a "repair" park — retry it, skip the dead input, or kill the
-  run. A nested sub-workflow waiting on inputs is a "slots" park — answer it with
-  repeatable --slot key=value flags (run "answer" with no --slot to list the slot
-  ids it wants). The "gate" verbs retired in 2.0 along with the Gate node — the
+  run. A run whose worker stopped partway is also a "repair" park, with nothing
+  dead in it: retry carries it on from where it stopped and keeps every finished
+  step, and skip is refused. (#3820) A nested sub-workflow waiting on inputs is a
+  "slots" park — answer it with repeatable --slot key=value flags (run "answer"
+  with no --slot to list the slot ids it wants). The "gate" verbs retired in 2.0 along with the Gate node — the
   command now prints a pointer at "checkpoint" and exits 1.
 `.trim();
 
@@ -1783,11 +1786,14 @@ const RETIRED_GATE_VERB_POINTER =
  *     that can resume it, so say so and point at cancel-and-re-run.
  *   - absent (legacy video cost-gate park) → keep the original storyboard copy.
  * `runId` + `dashboardUrl` build the "resolve in the app" pointer.
+ * `workerStopped` (#3820) marks the repair park whose worker went silent: it has
+ * no dead input to skip, so only retry and kill are offered.
  */
 export function formatPauseNotice(
   pauseReason: WorkflowPauseReason | undefined,
   runId: string,
   dashboardUrl: string,
+  { workerStopped = false }: { workerStopped?: boolean } = {},
 ): string[] {
   // Legacy cost-gate park — byte-identical to the pre-#891 wording.
   if (!pauseReason) {
@@ -1819,6 +1825,13 @@ export function formatPauseNotice(
       `     Cancel it here: exodus workflow cancel ${runId}`,
       `     Or in the app:  ${dashboardUrl}${RUN_PAGE_PREFIX}${runId}`,
       "     Then run the workflow again.",
+    ];
+  }
+  if (pauseReason === "repair" && workerStopped) {
+    return [
+      "  ⏸ the worker stopped partway — retry carries on from where it stopped, finished steps are kept.",
+      `     Resolve here:  exodus workflow repair ${runId} retry|kill`,
+      `     Or in the app: ${dashboardUrl}${RUN_PAGE_PREFIX}${runId}`,
     ];
   }
   const resolveVerb =
@@ -4219,7 +4232,12 @@ async function waitForRun(
         // don't carry it.
         const dashboardUrl = deps.dashboardUrl ?? getDashboardUrl();
         const pauseReason = raw["pauseReason"] as WorkflowPauseReason | undefined;
-        for (const line of formatPauseNotice(pauseReason, runId, dashboardUrl)) {
+        const workerStopped = isWorkerStoppedPark({
+          status: raw["status"] as string | undefined,
+          pauseReason,
+          error: raw["error"] as string | undefined,
+        });
+        for (const line of formatPauseNotice(pauseReason, runId, dashboardUrl, { workerStopped })) {
           opts.onProgressLine(line);
         }
       }
@@ -5672,6 +5690,13 @@ export async function repairFlow(
   const verb = `workflow repair ${action}`;
   const pf = await preflightPark(runId, "repair", verb, opts.json, deps);
   if (!pf.ok) return pf.result;
+  if (action === "skip" && isWorkerStoppedPark(pf.run)) {
+    return errLine(
+      `Run ${runId} has nothing to skip — its worker stopped partway. ` +
+        `Carry on from where it stopped (finished steps are kept): exodus workflow repair ${runId} retry`,
+      opts.json,
+    );
+  }
 
   if (action === "kill") {
     // Kill cancels with NO reason (a repair kill is not a taste rejection).

@@ -69,8 +69,13 @@ export type GenesisAction = {
     swipeId: string;
     opts: GenesisOpts;
 } | {
+    kind: "show-swipe";
+    swipeIds: string[];
+    json: boolean;
+} | {
     kind: "error";
     message: string;
 };
 export declare function resolveGenesisAction(flags: Record<string, string | boolean>): GenesisAction;
 export declare function run(flags: Record<string, string | boolean>): Promise<void>;
+export declare function formatSwipe(swipe: SwipeRow): string;

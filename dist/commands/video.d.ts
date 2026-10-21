@@ -298,6 +298,7 @@ export type RunStop = {
     repair?: true;
     nodeId?: string;
     step?: string;
+    workerStopped?: true;
 } | {
     at: "finished";
     status: string;
@@ -456,6 +457,7 @@ export interface ScriptStartOptions {
     director?: true;
     shots?: RunShots;
     stopAtScript?: true;
+    rewriteToFit?: true;
     wait: boolean;
     json: boolean;
     onProgressLine?: (line: string) => void;

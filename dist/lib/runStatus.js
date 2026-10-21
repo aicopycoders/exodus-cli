@@ -115,7 +115,7 @@ export function storedWorkflowStatusForms(status) {
     const twin = LEGACY_WORKFLOW_TWIN[status];
     return twin ? [status, twin] : [status];
 }
-export function workflowRunPresentation(rawStatus, pauseReason) {
+export function workflowRunPresentation(rawStatus, pauseReason, workerStopped) {
     let status = normalizeRunStatus(rawStatus);
     let detail;
     if (status === "awaiting-approval") {
@@ -127,7 +127,7 @@ export function workflowRunPresentation(rawStatus, pauseReason) {
             detail = "needs inputs";
         }
         else if (pauseReason === "repair") {
-            detail = "needs repair";
+            detail = workerStopped ? "worker stopped" : "needs repair";
         }
     }
     return {
@@ -136,4 +136,10 @@ export function workflowRunPresentation(rawStatus, pauseReason) {
         tone: RUN_STATUS_TONES[status],
         detail,
     };
+}
+export const WORKER_STOPPED_PARK_ERROR = "timeout-zombie-sweep: worker stopped heartbeating; finished steps are kept";
+export function isWorkerStoppedPark(run) {
+    return (normalizeRunStatus(run.status) === "awaiting-approval" &&
+        run.pauseReason === "repair" &&
+        run.error === WORKER_STOPPED_PARK_ERROR);
 }

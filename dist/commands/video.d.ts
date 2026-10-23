@@ -400,6 +400,7 @@ export interface VideoManifest {
     musicBed: MusicBedState;
     musicHeardScenes: number[];
     pendingRedo: number[];
+    dropped: number[];
     cast: ManifestCastRef[];
     narration: {
         file: string;
@@ -455,6 +456,7 @@ export interface ScriptStartOptions {
     music?: boolean;
     reviewStoryboard?: true;
     director?: true;
+    broll?: true;
     shots?: RunShots;
     stopAtScript?: true;
     rewriteToFit?: true;
@@ -505,6 +507,34 @@ export declare function approveFlow(runId: string, opts: {
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function flagFlow(runId: string, note: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function retryFrameFlow(runId: string, nodeId: string | undefined, sceneIndex: number, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare const BROLL_EDIT_STALE_MS: number;
+export type BrollEditAsk = {
+    op: "add";
+    lineId: string;
+    note?: string;
+} | {
+    op: "move";
+    sceneIndex: number;
+    lineId: string;
+    note?: string;
+} | {
+    op: "remove";
+    sceneIndex: number;
+};
+export type BrollCommand = {
+    kind: "list";
+    runId: string;
+} | {
+    kind: "edit";
+    runId: string;
+    edit: BrollEditAsk;
+} | {
+    kind: "usage";
+    line: string;
+};
+export declare function planBrollCommand(rest: readonly string[], flags: Record<string, string | boolean>): BrollCommand;
+export declare function brollFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function brollEditFlow(runId: string, edit: BrollEditAsk, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export type ClipRedoPlan = {
     ok: true;
     nodeId: string;

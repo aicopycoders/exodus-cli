@@ -117,6 +117,11 @@ The whole loop, in order:
      here only when its checks find a problem.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
+     exodus video broll <runId>
+       On a run started with --broll: the B-roll shots and the script lines.
+       Add a shot on a line, move one, or remove one while the storyboard
+       waits. An add or a move takes about a minute and redraws the pictures,
+       so wait for it before you approve.
 
   7. exodus video status <runId>
      Where the run is and how each scene's clip turned out. If the storyboard
@@ -158,13 +163,17 @@ Usage:
   exodus video storyboard <runId> [--json]
   exodus video approve <runId> [--approve-stale-cut] [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
+  exodus video broll <runId> [--json]
+  exodus video broll add <runId> --line <id> [--note "..."] [--json]
+  exodus video broll move <runId> --scene <n> --line <id> [--note "..."] [--json]
+  exodus video broll remove <runId> --scene <n> [--json]
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
   exodus video director <runId> <on|off|follow> [--json]
 
 Options:
@@ -172,13 +181,17 @@ Options:
   --file <cut.mp4>     Your finished cut (upload). MP4, MOV or WebM, up to 200MB
   --duration <sec>     How long your cut is, in seconds. Only needed when the
                        length can't be read off the file itself
-  --note "<text>"      How to steer one redo (retry-frame, retry-clip)
+  --note "<text>"      How to steer one redo (retry-frame, retry-clip), or
+                       what a B-roll shot should show (broll add, broll move)
+  --line <id>          The script line a B-roll shot goes on (broll add,
+                       broll move). exodus video broll <runId> lists the ids
   --node <nodeId>      Which scene-frames node holds the still (retry-frame;
                        admins pass it, beta testers leave it off).
                        Which video step holds the clip, when a scene has one on
                        more than one step (retry-clip, revoice)
   --scene <n>          Which scene to redo. One scene only, a whole number
-                       (retry-frame, retry-clip, revoice)
+                       (retry-frame, retry-clip, revoice). Which B-roll shot
+                       to move or remove (broll move, broll remove)
   --all                Every finished clip that kept the video model's voice
                        (revoice)
   --voice-first        Record the scene's line in the character's own voice,
@@ -237,6 +250,8 @@ Options:
   --music              Put a music bed under the ad (start). An ad has no music
                        unless you ask for it here
   --no-music           Leave the music bed off (start), which it already is
+  --broll              Cut away to B-roll shots in the ad (start, with
+                       --conceit). Only for accounts with B-roll switched on
   --one-shot           Make the whole video with no stop (start, with
                        --conceit). The app approves its own storyboard when
                        its checks pass and goes straight on to the clips,
@@ -262,7 +277,8 @@ status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (r
 picture while the storyboard waits), pull (the finished video, each scene's
 clip and voice, and the music) and upload. These stay admin-only:
 start --video-model / --voice / --voice-path / --director, director,
-status --rejected-draft, retry-clip and revoice.
+status --rejected-draft, retry-clip, revoice and broll. start --broll works
+for whoever B-roll is switched on for.
 If a command answers "video isn't enabled for this key", the run id is wrong,
 the command is admin-only, or video isn't switched on for your dashboard user.
 
@@ -273,6 +289,8 @@ Examples:
   exodus video storyboard run_123
   exodus video approve run_123
   exodus video retry-frame run_123 --node frames-1 --scene 2
+  exodus video broll run_123
+  exodus video broll add run_123 --line L4 --note "close on the jar lid"
   exodus video retry-clip run_123 --scene 3 --note "keep the handshake in frame"
   exodus video retry-clip run_123 --scene 3 --voice-first
   exodus video revoice run_123 --all
@@ -300,6 +318,7 @@ const REJECTED_DRAFT_NOT_ON_THIS_SERVER =
   "with the next server update.";
 const STORYBOARD_PATH = "/api/v2/video/storyboard";
 const FLAG_PATH = "/api/v2/video/storyboard/flag";
+const BROLL_PATH = "/api/v2/video/storyboard/broll";
 const APPROVE_PATH = "/api/v2/workflow/approve";
 const SCENE_RETRY_PATH = "/api/v2/workflow/scene/retry";
 // #1858: the voice-only redo has its OWN route. /scene/retry drops fields it
@@ -794,7 +813,7 @@ export const defaultDeps: VideoDeps = {
 export const VIDEO_NOT_FOUND_MESSAGE =
   "video isn't enabled for this key\n" +
   "One of three things: that run id doesn't exist on this brand, this command is for admins only " +
-  "(director, status --rejected-draft, retry-clip, revoice), or video isn't " +
+  "(director, status --rejected-draft, retry-clip, revoice, broll), or video isn't " +
   "switched on for your dashboard user on this brand. Check the id first, then ask Brad.";
 
 export function videoApiError(res: ApiResponse<unknown>): string {
@@ -1466,6 +1485,11 @@ export interface VideoManifest {
    * are left out, because the file the run holds is the take being replaced.
    */
   pendingRedo: number[];
+  /**
+   * #3913: B-roll cutaways the app left out after every fallback failed. They
+   * have no clip on purpose: cut them out and stay on the speaker.
+   */
+  dropped: number[];
   cast: ManifestCastRef[];
   /** Continuous master take, or null when the run has only per-scene VO. */
   narration: { file: string; timing: string } | null;
@@ -2060,6 +2084,10 @@ export function planPull(
         .filter((scene) => scene.findings.some((f) => f.code === MUSIC_HEARD_CODE))
         .map((scene) => scene.sceneIndex),
       pendingRedo,
+      dropped: [...clipItemByScene.values()]
+        .filter((item) => item.status === "rejected")
+        .map((item) => item.sceneIndex)
+        .sort((a, b) => a - b),
       cast,
       narration: narrationDownload
         ? { file: narrationDownload.file, timing: "narration.json" }
@@ -2233,6 +2261,8 @@ export interface ScriptStartOptions {
   reviewStoryboard?: true;
   /** #2675: start with the trial director on for this run (admins only). */
   director?: true;
+  /** #3909: B-roll cutaways for this run. The server's switch decides who may. */
+  broll?: true;
   /** #3304: --frame / --pacing, sent as typed. The server judges them against
    *  the kind of ad and refuses one it can't follow. */
   shots?: RunShots;
@@ -2455,6 +2485,14 @@ export function planVideoStart(
     };
   }
   const director = directorFlags.length > 0;
+  const brollFlags = occurrences.filter((o) => o.flag === "broll");
+  if (brollFlags.some((o) => o.value !== undefined && !o.value.startsWith("--"))) {
+    return {
+      kind: "usage",
+      line: "--broll takes no value. Leave it off to start without B-roll.",
+    };
+  }
+  const broll = brollFlags.length > 0;
   const stopFlags = occurrences.filter((o) => o.flag === "stop-at-script");
   if (stopFlags.some((o) => o.value !== undefined && !o.value.startsWith("--"))) {
     return {
@@ -2487,6 +2525,12 @@ export function planVideoStart(
     return {
       kind: "usage",
       line: "--director works with --conceit, not --show.",
+    };
+  }
+  if (showId && broll) {
+    return {
+      kind: "usage",
+      line: "--broll works with --conceit, not --show.",
     };
   }
   if (showId && (frameFlag.value || pacingFlag.value)) {
@@ -2549,6 +2593,7 @@ export function planVideoStart(
   if (musicChoice.music !== undefined) opts.music = musicChoice.music;
   if (!oneShot) opts.reviewStoryboard = true;
   if (director) opts.director = true;
+  if (broll) opts.broll = true;
   if (stopAtScript) opts.stopAtScript = true;
   if (rewriteToFit) opts.rewriteToFit = true;
   if (frameFlag.value || pacingFlag.value) {
@@ -2885,6 +2930,7 @@ export async function startScriptFlow(
     ...(opts.music === true ? { music: true } : {}),
     ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
     ...(opts.director ? { director: true } : {}),
+    ...(opts.broll ? { broll: true } : {}),
     ...(opts.shots ? { shots: opts.shots } : {}),
     ...(opts.stopAtScript ? { stopAtScript: true } : {}),
     ...(opts.rewriteToFit ? { rewriteToFit: true } : {}),
@@ -3094,6 +3140,8 @@ const ITEM_STATUS_WORD: Record<string, string> = {
   running: "working",
   idle: "waiting",
   skipped: "skipped",
+  // #3913: a B-roll shot the app left out on purpose.
+  rejected: "left out",
 };
 
 function itemWord(item: NodeItem | undefined): string {
@@ -3505,6 +3553,8 @@ interface GateCards {
   paused?: boolean;
   /** Scene-frames node id when the pixel gate names it. */
   framesNodeId?: string | null;
+  /** #3914: set on a B-roll run only. */
+  broll?: true;
 }
 
 export async function storyboardFlow(
@@ -3588,6 +3638,9 @@ export async function storyboardFlow(
     lines.push(
       `redo one frame: exodus video retry-frame ${runId} --node ${cards.framesNodeId} --scene <n>`,
     );
+  }
+  if (cards.broll === true) {
+    lines.push(`change the B-roll shots: exodus video broll ${runId}`);
   }
   return { code: 0, lines };
 }
@@ -3751,6 +3804,196 @@ export async function retryFrameFlow(
       `Redoing scene ${sceneIndex} on ${nodeId}.`,
       `triggerRunId: ${triggerRunId ?? "-"}`,
       "Neighbours stay. The pixel gate holds.",
+    ],
+  };
+}
+
+/** A request older than this is dead: its worker never answered. Mirrors
+ *  BROLL_EDIT_STALE_MS in convex/lib/workflow/brollEdit.ts (a test holds them equal). */
+export const BROLL_EDIT_STALE_MS = 10 * 60 * 1000;
+
+/** The B-roll part of the storyboard read (#3914), present on a B-roll run only. */
+interface BrollGate {
+  broll?: true;
+  brollEdit?: {
+    op: "add" | "move";
+    lineId: string;
+    note?: string;
+    sceneIndex?: number;
+    attempt: number;
+    requestedAt: number;
+    error?: string;
+    landed?: true;
+  } | null;
+  scriptLines?: { lineId: string; speakerId: string | null; text: string }[];
+  brollShots?: { sceneIndex: number; lineId: string; covers: string; plannedSec: number }[];
+}
+
+/** One change to a run's B-roll at the storyboard gate. */
+export type BrollEditAsk =
+  | { op: "add"; lineId: string; note?: string }
+  | { op: "move"; sceneIndex: number; lineId: string; note?: string }
+  | { op: "remove"; sceneIndex: number };
+
+export type BrollCommand =
+  | { kind: "list"; runId: string }
+  | { kind: "edit"; runId: string; edit: BrollEditAsk }
+  | { kind: "usage"; line: string };
+
+const BROLL_OPS = ["add", "move", "remove"] as const;
+
+/** What `exodus video broll …` asked for, from its positionals and flags. */
+export function planBrollCommand(
+  rest: readonly string[],
+  flags: Record<string, string | boolean>,
+): BrollCommand {
+  const op = BROLL_OPS.find((o) => o === rest[0]);
+  if (!op) {
+    if (!rest[0]) return { kind: "usage", line: "video broll needs a run id: exodus video broll <runId>" };
+    return { kind: "list", runId: rest[0] };
+  }
+  const runId = rest[1];
+  if (!runId) {
+    return { kind: "usage", line: `video broll ${op} needs a run id: exodus video broll ${op} <runId>` };
+  }
+  const lineId = nonBlank(flagString(flags, "line"))?.trim();
+  const note = nonBlank(flagString(flags, "note"))?.trim();
+  const sceneRaw = flagString(flags, "scene");
+  const sceneIndex = sceneRaw === undefined ? undefined : Number(sceneRaw);
+  if (sceneIndex !== undefined && !(Number.isInteger(sceneIndex) && sceneIndex >= 1)) {
+    return { kind: "usage", line: `video broll ${op} --scene must be a scene number, not "${sceneRaw}".` };
+  }
+  const withNote = note ? { note } : {};
+  if (op === "add") {
+    if (!lineId) {
+      return { kind: "usage", line: "video broll add needs --line <id>, the script line the shot goes on." };
+    }
+    return { kind: "edit", runId, edit: { op, lineId, ...withNote } };
+  }
+  if (sceneIndex === undefined) {
+    return {
+      kind: "usage",
+      line: `video broll ${op} needs --scene <n>, the B-roll shot to ${op}.`,
+    };
+  }
+  if (op === "remove") {
+    if (note) return { kind: "usage", line: "video broll remove takes no --note." };
+    return { kind: "edit", runId, edit: { op, sceneIndex } };
+  }
+  if (!lineId) {
+    return { kind: "usage", line: "video broll move needs --line <id>, the script line to move the shot to." };
+  }
+  return { kind: "edit", runId, edit: { op, sceneIndex, lineId, ...withNote } };
+}
+
+function seconds(value: number): string {
+  return `${Number(value.toFixed(1))}s`;
+}
+
+/** The lines saying where the run's add or move request stands, if it has one. */
+function brollEditLines(edit: BrollGate["brollEdit"], now: number): string[] {
+  if (!edit || edit.landed) return [];
+  const asked =
+    edit.op === "move"
+      ? `moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}`
+      : `a new B-roll shot on line ${edit.lineId}`;
+  if (edit.error !== undefined) {
+    return [`The last B-roll change (${asked}) didn't work: ${edit.error}`];
+  }
+  if (now - edit.requestedAt >= BROLL_EDIT_STALE_MS) {
+    return [`The last B-roll change (${asked}) never finished. You can ask for it again.`];
+  }
+  return [
+    `Planning now: ${asked}. It takes about a minute, then the storyboard pictures are redrawn.`,
+    "Wait for it to finish before you change another shot or approve the storyboard.",
+  ];
+}
+
+export async function brollFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.get(`${STORYBOARD_PATH}?runId=${encodeURIComponent(runId)}`);
+  if (!res.ok) return errorResult(res, json);
+  if (customerAnswer<CustomerStoryboard>(res.data)) {
+    return adminOnlyResult("Changing the B-roll from the CLI isn't open to this key.", json);
+  }
+  const gate = res.data as BrollGate;
+  if (gate.broll !== true) {
+    if (json) return { code: 0, lines: [JSON.stringify({ runId, broll: false })] };
+    return { code: 0, lines: ["This video was made without B-roll, so there are no B-roll shots to change."] };
+  }
+  const shots = gate.brollShots ?? [];
+  const scriptLines = gate.scriptLines ?? [];
+  const edit = gate.brollEdit ?? null;
+  const now = deps.now();
+  const planning =
+    !!edit && edit.error === undefined && !edit.landed && now - edit.requestedAt < BROLL_EDIT_STALE_MS;
+  if (json) {
+    return {
+      code: 0,
+      lines: [JSON.stringify({ runId, broll: true, planning, brollEdit: edit, brollShots: shots, scriptLines })],
+    };
+  }
+  if (scriptLines.length === 0) {
+    return {
+      code: 0,
+      lines: [
+        "The storyboard isn't finished yet, so there are no B-roll shots to change yet.",
+        `Check where it is: exodus video status ${runId}`,
+      ],
+    };
+  }
+
+  const lines = brollEditLines(edit, now);
+  if (lines.length > 0) lines.push("");
+  lines.push("B-roll shots");
+  if (shots.length === 0) lines.push("  None yet.");
+  for (const shot of shots) {
+    lines.push(`  Scene ${shot.sceneIndex}, on line ${shot.lineId}, ${seconds(shot.plannedSec)}: "${shot.covers}"`);
+  }
+  lines.push("", "Script lines (pick one by its id)");
+  for (const line of scriptLines) {
+    lines.push(`  ${line.lineId}  ${line.speakerId ?? "narrator"}: ${line.text}`);
+  }
+  lines.push("");
+  if (planning) {
+    lines.push(`Check again: exodus video broll ${runId}`);
+  } else {
+    lines.push(
+      `Add a shot:    exodus video broll add ${runId} --line <id> --note "what it shows"`,
+      `Move a shot:   exodus video broll move ${runId} --scene <n> --line <id>`,
+      `Remove a shot: exodus video broll remove ${runId} --scene <n>`,
+    );
+  }
+  return { code: 0, lines };
+}
+
+export async function brollEditFlow(
+  runId: string,
+  edit: BrollEditAsk,
+  json: boolean,
+  deps: VideoDeps,
+): Promise<FlowResult> {
+  const res = await deps.post(BROLL_PATH, { runId, ...edit });
+  if (!res.ok) return errorResult(res, json);
+  if (json) return { code: 0, lines: [JSON.stringify({ runId, ...(res.data as object) })] };
+  if (edit.op === "remove") {
+    return {
+      code: 0,
+      lines: [
+        `B-roll scene ${edit.sceneIndex} is gone. The storyboard pictures will be redrawn.`,
+        `See them: exodus video storyboard ${runId}`,
+      ],
+    };
+  }
+  return {
+    code: 0,
+    lines: [
+      edit.op === "add"
+        ? `Planning a B-roll shot on line ${edit.lineId}.`
+        : `Moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}.`,
+      "It takes about a minute. Then the storyboard pictures are redrawn.",
+      "Wait for it to finish before you approve the storyboard.",
+      `Check on it: exodus video broll ${runId}`,
+      `See the pictures: exodus video storyboard ${runId}`,
     ],
   };
 }
@@ -4758,6 +5001,12 @@ export async function pullFlow(
     `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
     ...musicLines(plan.manifest),
   ];
+  if (plan.manifest.dropped.length > 0) {
+    lines.push(
+      "",
+      `B-roll left out on purpose (no clip; the edit stays on the speaker): scene${plan.manifest.dropped.length === 1 ? "" : "s"} ${plan.manifest.dropped.join(", ")}. Cut with --skip ${plan.manifest.dropped.join(",")}.`,
+    );
+  }
   for (const sceneIndex of plan.manifest.pendingRedo) {
     lines.push(
       "",
@@ -5184,6 +5433,7 @@ const VALUE_FLAGS = new Set([
   "duration",
   "node",
   "scene",
+  "line",
   "set",
   "clear",
   "from",
@@ -5245,6 +5495,13 @@ export async function run(
     const started = await startScriptFlow({ ...plan.opts, onProgressLine }, defaultDeps);
     if (started.usage) usage(started.lines[0] ?? "");
     return printResult(started);
+  }
+
+  if (sub === "broll") {
+    const plan = planBrollCommand(rest, flags);
+    if (plan.kind === "usage") usage(plan.line);
+    if (plan.kind === "list") return printResult(await brollFlow(plan.runId, json, defaultDeps));
+    return printResult(await brollEditFlow(plan.runId, plan.edit, json, defaultDeps));
   }
 
   const runId = rest[0];

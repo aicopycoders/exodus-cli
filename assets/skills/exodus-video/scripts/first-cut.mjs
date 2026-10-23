@@ -5,7 +5,8 @@
 // bed go underneath, and one MP4 comes out ready to upload. A reaction
 // cutaway is the exception: it is its own short beat in the spine right after
 // its cued line ends, heard with its own sound while the speaker is silent,
-// fading in across any quiet start and out rather than stopping dead.
+// fading in across any quiet start and out rather than stopping dead. A B-roll
+// cutaway lays over just the words it covers, from the first to the last.
 //
 //   node first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]
 //
@@ -110,6 +111,13 @@ export const JOIN_LEAD_SAME_SPEAKER_SEC = 0.1;
 export const JOIN_LEAD_NEW_SPEAKER_SEC = 0.25;
 /** The gap a cut keeps from an extra heard sound it leaves out (#2541). */
 const EXTRA_CLEARANCE_SEC = 0.05;
+/**
+ * A B-roll shot holds over the words it covers (#3912), but never shorter than
+ * the eye needs to read it nor so long it drags; a shot planned past the
+ * longest hold (a talking character) keeps its planned length.
+ */
+export const BROLL_MIN_HOLD_SEC = 0.8;
+export const BROLL_MAX_HOLD_SEC = 4;
 
 /** The word rule the planner sized every line with (scout models.ts wordCount). */
 export function wordCount(text) {
@@ -685,6 +693,10 @@ export function scenePlans(storyboard) {
       durationSec: typeof scene.durationSec === "number" ? scene.durationSec : null,
       actionTailSec: typeof scene.actionTailSec === "number" && scene.actionTailSec > 0 ? scene.actionTailSec : 0,
       actionLeadSec: typeof scene.actionLeadSec === "number" && scene.actionLeadSec > 0 ? scene.actionLeadSec : 0,
+      broll:
+        hasText(scene.broll?.covers) && Number.isFinite(scene.broll?.plannedSec) && scene.broll.plannedSec > 0
+          ? { covers: scene.broll.covers, plannedSec: scene.broll.plannedSec }
+          : null,
     });
   }
   return plans;
@@ -709,25 +721,45 @@ export function fitNarration({ clipSeconds, spokenEndSec, airSec, actionTailSec 
   return { seconds: target, holdSec: target - clipSeconds, trimmedBy: 0 };
 }
 
+/** Where a segment's cue line sits among its words, or null when the segment does not speak it. */
+function lineInSegment(seg, counts, cueLineId) {
+  const idx = seg.lineIds.indexOf(cueLineId);
+  if (idx === -1) return null;
+  let before = 0;
+  let total = 0;
+  seg.lineIds.forEach((id, i) => {
+    const n = counts.get(id) ?? 0;
+    total += n;
+    if (i < idx) before += n;
+  });
+  return { idx, before, words: counts.get(cueLineId) ?? 0, total };
+}
+
+/**
+ * When the segment's word number `i` starts (edge "s") or ends ("e"), in
+ * seconds into the segment: from its word times, else its share of the words.
+ */
+function wordTimeInSegment(seg, i, total, edge) {
+  let at = 0;
+  if (seg.words && seg.words.length > 0) {
+    at = Math.max(0, seg.words[Math.min(Math.max(i, 0), seg.words.length - 1)]?.[edge] ?? 0);
+  } else if (total > 0) {
+    at = ((edge === "e" ? i + 1 : i) / total) * seg.seconds;
+  }
+  return Math.min(at, seg.seconds);
+}
+
+const timesFrom = (seg) => (seg.words && seg.words.length > 0 ? "words" : "proportion");
+
 export function cueOffsetOnSpine(spine, counts, cueLineId) {
   for (const seg of spine) {
-    const idx = seg.lineIds.indexOf(cueLineId);
-    if (idx === -1) continue;
-    let precedingWords = 0;
-    for (let i = 0; i < idx; i++) precedingWords += counts.get(seg.lineIds[i]) ?? 0;
-    let totalWords = 0;
-    for (const id of seg.lineIds) totalWords += counts.get(id) ?? 0;
-
-    let within = 0;
-    let method = "proportion";
-    if (seg.words && seg.words.length > 0) {
-      within = Math.max(0, seg.words[Math.min(precedingWords, seg.words.length - 1)]?.s ?? 0);
-      method = "words";
-    } else if (totalWords > 0) {
-      within = (precedingWords / totalWords) * seg.seconds;
-    }
-    within = Math.min(within, seg.seconds);
-    return { startSec: seg.startSec + within, method, spineSceneIndex: seg.sceneIndex };
+    const line = lineInSegment(seg, counts, cueLineId);
+    if (!line) continue;
+    return {
+      startSec: seg.startSec + wordTimeInSegment(seg, line.before, line.total, "s"),
+      method: timesFrom(seg),
+      spineSceneIndex: seg.sceneIndex,
+    };
   }
   return null;
 }
@@ -738,21 +770,83 @@ export function cueOffsetOnSpine(spine, counts, cueLineId) {
  * where the segment does.
  */
 export function cueEndInSegment(seg, counts, cueLineId) {
-  const idx = seg.lineIds.indexOf(cueLineId);
-  if (idx === -1) return null;
-  if (idx === seg.lineIds.length - 1) return seg.seconds;
-  let through = 0;
-  let totalWords = 0;
-  seg.lineIds.forEach((id, i) => {
-    const n = counts.get(id) ?? 0;
-    totalWords += n;
-    if (i <= idx) through += n;
-  });
-  if (seg.words && seg.words.length > 0) {
-    const last = seg.words[Math.min(Math.max(through - 1, 0), seg.words.length - 1)];
-    return Math.min(Math.max(0, last?.e ?? 0), seg.seconds);
+  const line = lineInSegment(seg, counts, cueLineId);
+  if (!line) return null;
+  if (line.idx === seg.lineIds.length - 1) return seg.seconds;
+  const through = line.before + line.words;
+  if (seg.words && seg.words.length > 0) return wordTimeInSegment(seg, through - 1, line.total, "e");
+  return line.total > 0 ? (through / line.total) * seg.seconds : seg.seconds;
+}
+
+/** The sub-words of a text the way scout contract.ts brollCoversLine splits them. */
+const coverParts = (text) => String(text ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/**
+ * The first and last of `words` that hold the covered words, or null. Matched
+ * on sub-words as the contract does, so "proven answer" is found in
+ * "clinically-proven answer" and starts on "clinically-proven".
+ */
+function coveredRun(words, covers) {
+  const parts = words.flatMap((word, i) => coverParts(word).map((part) => ({ part, i })));
+  const want = coverParts(covers);
+  if (want.length === 0) return null;
+  for (let k = 0; k + want.length <= parts.length; k++) {
+    if (want.every((w, j) => parts[k + j].part === w)) {
+      return { first: parts[k].i, last: parts[k + want.length - 1].i };
+    }
   }
-  return totalWords > 0 ? (through / totalWords) * seg.seconds : seg.seconds;
+  return null;
+}
+
+/**
+ * When the covered words are heard, in seconds into the segment, read by
+ * aligning the script to the transcript: "$29" is heard as three words, so the
+ * script's word count points at the wrong one (#3912). Null when the segment
+ * has no word times or the script does not align.
+ */
+function heardCovers(seg, texts, cueLineId, covers) {
+  if (!seg.words || seg.words.length === 0) return null;
+  const lines = seg.lineIds.map((id) => scriptWords(texts.get(id)));
+  const idx = seg.lineIds.indexOf(cueLineId);
+  const run = coveredRun(lines[idx], covers);
+  const aligned = run ? alignScript(seg.words, lines.flat()) : null;
+  if (!aligned) return null;
+  const offset = lines.slice(0, idx).reduce((n, words) => n + words.length, 0);
+  const { expected, heard, heardTokenOf, heardWordOf } = aligned;
+  const first = expected.lastSourceIndex.findIndex((i) => i >= offset + run.first);
+  const last = expected.sourceIndex.findLastIndex((i) => i <= offset + run.last);
+  if (first === -1 || last < first) return null;
+  const at = (i, edge) => Math.min(Math.max(0, seg.words[i]?.[edge] ?? 0), seg.seconds);
+  return { startSec: at(heardWordOf[first], "s"), endSec: at(heard.lastSourceIndex[heardTokenOf[last]], "e") };
+}
+
+/**
+ * #3912: a B-roll shot's place in its segment. It starts on the first word it
+ * covers and holds through the last, between BROLL_MIN_HOLD_SEC and
+ * BROLL_MAX_HOLD_SEC, or for its planned length when that runs longer than the
+ * cap. Covered words the line does not say leave it at the line's start for
+ * its planned length. `texts` maps each line id to its script text. Null when
+ * the segment does not speak the cue line.
+ */
+export function brollWindow(seg, counts, cueLineId, texts, broll) {
+  const line = lineInSegment(seg, counts, cueLineId);
+  if (!line) return null;
+  const method = timesFrom(seg);
+  const run = coveredRun((texts.get(cueLineId) ?? "").trim().split(/\s+/), broll.covers);
+  if (!run) {
+    return {
+      startSec: wordTimeInSegment(seg, line.before, line.total, "s"),
+      holdSec: broll.plannedSec, method, found: false,
+    };
+  }
+  const heard = heardCovers(seg, texts, cueLineId, broll.covers);
+  const startSec = heard?.startSec ?? wordTimeInSegment(seg, line.before + run.first, line.total, "s");
+  const endSec = heard?.endSec ?? wordTimeInSegment(seg, line.before + run.last, line.total, "e");
+  const span = Math.max(0, endSec - startSec);
+  const holdSec = broll.plannedSec > BROLL_MAX_HOLD_SEC
+    ? Math.max(span, broll.plannedSec)
+    : Math.min(Math.max(span, BROLL_MIN_HOLD_SEC), BROLL_MAX_HOLD_SEC);
+  return { startSec, holdSec, method, found: true };
 }
 
 /**
@@ -976,7 +1070,9 @@ export function buildTimeline({
     const nothing = `nothing to cut with (clip ${scene.clipStatus}${scene.error ? `: ${scene.error}` : ""})`;
 
     if (plan.cutaway) {
-      const cue = { cueLineId: plan.cueLineId, reaction: plan.cutawayType === "reaction" };
+      const cue = {
+        cueLineId: plan.cueLineId, reaction: plan.cutawayType === "reaction", broll: plan.broll ?? null,
+      };
       if (exists(scene.clip)) {
         const clip = probe(scene.clip);
         waiting.push({
@@ -1124,13 +1220,25 @@ export function buildTimeline({
     if (seg.reaction?.tail) seg.reaction.tail.atSec = spine[k + 1].startSec;
   });
 
+  const lineTexts = new Map([...scriptLines].map(([id, line]) => [id, line?.text]));
   for (const c of waiting.filter((w) => !w.reaction)) {
     const cue = c.cueLineId ? cueOffsetOnSpine(spine, counts, c.cueLineId) : null;
     if (!cue) {
       dropped.push({ n: c.sceneIndex, reason: `cutaway ${c.sceneIndex}: ${noCue(c)}` });
       continue;
     }
-    cutaways.push({ ...c, startSec: cue.startSec, method: cue.method, spineSceneIndex: cue.spineSceneIndex });
+    const placed = { ...c, startSec: cue.startSec, method: cue.method, spineSceneIndex: cue.spineSceneIndex };
+    const seg = c.broll ? spine.find((s) => s.lineIds.includes(c.cueLineId)) : null;
+    const win = seg
+      ? brollWindow(seg, counts, c.cueLineId, lineTexts, c.broll)
+      : null;
+    if (win) {
+      placed.startSec = seg.startSec + win.startSec;
+      placed.method = win.method;
+      placed.seconds = c.source === "clip" ? Math.min(win.holdSec, c.seconds) : win.holdSec;
+      placed.coversFound = win.found;
+    }
+    cutaways.push(placed);
   }
   cutaways.sort((a, b) => a.startSec - b.startSec);
   const beats = spine.filter((seg) => seg.reaction);
@@ -1429,11 +1537,16 @@ export function inTheCut(timeline) {
         ? "word times"
         : `proportion: scene ${c.spineSceneIndex} has no word times`;
     const cut = c.cutShortBy ? `, cut short where ${c.cutShortBy}` : "";
+    const covers = !c.broll
+      ? ""
+      : c.coversFound
+        ? `, B-roll covering "${c.broll.covers}"`
+        : `, B-roll: "${c.broll.covers}" is not in the line, so it starts with the line for its planned ${c.broll.plannedSec}s`;
     rows.push({
       n: c.sceneIndex,
       line:
         `cutaway ${c.sceneIndex}: ${label} at ${c.startSec.toFixed(2)}s for ${c.seconds.toFixed(1)}s, ` +
-        `cued to ${c.cueLineId} in scene ${c.spineSceneIndex} (${how})${cut}`,
+        `cued to ${c.cueLineId} in scene ${c.spineSceneIndex} (${how})${covers}${cut}`,
     });
   }
   return rows.sort((a, b) => a.n - b.n).map((r) => r.line);

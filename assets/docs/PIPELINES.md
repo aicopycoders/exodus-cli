@@ -268,6 +268,7 @@ Then:
   exodus video voices <runId> [--set <who>=<voiceId>] [--clear <who>] [--from <f>] [--json]  who speaks, with whose voice
   exodus video approve <runId> [--json]                                approve the storyboard, or the uploaded cut
   exodus video retry-frame <runId> --node <nodeId> --scene <n> [--note "<t>"] [--json]  redo one still at the pixel gate
+  exodus video broll <runId> [add --line <id> | move --scene <n> --line <id> | remove --scene <n>] [--note "<t>"] [--json]  direct a B-roll run's shots at the storyboard
   exodus video status <runId> [--json]                                 the park and each scene's clip/voice/picture
   exodus video pull <runId> --out <dir> [--json]                       every piece + manifest.json
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "<t>"] [--json]  redo one clip at the final watch

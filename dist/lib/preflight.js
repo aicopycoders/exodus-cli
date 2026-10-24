@@ -9,6 +9,15 @@ export function hasBinary(name) {
         return false;
     }
 }
+export function probeDurationSec(filePath) {
+    if (!hasBinary("ffprobe"))
+        return null;
+    const res = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath], { encoding: "utf-8" });
+    if (res.error || res.status !== 0)
+        return null;
+    const seconds = Number.parseFloat((res.stdout ?? "").trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
 export async function syncKeysToEnv() {
     let remote;
     try {

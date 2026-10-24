@@ -35,6 +35,7 @@ Don't surface a "list, switch, or inspect?" menu to the user — figure it out f
 | "Create a new brand" / "Add a brand called X" / "Set up brand Y" | `create "<name>"` (no admin needed; switches you in) |
 | "Switch to dlc" / "Change to brand X" | `use <slug>` |
 | "Show me the foundation for brand X" / "What's brand Y configured with?" | `inspect <slug>` |
+| "What kind of business is this brand?" / "Change the business type" / "It sells an app, not a product" | `show`, then `set --sells ... --promise ...` |
 | "The new brand isn't showing up" | `list` first — if visible, suggest `use`; if not, the dashboard create didn't propagate |
 
 ## Common Commands
@@ -78,6 +79,15 @@ npx @aicopycoders/exodus brand inspect <slug>
 ```
 
 Surfaces foundation completeness, primer status, connected ad account, and writing-mode defaults. Use this when the user asks "is brand X ready to run?" — don't guess.
+
+### Business type (the two tags B-roll follows)
+
+```bash
+npx @aicopycoders/exodus brand show
+npx @aicopycoders/exodus brand set --sells product --promise body
+```
+
+Every brand has two tags: what it sells (`product`, `service`, `app`, `expertise`, `finance`, `other`) and what its ads promise (`body`, `money`, `neither`). The video uses them to pick its extra shots (B-roll). `show` prints both in plain words and who set them; when AI picked them with little to go on, it asks you to check. `set` takes either flag alone once both are set; a brand with no tags yet needs both. The same two dropdowns are on the dashboard's Brand info page.
 
 ### Clear the override
 

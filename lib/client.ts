@@ -242,6 +242,22 @@ export function getDashboardUrl(): string {
   });
 }
 
+// Vercel/CDN error responses (504s, 502s, etc.) return HTML, not JSON.
+// Surface them as a structured error instead of crashing on JSON.parse.
+async function readDashboardJson<T>(res: Response, path: string): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 300);
+    return {
+      error: `Non-JSON ${res.status} from ${path}: ${snippet}`,
+      httpStatus: res.status,
+      contentType: res.headers.get("content-type") ?? undefined,
+    } as T;
+  }
+}
+
 export async function apiGetDashboard<T>(
   path: string,
   opts?: { timeoutMs?: number; activeBrandOverride?: string },
@@ -268,19 +284,7 @@ export async function apiGetDashboard<T>(
     if (timer) clearTimeout(timer);
   }
 
-  const text = await res.text();
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 300);
-    data = {
-      error: `Non-JSON ${res.status} from ${path}: ${snippet}`,
-      httpStatus: res.status,
-      contentType: res.headers.get("content-type") ?? undefined,
-    };
-  }
-  return { ok: res.ok, status: res.status, data: data as T };
+  return { ok: res.ok, status: res.status, data: await readDashboardJson<T>(res, path) };
 }
 
 export async function apiPostDashboard<T>(
@@ -312,19 +316,14 @@ export async function apiPostDashboard<T>(
     if (timer) clearTimeout(timer);
   }
 
-  // Vercel/CDN error responses (504s, 502s, etc.) return HTML, not JSON.
-  // Surface them as a structured error instead of crashing on JSON.parse.
-  const text = await res.text();
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 300);
-    data = {
-      error: `Non-JSON ${res.status} from ${path}: ${snippet}`,
-      httpStatus: res.status,
-      contentType: res.headers.get("content-type") ?? undefined,
-    };
-  }
-  return { ok: res.ok, status: res.status, data: data as T };
+  return { ok: res.ok, status: res.status, data: await readDashboardJson<T>(res, path) };
+}
+
+export async function apiDeleteDashboard<T>(path: string): Promise<ApiResponse<T>> {
+  const { apiKey } = getConfig();
+  const res = await fetch(`${getDashboardUrl()}${path}`, {
+    method: "DELETE",
+    headers: buildHeaders(apiKey),
+  });
+  return { ok: res.ok, status: res.status, data: await readDashboardJson<T>(res, path) };
 }

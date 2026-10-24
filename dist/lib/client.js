@@ -160,6 +160,20 @@ export function getDashboardUrl() {
         apiUrl: getConfig().apiUrl,
     });
 }
+async function readDashboardJson(res, path) {
+    const text = await res.text();
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        const snippet = text.replace(/\s+/g, " ").trim().slice(0, 300);
+        return {
+            error: `Non-JSON ${res.status} from ${path}: ${snippet}`,
+            httpStatus: res.status,
+            contentType: res.headers.get("content-type") ?? undefined,
+        };
+    }
+}
 export async function apiGetDashboard(path, opts) {
     const { apiKey } = getConfig();
     const url = `${getDashboardUrl()}${path}`;
@@ -182,20 +196,7 @@ export async function apiGetDashboard(path, opts) {
         if (timer)
             clearTimeout(timer);
     }
-    const text = await res.text();
-    let data;
-    try {
-        data = JSON.parse(text);
-    }
-    catch {
-        const snippet = text.replace(/\s+/g, " ").trim().slice(0, 300);
-        data = {
-            error: `Non-JSON ${res.status} from ${path}: ${snippet}`,
-            httpStatus: res.status,
-            contentType: res.headers.get("content-type") ?? undefined,
-        };
-    }
-    return { ok: res.ok, status: res.status, data: data };
+    return { ok: res.ok, status: res.status, data: await readDashboardJson(res, path) };
 }
 export async function apiPostDashboard(path, body, opts) {
     const { apiKey } = getConfig();
@@ -220,18 +221,13 @@ export async function apiPostDashboard(path, body, opts) {
         if (timer)
             clearTimeout(timer);
     }
-    const text = await res.text();
-    let data;
-    try {
-        data = JSON.parse(text);
-    }
-    catch {
-        const snippet = text.replace(/\s+/g, " ").trim().slice(0, 300);
-        data = {
-            error: `Non-JSON ${res.status} from ${path}: ${snippet}`,
-            httpStatus: res.status,
-            contentType: res.headers.get("content-type") ?? undefined,
-        };
-    }
-    return { ok: res.ok, status: res.status, data: data };
+    return { ok: res.ok, status: res.status, data: await readDashboardJson(res, path) };
+}
+export async function apiDeleteDashboard(path) {
+    const { apiKey } = getConfig();
+    const res = await fetch(`${getDashboardUrl()}${path}`, {
+        method: "DELETE",
+        headers: buildHeaders(apiKey),
+    });
+    return { ok: res.ok, status: res.status, data: await readDashboardJson(res, path) };
 }

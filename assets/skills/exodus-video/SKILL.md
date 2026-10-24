@@ -240,8 +240,8 @@ under it:
   a gate parked before the stills are drawn has nothing to redraw. When the run
   has B-roll (`storyboard` ends with a `change the B-roll shots:` line), offer
   to add a shot on a line with a note, move one, or remove one with `video
-  broll`. An add or a move takes about a minute and redraws the pictures, so
-  wait for it to finish before you approve.
+  broll`. Each change redraws only the pictures it changes, so wait for it to
+  finish before you approve.
 - final watch: every piece is made; needs `pull`, a cut, and `upload`. Once a
   cut is uploaded the stop block leads with `approve` instead, and `status
   --json` says which state it is in (`stop.cutAttached`, plus the same next-step
@@ -609,10 +609,10 @@ changes:
   `--note`
 - remove a shot: `exodus video broll remove <runId> --scene <n>`
 
-An add or a move plans the shot on a worker. It takes about a minute, and then
-the storyboard pictures are redrawn. A remove saves at once and also redraws the
-pictures. While a shot is being planned, `video broll` says so and the server
-refuses another change. Run `video broll <runId>` again until it no longer says
+An add or a move plans the shot on a worker, and then the storyboard pictures it
+changes are redrawn. A remove saves at once, and the pictures it changes are
+redrawn too. Every other picture comes back as it was. While a shot is being
+planned, `video broll` says so and the server refuses another change. Run `video broll <runId>` again until it no longer says
 it is planning, then read the storyboard again before you ask about approving.
 If it says the last change didn't work, pass its sentence to the user as it
 came. Do not approve while a shot is still being planned.

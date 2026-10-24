@@ -1,4 +1,5 @@
 export declare function hasBinary(name: string): boolean;
+export declare function probeDurationSec(filePath: string): number | null;
 export interface KeySyncResult {
     pulled: string[];
     failed: string[];

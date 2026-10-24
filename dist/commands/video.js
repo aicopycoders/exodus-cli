@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { apiGet, apiPost, getDashboardUrl } from "../lib/client.js";
 import { displayRunStatus, formatApiError } from "../lib/format.js";
 import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
-import { hasBinary } from "../lib/preflight.js";
+import { probeDurationSec } from "../lib/preflight.js";
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, } from "./video-customer.js";
@@ -77,8 +76,8 @@ The whole loop, in order:
      exodus video broll <runId>
        On a run started with --broll: the B-roll shots and the script lines.
        Add a shot on a line, move one, or remove one while the storyboard
-       waits. An add or a move takes about a minute and redraws the pictures,
-       so wait for it before you approve.
+       waits. Each change redraws only the pictures it changes, and every
+       other picture stays as it was. Wait for it before you approve.
 
   7. exodus video status <runId>
      Where the run is and how each scene's clip turned out. If the storyboard
@@ -336,15 +335,6 @@ export function asVideoRun(data) {
     const run = (data ?? {});
     return { ...run, nodes: Array.isArray(run.nodes) ? run.nodes : [] };
 }
-function defaultProbeDurationSec(filePath) {
-    if (!hasBinary("ffprobe"))
-        return null;
-    const res = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath], { encoding: "utf-8" });
-    if (res.error || res.status !== 0)
-        return null;
-    const seconds = Number.parseFloat((res.stdout ?? "").trim());
-    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
-}
 export const defaultDeps = {
     get: (p) => apiGet(p),
     post: (p, body) => apiPost(p, body),
@@ -382,7 +372,7 @@ export const defaultDeps = {
         const parsed = (await res.json().catch(() => ({})));
         return { ok: true, status: res.status, storageId: parsed.storageId };
     },
-    probeDurationSec: defaultProbeDurationSec,
+    probeDurationSec,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     dashboardUrl: getDashboardUrl(),
@@ -2608,11 +2598,9 @@ function brollEditLines(edit, now) {
     if (now - edit.requestedAt >= BROLL_EDIT_STALE_MS) {
         return [`The last B-roll change (${asked}) never finished. You can ask for it again.`];
     }
-    return [
-        `Planning now: ${asked}. It takes about a minute, then the storyboard pictures are redrawn.`,
-        "Wait for it to finish before you change another shot or approve the storyboard.",
-    ];
+    return [`Planning now: ${asked}. Then the storyboard pictures it changes are redrawn.`, BROLL_WAIT];
 }
+const BROLL_WAIT = "Wait for it to finish before you change another shot or approve the storyboard.";
 export async function brollFlow(runId, json, deps) {
     const res = await deps.get(`${STORYBOARD_PATH}?runId=${encodeURIComponent(runId)}`);
     if (!res.ok)
@@ -2672,25 +2660,19 @@ export async function brollEditFlow(runId, edit, json, deps) {
     const res = await deps.post(BROLL_PATH, { runId, ...edit });
     if (!res.ok)
         return errorResult(res, json);
-    if (json)
-        return { code: 0, lines: [JSON.stringify({ runId, ...res.data })] };
-    if (edit.op === "remove") {
-        return {
-            code: 0,
-            lines: [
-                `B-roll scene ${edit.sceneIndex} is gone. The storyboard pictures will be redrawn.`,
-                `See them: exodus video storyboard ${runId}`,
-            ],
-        };
+    const said = edit.op === "remove"
+        ? `B-roll scene ${edit.sceneIndex} is gone. The storyboard pictures it changes are being redrawn.`
+        : `${edit.op === "add"
+            ? `Planning a B-roll shot on line ${edit.lineId}.`
+            : `Moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}.`} Then the storyboard pictures it changes are redrawn.`;
+    if (json) {
+        return { code: 0, lines: [JSON.stringify({ runId, ...res.data, message: `${said} ${BROLL_WAIT}` })] };
     }
     return {
         code: 0,
         lines: [
-            edit.op === "add"
-                ? `Planning a B-roll shot on line ${edit.lineId}.`
-                : `Moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}.`,
-            "It takes about a minute. Then the storyboard pictures are redrawn.",
-            "Wait for it to finish before you approve the storyboard.",
+            said,
+            BROLL_WAIT,
             `Check on it: exodus video broll ${runId}`,
             `See the pictures: exodus video storyboard ${runId}`,
         ],

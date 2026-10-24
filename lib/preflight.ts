@@ -37,6 +37,19 @@ export function hasBinary(name: string): boolean {
   }
 }
 
+/** A media file's length in seconds via ffprobe, or null when ffprobe is missing or can't read it. */
+export function probeDurationSec(filePath: string): number | null {
+  if (!hasBinary("ffprobe")) return null;
+  const res = spawnSync(
+    "ffprobe",
+    ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath],
+    { encoding: "utf-8" },
+  );
+  if (res.error || res.status !== 0) return null;
+  const seconds = Number.parseFloat((res.stdout ?? "").trim());
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
 // ── key sync ───────────────────────────────────────────────────────────
 
 export interface KeySyncResult {

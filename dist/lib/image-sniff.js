@@ -16,3 +16,15 @@ export function sniffImageType(buf) {
     }
     return null;
 }
+export const BROLL_KIT_MAX_BYTES = { video: 200 * 1024 * 1024, image: BRAND_IMAGE_MAX_BYTES };
+export function sniffBrollType(buf) {
+    const ascii = (from, to) => String.fromCharCode(...buf.subarray(from, to));
+    if (buf.length >= 12 && ascii(4, 8) === "ftyp") {
+        return { media: "video", mime: ascii(8, 12) === "qt  " ? "video/quicktime" : "video/mp4" };
+    }
+    if (buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+        return ascii(0, Math.min(buf.length, 64)).includes("webm") ? { media: "video", mime: "video/webm" } : null;
+    }
+    const image = sniffImageType(buf);
+    return image ? { media: "image", mime: image.mime } : null;
+}

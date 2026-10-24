@@ -747,6 +747,7 @@ function clipFromArtifact(sceneIndex, artifact) {
         voiceFirstBlockedBy: artifact.voiceFirstBlockedBy ?? null,
         voicePitchHz: artifact.voicePitchHz ?? null,
         voicePitchMethod: artifact.voicePitchMethod ?? null,
+        replannedIdea: artifact.replannedIdea ?? null,
     };
 }
 function keyframeDownload(sceneIndex, imageUrl) {
@@ -903,23 +904,37 @@ function isNarrationMaster(artifact) {
         artifact.sceneIndex === undefined &&
         Array.isArray(artifact.narration?.cuts));
 }
+function withoutLookRider(prompt) {
+    return prompt.replace(/\n\nCUTAWAY STYLE: [\s\S]*$/, "");
+}
+function withReplannedPrompts(raw, replanned) {
+    let board;
+    try {
+        board = JSON.parse(raw);
+    }
+    catch {
+        return raw;
+    }
+    if (!Array.isArray(board.scenes))
+        return raw;
+    const scenes = board.scenes.map((scene) => {
+        const idea = typeof scene.sceneIndex === "number" ? replanned.get(scene.sceneIndex) : undefined;
+        return idea ? { ...scene, ...idea } : scene;
+    });
+    return JSON.stringify({ ...board, scenes }, null, 2);
+}
 export function planPull(run, items, opts) {
     const texts = [];
     const storyboardArtifact = run.nodes
         .flatMap((n) => n.outputs ?? [])
         .find((a) => a.type === "storyboard");
-    let storyboard = null;
-    if (storyboardArtifact) {
-        const raw = typeof storyboardArtifact.storyboardJson === "string"
+    const storyboardRaw = storyboardArtifact
+        ? typeof storyboardArtifact.storyboardJson === "string"
             ? storyboardArtifact.storyboardJson
             : storyboardArtifact.storyboard !== undefined
                 ? JSON.stringify(storyboardArtifact.storyboard, null, 2)
-                : undefined;
-        if (raw !== undefined) {
-            storyboard = "storyboard.json";
-            texts.push({ file: storyboard, body: raw.endsWith("\n") ? raw : `${raw}\n` });
-        }
-    }
+                : undefined
+        : undefined;
     let reference = null;
     let productSheet = null;
     let setPlate = null;
@@ -1056,6 +1071,21 @@ export function planPull(run, items, opts) {
     const pendingRedo = scenesBeingRedone(run, items);
     for (const sceneIndex of pendingRedo)
         clipByScene.delete(sceneIndex);
+    const replanned = new Map();
+    for (const [sceneIndex, clip] of clipByScene) {
+        if (!clip.replannedIdea)
+            continue;
+        const { imageUrl, framePrompt, videoPrompt } = clip.replannedIdea;
+        keyframeByScene.set(sceneIndex, keyframeDownload(sceneIndex, imageUrl));
+        if (framePrompt && videoPrompt)
+            replanned.set(sceneIndex, { framePrompt, videoPrompt });
+    }
+    let storyboard = null;
+    if (storyboardRaw !== undefined) {
+        const body = replanned.size > 0 ? withReplannedPrompts(storyboardRaw, replanned) : storyboardRaw;
+        storyboard = "storyboard.json";
+        texts.unshift({ file: storyboard, body: body.endsWith("\n") ? body : `${body}\n` });
+    }
     const sceneIndexes = [
         ...new Set([
             ...clipByScene.keys(),
@@ -2201,6 +2231,10 @@ export async function statusFlow(runId, json, deps) {
             }
             if (row.clip?.error)
                 lines.push(`       ${row.clip.error}`);
+            const usedIdea = row.clip?.artifact?.type === "video" ? row.clip.artifact.replannedIdea : undefined;
+            if (usedIdea?.framePrompt) {
+                lines.push(`       clip: made from a new idea instead of the approved one. It shows: ${withoutLookRider(usedIdea.framePrompt)}`);
+            }
             if (revoicedByScene.has(sceneIndex))
                 lines.push("       voice: cast voice applied");
             if (voiceFirstByScene.has(sceneIndex))

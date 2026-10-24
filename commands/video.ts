@@ -469,6 +469,13 @@ function printDisplacedHistory(
   for (const line of history.lines) lines.push(`         ${line}`);
 }
 
+/** #3955: the idea a re-planned B-roll clip was made from. A module run withholds the prompts. */
+export interface ReplannedIdea {
+  framePrompt?: string;
+  videoPrompt?: string;
+  imageUrl: string;
+}
+
 /** A SUBSET of the server's artifact union (convex/schema.ts): exodus compiles
  *  standalone (tsconfig rootDir ".") and cannot import the canonical type. */
 export type ArtifactSubset =
@@ -512,6 +519,8 @@ export type ArtifactSubset =
       /** #2692: the finished take's median speaking pitch (Hz) and how it was read. */
       voicePitchHz?: number;
       voicePitchMethod?: string;
+      /** #3955: a re-planned B-roll shot: the idea and picture this clip was made from. */
+      replannedIdea?: ReplannedIdea;
     }
   | {
       type: "audio";
@@ -1567,6 +1576,7 @@ type SceneClipPull = {
   voiceFirstBlockedBy: string[] | null;
   voicePitchHz: number | null;
   voicePitchMethod: string | null;
+  replannedIdea: ReplannedIdea | null;
 };
 
 function clipFromArtifact(
@@ -1591,6 +1601,7 @@ function clipFromArtifact(
     voiceFirstBlockedBy: artifact.voiceFirstBlockedBy ?? null,
     voicePitchHz: artifact.voicePitchHz ?? null,
     voicePitchMethod: artifact.voicePitchMethod ?? null,
+    replannedIdea: artifact.replannedIdea ?? null,
   };
 }
 
@@ -1801,6 +1812,27 @@ function isNarrationMaster(artifact: ArtifactSubset): boolean {
   );
 }
 
+/** A prompt without the look the B-roll planner appends to it (scout's applyCutawayStyleRider). */
+function withoutLookRider(prompt: string): string {
+  return prompt.replace(/\n\nCUTAWAY STYLE: [\s\S]*$/, "");
+}
+
+/** The storyboard JSON with each re-planned scene's prompts swapped for the idea its clip used. */
+function withReplannedPrompts(raw: string, replanned: Map<number, { framePrompt: string; videoPrompt: string }>): string {
+  let board: { scenes?: Array<{ sceneIndex?: unknown }> };
+  try {
+    board = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!Array.isArray(board.scenes)) return raw;
+  const scenes = board.scenes.map((scene) => {
+    const idea = typeof scene.sceneIndex === "number" ? replanned.get(scene.sceneIndex) : undefined;
+    return idea ? { ...scene, ...idea } : scene;
+  });
+  return JSON.stringify({ ...board, scenes }, null, 2);
+}
+
 export function planPull(
   run: VideoRun,
   items: NodeItem[],
@@ -1811,19 +1843,13 @@ export function planPull(
   const storyboardArtifact = run.nodes
     .flatMap((n) => n.outputs ?? [])
     .find((a): a is Extract<ArtifactSubset, { type: "storyboard" }> => a.type === "storyboard");
-  let storyboard: string | null = null;
-  if (storyboardArtifact) {
-    const raw =
-      typeof storyboardArtifact.storyboardJson === "string"
-        ? storyboardArtifact.storyboardJson
-        : storyboardArtifact.storyboard !== undefined
-          ? JSON.stringify(storyboardArtifact.storyboard, null, 2)
-          : undefined;
-    if (raw !== undefined) {
-      storyboard = "storyboard.json";
-      texts.push({ file: storyboard, body: raw.endsWith("\n") ? raw : `${raw}\n` });
-    }
-  }
+  const storyboardRaw = storyboardArtifact
+    ? typeof storyboardArtifact.storyboardJson === "string"
+      ? storyboardArtifact.storyboardJson
+      : storyboardArtifact.storyboard !== undefined
+        ? JSON.stringify(storyboardArtifact.storyboard, null, 2)
+        : undefined
+    : undefined;
 
   // Every slot below holds AT MOST ONE artifact, the last the run emitted. A
   // retaken scene emits a second artifact, sometimes in a different container
@@ -1963,6 +1989,22 @@ export function planPull(
 
   const pendingRedo = scenesBeingRedone(run, items);
   for (const sceneIndex of pendingRedo) clipByScene.delete(sceneIndex);
+
+  // #3955: a re-planned B-roll clip was made from a new idea, so its keyframe
+  // and storyboard prompts are that idea's, not the approved one's.
+  const replanned = new Map<number, { framePrompt: string; videoPrompt: string }>();
+  for (const [sceneIndex, clip] of clipByScene) {
+    if (!clip.replannedIdea) continue;
+    const { imageUrl, framePrompt, videoPrompt } = clip.replannedIdea;
+    keyframeByScene.set(sceneIndex, keyframeDownload(sceneIndex, imageUrl));
+    if (framePrompt && videoPrompt) replanned.set(sceneIndex, { framePrompt, videoPrompt });
+  }
+  let storyboard: string | null = null;
+  if (storyboardRaw !== undefined) {
+    const body = replanned.size > 0 ? withReplannedPrompts(storyboardRaw, replanned) : storyboardRaw;
+    storyboard = "storyboard.json";
+    texts.unshift({ file: storyboard, body: body.endsWith("\n") ? body : `${body}\n` });
+  }
 
   const sceneIndexes = [
     ...new Set([
@@ -3350,6 +3392,10 @@ export async function statusFlow(
         }
       }
       if (row.clip?.error) lines.push(`       ${row.clip.error}`);
+      const usedIdea = row.clip?.artifact?.type === "video" ? row.clip.artifact.replannedIdea : undefined;
+      if (usedIdea?.framePrompt) {
+        lines.push(`       clip: made from a new idea instead of the approved one. It shows: ${withoutLookRider(usedIdea.framePrompt)}`);
+      }
       // #1708: the cast voice applied, and what the picture check found.
       if (revoicedByScene.has(sceneIndex)) lines.push("       voice: cast voice applied");
       if (voiceFirstByScene.has(sceneIndex)) lines.push("       clip: redone voice first");

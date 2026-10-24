@@ -65,6 +65,11 @@ export interface ClipFinding {
 export declare function qcWithoutJudgeWording(qc: ClipQc): ClipQc;
 export declare const NO_TAKE_HISTORY_LINE = "no history recorded for this clip";
 export declare function renderQcTakeHistory(takes: ClipQcTake[] | undefined): string[];
+export interface ReplannedIdea {
+    framePrompt?: string;
+    videoPrompt?: string;
+    imageUrl: string;
+}
 export type ArtifactSubset = {
     type: "storyboard";
     storyboard?: unknown;
@@ -100,6 +105,7 @@ export type ArtifactSubset = {
     voiceFirstBlockedBy?: string[];
     voicePitchHz?: number;
     voicePitchMethod?: string;
+    replannedIdea?: ReplannedIdea;
 } | {
     type: "audio";
     sceneIndex?: number;

@@ -112,9 +112,15 @@ export const JOIN_LEAD_NEW_SPEAKER_SEC = 0.25;
 /** The gap a cut keeps from an extra heard sound it leaves out (#2541). */
 const EXTRA_CLEARANCE_SEC = 0.05;
 /**
- * A B-roll shot holds over the words it covers (#3912), but never shorter than
- * the eye needs to read it nor so long it drags; a shot planned past the
- * longest hold (a talking character) keeps its planned length.
+ * A B-roll shot arrives this long before the first word it covers, the lead the
+ * top ads use and the planner teaches (#3936).
+ */
+export const BROLL_LEAD_SEC = 0.5;
+/**
+ * A B-roll shot holds over the words it covers (#3912) or for its planned
+ * length, whichever runs longer (#3936), but never shorter than the eye needs
+ * to read it nor so long it drags; a shot planned past the longest hold (a
+ * talking character) keeps its planned length.
  */
 export const BROLL_MIN_HOLD_SEC = 0.8;
 export const BROLL_MAX_HOLD_SEC = 4;
@@ -821,12 +827,14 @@ function heardCovers(seg, texts, cueLineId, covers) {
 }
 
 /**
- * #3912: a B-roll shot's place in its segment. It starts on the first word it
- * covers and holds through the last, between BROLL_MIN_HOLD_SEC and
- * BROLL_MAX_HOLD_SEC, or for its planned length when that runs longer than the
- * cap. Covered words the line does not say leave it at the line's start for
- * its planned length. `texts` maps each line id to its script text. Null when
- * the segment does not speak the cue line.
+ * #3912: a B-roll shot's place in its segment. It starts BROLL_LEAD_SEC before
+ * the first word it covers, which can fall before the segment's own start
+ * (#3936), and holds through the last word or for its planned length,
+ * whichever is longer, between BROLL_MIN_HOLD_SEC and BROLL_MAX_HOLD_SEC, or
+ * for its planned length when that runs longer than the cap. Covered words the
+ * line does not say leave it at the line's start for its planned length.
+ * `texts` maps each line id to its script text. Null when the segment does not
+ * speak the cue line.
  */
 export function brollWindow(seg, counts, cueLineId, texts, broll) {
   const line = lineInSegment(seg, counts, cueLineId);
@@ -840,12 +848,13 @@ export function brollWindow(seg, counts, cueLineId, texts, broll) {
     };
   }
   const heard = heardCovers(seg, texts, cueLineId, broll.covers);
-  const startSec = heard?.startSec ?? wordTimeInSegment(seg, line.before + run.first, line.total, "s");
+  const wordSec = heard?.startSec ?? wordTimeInSegment(seg, line.before + run.first, line.total, "s");
   const endSec = heard?.endSec ?? wordTimeInSegment(seg, line.before + run.last, line.total, "e");
+  const startSec = wordSec - BROLL_LEAD_SEC;
   const span = Math.max(0, endSec - startSec);
   const holdSec = broll.plannedSec > BROLL_MAX_HOLD_SEC
     ? Math.max(span, broll.plannedSec)
-    : Math.min(Math.max(span, BROLL_MIN_HOLD_SEC), BROLL_MAX_HOLD_SEC);
+    : Math.min(Math.max(span, broll.plannedSec, BROLL_MIN_HOLD_SEC), BROLL_MAX_HOLD_SEC);
   return { startSec, holdSec, method, found: true };
 }
 
@@ -1221,6 +1230,7 @@ export function buildTimeline({
   });
 
   const lineTexts = new Map([...scriptLines].map(([id, line]) => [id, line?.text]));
+  const beats = spine.filter((seg) => seg.reaction);
   for (const c of waiting.filter((w) => !w.reaction)) {
     const cue = c.cueLineId ? cueOffsetOnSpine(spine, counts, c.cueLineId) : null;
     if (!cue) {
@@ -1233,7 +1243,9 @@ export function buildTimeline({
       ? brollWindow(seg, counts, c.cueLineId, lineTexts, c.broll)
       : null;
     if (win) {
-      placed.startSec = seg.startSec + win.startSec;
+      // A shot's lead may reach back into the segment before, never into a reaction beat or before the ad.
+      const floor = Math.max(0, ...beats.filter((b) => b.startSec < seg.startSec).map((b) => b.startSec + b.seconds));
+      placed.startSec = Math.max(floor, seg.startSec + win.startSec);
       placed.method = win.method;
       placed.seconds = c.source === "clip" ? Math.min(win.holdSec, c.seconds) : win.holdSec;
       placed.coversFound = win.found;
@@ -1241,7 +1253,6 @@ export function buildTimeline({
     cutaways.push(placed);
   }
   cutaways.sort((a, b) => a.startSec - b.startSec);
-  const beats = spine.filter((seg) => seg.reaction);
   for (let i = 0; i < cutaways.length; i++) {
     const c = cutaways[i];
     const stops = [];

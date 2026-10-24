@@ -1237,9 +1237,12 @@ Read these out of `storyboard.json` before you build anything, in any tool:
   running order. To find the moment, locate the A-roll scene whose `lineIds`
   contain the cue line, then read the start time of the first word of that line
   out of that scene's `words.json`. A B-roll cutaway (one with `broll`) starts
-  on the first word of `broll.covers` instead and holds through its last word,
+  0.5 s before the first word of `broll.covers` instead (even if that reaches
+  back into the scene before, but never into a reaction or before 0 s), and
+  holds through its last word or for `broll.plannedSec`, whichever is longer,
   0.8 s to 4 s; a shot planned longer than 4 s (a talking character) holds at
-  least `broll.plannedSec`.
+  least `broll.plannedSec`. The next cutaway, a reaction or the ad's end cuts
+  it short.
 - **Reactions.** A cutaway with `cutawayType: "reaction"` is the exception. Do
   not lay it over the speech. Put it into the running order as its own beat
   right after its cue line ends, play its own sound (the audience laughing),

@@ -1296,7 +1296,10 @@ the pieces:
   carry, fades out over its last 0.4 s instead.
 - **It ignores the continuous master.** It reads only `scene-NN.voice` files;
   it never opens `narration.mp3` or `manifest.narration`. A tool that lays the
-  master down whole and cuts the pictures to it keeps the read intact.
+  master down whole and cuts the pictures to it keeps the read intact. The one
+  exception is a manifest with `wholeVoice: true`, which the automatic cut adds
+  for a kind whose voice is a song: then `narration.mp3` is laid whole and each
+  narrated scene lasts its stretch of it, from `narration.json`'s cuts.
 - Otherwise: A-roll in manifest order as the spine, each reaction put in as its
   own beat of at most 1.5 s right after its cue line with its own sound, each
   other cutaway laid over the spine at its cued word (falling back to a

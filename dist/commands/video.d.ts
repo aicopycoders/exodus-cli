@@ -466,6 +466,7 @@ export interface ScriptStartOptions {
     shots?: RunShots;
     stopAtScript?: true;
     rewriteToFit?: true;
+    sourceRecordFile?: string;
     wait: boolean;
     json: boolean;
     onProgressLine?: (line: string) => void;
@@ -510,6 +511,7 @@ export declare function storyboardFlow(runId: string, json: boolean, deps: Video
 export declare function approveFlow(runId: string, opts: {
     json: boolean;
     approveStaleCut: boolean;
+    acceptFindings?: boolean;
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function flagFlow(runId: string, note: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function retryFrameFlow(runId: string, nodeId: string | undefined, sceneIndex: number, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;

@@ -6,6 +6,39 @@ export class FirstCutError extends Error {
   readonly code: 1 | 2;
 }
 
+/** The finished cut's true peak is over -1 dBTP, or could not be measured, after the loudness pass. */
+export class LoudnessRefusal extends FirstCutError {
+  constructor(message: string, measured: { i: number; tp: number } | null);
+  readonly measured: { i: number; tp: number } | null;
+}
+
+/** The pace record first-cut writes beside the cut when a finishing setting is on. */
+export interface CutPace {
+  seconds: { ours: number; source: number | null; ratio: number | null };
+  speed: number;
+  cutsPerMin: { ours: number; source: number | null };
+  meanShotSec: { ours: number | null; source: number | null };
+  longestShotSec: { ours: number; source: number | null };
+  over4s: { ours: number; source: number | null };
+  wordsPerMin: { ours: number | null; source: number | null };
+  deadAir: { over03s: number; longestSec: number };
+  /** The settings the cut was made with, from the manifest's `finishing`. */
+  finishing: { cutPace: boolean; captions: boolean; cards: boolean; finishLoudness: boolean; targetSeconds?: number };
+  loudness?: { lufs: number; truePeak: number; passes: 1 | 2 };
+  notes?: string[];
+}
+
+/** What the cut did with the manifest's `sound`: where each sound and bed played and how loud, and what it left out. */
+export interface CutSound {
+  voiceLufs: number | null;
+  effects: Array<{ file: string; cueLineId: string; atSec: number; gainDb: number }>;
+  beds: Array<{ file: string; fromScene: number; startSec: number; seconds: number; gainDb: number }>;
+  music?: { gainDb: number; duck: { threshold: number; ratio: number; attack: number; release: number } };
+  /** The music-only master's file name, beside the cut. */
+  master?: string;
+  notes: string[];
+}
+
 export interface FirstCutOptions {
   /** A folder written by `exodus video pull`. */
   dir: string;
@@ -24,6 +57,12 @@ export interface FirstCut {
   /** The music file the cut used, or null. */
   music: string | null;
   timeline: { spine: Array<{ sceneIndex: number }>; left: string[] };
+  /** Present only when the manifest turned a finishing setting on. */
+  pace?: CutPace;
+  /** Present only when the manifest names sounds, beds, a ducked music bed or a music-only master. */
+  sound?: CutSound;
+  /** The music-only master's path, when one was made. */
+  musicOnlyMaster?: string;
 }
 
 export function firstCut(options: FirstCutOptions): FirstCut;

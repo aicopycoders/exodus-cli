@@ -129,7 +129,7 @@ Usage:
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
   exodus video director <runId> <on|off|follow> [--json]
 
 Options:
@@ -156,6 +156,9 @@ Options:
   --approve-stale-cut  Deliver the cut you uploaded even though a clip changed
                        after you uploaded it (approve). Without it, approving
                        stops and names the scenes that changed
+  --accept-findings    Go on past the check's findings on a storyboard it
+                       stopped (approve). Without it, approving that
+                       storyboard stops and says why
   --set <who>=<voice>  Give a character a voice (voices). The voice is a
                        catalog voice's name, like George, or an ElevenLabs
                        voice ID. Name the character by its ID or by the name
@@ -177,6 +180,10 @@ Options:
                        the server can't tell who says a line, it asks and
                        starts nothing. If a description is too thin to write
                        from, it says what is missing and starts nothing
+  --source-record <file.json>
+                       A real ad's source record (start, with --conceit), for
+                       a kind of ad that copies an ad shot for shot. Such a
+                       kind needs one; any other kind refuses it
   --stop-at-script     Print the script the run would start on, and start
                        nothing (start, with --conceit). To read a written or
                        laid-out script first; send it back with --script
@@ -227,7 +234,7 @@ Options:
 
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
---style, --direction, --frame, --pacing, --music, --one-shot,
+--style, --direction, --frame, --pacing, --music, --source-record, --one-shot,
 --review-storyboard, --stop-at-script, --rewrite-to-fit),
 status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
 picture while the storyboard waits), pull (the finished video, each scene's
@@ -1457,6 +1464,9 @@ export function planVideoStart(flags, occurrences) {
     const pacingFlag = planValueFlag(occurrences, "pacing");
     if (!pacingFlag.ok)
         return { kind: "usage", line: pacingFlag.line };
+    const recordFlag = planValueFlag(occurrences, "source-record");
+    if (!recordFlag.ok)
+        return { kind: "usage", line: recordFlag.line };
     const videoModel = videoModelFlag.value;
     const voiceMode = voiceFlag.value;
     const reviewStoryboardFlag = occurrences.some((o) => o.flag === "review-storyboard");
@@ -1533,6 +1543,12 @@ export function planVideoStart(flags, occurrences) {
         return {
             kind: "usage",
             line: "--director works with --conceit, not --show.",
+        };
+    }
+    if (showId && recordFlag.value) {
+        return {
+            kind: "usage",
+            line: "--source-record works with --conceit, not --show.",
         };
     }
     if (showId && broll) {
@@ -1613,6 +1629,8 @@ export function planVideoStart(flags, occurrences) {
         opts.stopAtScript = true;
     if (rewriteToFit)
         opts.rewriteToFit = true;
+    if (recordFlag.value)
+        opts.sourceRecordFile = recordFlag.value;
     if (frameFlag.value || pacingFlag.value) {
         opts.shots = {
             ...(frameFlag.value ? { frame: frameFlag.value } : {}),
@@ -1878,6 +1896,20 @@ export async function startScriptFlow(opts, deps) {
     if (script.trim().length === 0) {
         return { code: 1, lines: [`The script file "${opts.scriptFile}" is empty.`] };
     }
+    let sourceRecord;
+    if (opts.sourceRecordFile) {
+        try {
+            sourceRecord = JSON.parse(deps.readFile(opts.sourceRecordFile));
+        }
+        catch (e) {
+            return {
+                code: 1,
+                lines: [
+                    `Can't read the source record "${opts.sourceRecordFile}" as JSON: ${e instanceof Error ? e.message : String(e)}`,
+                ],
+            };
+        }
+    }
     const listed = await deps.get(SCRIPT_RUNS_PATH).catch(() => null);
     if (listed?.ok) {
         const options = scriptRunOptionsOf(listed.data);
@@ -1904,6 +1936,7 @@ export async function startScriptFlow(opts, deps) {
         ...(opts.shots ? { shots: opts.shots } : {}),
         ...(opts.stopAtScript ? { stopAtScript: true } : {}),
         ...(opts.rewriteToFit ? { rewriteToFit: true } : {}),
+        ...(sourceRecord !== undefined ? { sourceRecord } : {}),
     });
     if (!res.ok)
         return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
@@ -2431,7 +2464,21 @@ export async function storyboardFlow(runId, json, deps) {
         .get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`)
         .catch(() => null);
     const showAd = runRes?.ok === true && isShowAd(asVideoRun(runRes.data));
-    lines.push("", `approve with: exodus video approve ${runId}`);
+    const logic = cards.logicFindings;
+    if (logic) {
+        lines.push("", "The check before pictures");
+        if (logic.findings.length === 0)
+            lines.push("  nothing found");
+        for (const f of logic.findings) {
+            const where = f.scenes.length ? ` (scene ${f.scenes.join(", ")})` : "";
+            lines.push(`  ${f.id} ${f.severity}, ${f.kind}${where}: ${f.what}`);
+        }
+        for (const n of logic.notes ?? [])
+            lines.push(`  note: ${n}`);
+    }
+    lines.push("", logic?.open
+        ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
+        : `approve with: exodus video approve ${runId}`);
     if (showAd) {
         lines.push(`send it back: exodus video flag ${runId} --note "what's wrong"`);
     }
@@ -2468,11 +2515,15 @@ function sceneCardLines(scene) {
 export async function approveFlow(runId, opts, deps) {
     const res = await deps.post(APPROVE_PATH, {
         runId,
+        ...(opts.acceptFindings ? { acceptFindings: true } : {}),
         ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
     });
     if (!res.ok) {
         const refusal = errorResult(res, opts.json);
         const staleCut = !opts.json && videoApiError(res).includes("approve this cut anyway");
+        if (!opts.json && videoApiError(res).includes("accept the findings")) {
+            return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId} --accept-findings`] };
+        }
         return staleCut
             ? {
                 ...refusal,
@@ -3744,6 +3795,7 @@ const VALUE_FLAGS = new Set([
     "voice",
     "frame",
     "pacing",
+    "source-record",
     "note",
     "out",
     "file",
@@ -3852,7 +3904,11 @@ export async function run(flags, occurrences) {
         return printResult(await directorFlow(runId, choice.on, json, defaultDeps));
     }
     if (sub === "approve") {
-        return printResult(await approveFlow(runId, { json, approveStaleCut: flags["approve-stale-cut"] === true }, defaultDeps));
+        return printResult(await approveFlow(runId, {
+            json,
+            approveStaleCut: flags["approve-stale-cut"] === true,
+            acceptFindings: flags["accept-findings"] === true,
+        }, defaultDeps));
     }
     if (sub === "flag") {
         const note = flagString(flags, "note");

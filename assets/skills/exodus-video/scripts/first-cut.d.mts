@@ -23,9 +23,42 @@ export interface CutPace {
   wordsPerMin: { ours: number | null; source: number | null };
   deadAir: { over03s: number; longestSec: number };
   /** The settings the cut was made with, from the manifest's `finishing`. */
-  finishing: { cutPace: boolean; captions: boolean; cards: boolean; finishLoudness: boolean; targetSeconds?: number };
-  loudness?: { lufs: number; truePeak: number; passes: 1 | 2 };
+  finishing: {
+    cutPace: boolean;
+    captions: boolean;
+    cards: boolean;
+    finishLoudness: boolean;
+    targetSeconds?: number;
+    /** Each setting below is present only when it is on. */
+    captionsByLine?: true;
+    cleanVoice?: true;
+    limitPeaks?: true;
+    brollMinSec?: number;
+    speedUpSlowBroll?: true;
+    cutChecks?: true;
+  };
+  /** `limited`: limitPeaks' limiter ran after the loudness pass. */
+  loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true };
+  /** Present only with cutChecks. */
+  checks?: CutChecks;
   notes?: string[];
+}
+
+/** What cutChecks measured on the finished cut, and what fails its bars. */
+export interface CutChecks {
+  /** Caption screens holding words of two script lines, in the cut's time before any speed-up; null when no captions were burned. */
+  lineMixes: Array<{ s: number; text: string }> | null;
+  /** The voice's loudness over everything under it; null with a song laid whole or a silent voice. */
+  voiceOverBedDb: number | null;
+  voiceLufs: number | null;
+  bedLufs: number | null;
+  repeats: Array<{ phrase: string; firstAt: number; againAt: number }>;
+  shortShots: Array<{ n: number; role: string; at: number; sec: number }>;
+  /** null when ffmpeg could not read the cut's motion. */
+  slowShots: Array<{ n: number; role: string; at: number; sec: number; motion: number; median: number }> | null;
+  lufs: number | null;
+  truePeak: number | null;
+  verdict: { pass: boolean; fails: string[] };
 }
 
 /** What the cut did with the manifest's `sound`: where each sound and bed played and how loud, and what it left out. */

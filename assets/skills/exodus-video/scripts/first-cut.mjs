@@ -155,11 +155,18 @@ export const FINISH_LUFS = -14;
 export const FINISH_TRUE_PEAK = -1.5;
 export const FINISH_LRA = 11;
 export const TRUE_PEAK_MAX_DB = -1;
+/**
+ * limitPeaks: after the loudness pass, the sound oversampled 4x through a
+ * limiter at 0.8 (about -1.9 dB), so a peak between two samples is caught too.
+ * The cut is still measured after and refused over TRUE_PEAK_MAX_DB.
+ */
+export const PEAK_LIMITER = "aresample=192000,alimiter=limit=0.8:level=false:attack=2:release=60";
 
 /**
  * The manifest's finishing settings, or null when none is on. The worker
  * writes them from the run's frozen kind settings, so a redo of the run cuts
- * with the same ones.
+ * with the same ones. A setting added after the first four is present only
+ * when it is on and can act (captionsByLine needs captions).
  */
 export function finishingOf(manifest) {
   const f = manifest?.finishing;
@@ -170,9 +177,17 @@ export function finishingOf(manifest) {
     cards: f.cards === true,
     finishLoudness: f.finishLoudness === true,
   };
-  if (!Object.values(on).some(Boolean)) return null;
+  const added = {
+    ...(on.captions && f.captionsByLine === true ? { captionsByLine: true } : {}),
+    ...(f.cleanVoice === true ? { cleanVoice: true } : {}),
+    ...(on.finishLoudness && f.limitPeaks === true ? { limitPeaks: true } : {}),
+    ...(Number.isFinite(f.brollMinSec) && f.brollMinSec > 0 ? { brollMinSec: f.brollMinSec } : {}),
+    ...(f.speedUpSlowBroll === true ? { speedUpSlowBroll: true } : {}),
+    ...(f.cutChecks === true ? { cutChecks: true } : {}),
+  };
+  if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
-  return on.cutPace && Number.isFinite(target) && target > 0 ? { ...on, targetSeconds: target } : on;
+  return on.cutPace && Number.isFinite(target) && target > 0 ? { ...on, targetSeconds: target, ...added } : { ...on, ...added };
 }
 
 /**
@@ -198,6 +213,18 @@ const BED_FADE_SEC = 0.15;
 export const MUSIC_UNDER_DB = 16.8;
 const MUSIC_FALLBACK_DB = -20;
 export const DUCK = { threshold: 0.05, ratio: 2.5, attack: 20, release: 350 };
+/**
+ * cleanVoice: the voice's chain (rumble cut, light noise reduction, de-essing,
+ * gentle compression), and what happens to the room, sounds and music under
+ * it: down UNDER_VOICE.db, trimmed under `highpass` and over `lowpass` Hz, and
+ * ducked by a compressor keyed on the cleaned voice. It is the one duck: the
+ * music's own (DUCK) is left out. A reaction's tail is a voice, so it is
+ * neither cleaned nor ducked.
+ */
+export const VOICE_CLEAN =
+  "highpass=f=90,afftdn=nr=8:nf=-38,deesser=i=0.35,acompressor=threshold=0.125:ratio=2.5:attack=8:release=150:makeup=1.5";
+export const UNDER_VOICE = { db: -6, highpass: 60, lowpass: 9000, duck: { threshold: 0.03, ratio: 5, attack: 15, release: 300 } };
+const CLEAN_FILTERS = ["highpass", "lowpass", "afftdn", "deesser", "acompressor", "sidechaincompress"];
 const SEGMENT_LUFS = -16;
 /** A voice at or under this is no level to set a sound against. */
 const VOICE_FLOOR_LUFS = -60;
@@ -1678,6 +1705,74 @@ export function buildTimeline({
   };
 }
 
+/**
+ * brollMinSec: a cutaway on screen for less than `minSec` of the finished ad
+ * (its time in the cut over `speed`) is left out, and the shot before it plays
+ * on over its time: the cutaway that ends where it starts, its last frame held
+ * if its clip runs out, else the scene under it. `clipSeconds(file)` is a
+ * clip's length. Returns a line for each cutaway left out.
+ */
+export function holdBroll(timeline, minSec, speed, clipSeconds) {
+  const kept = [];
+  const left = [];
+  for (const c of timeline.cutaways) {
+    const shown = c.seconds / speed;
+    if (shown >= minSec - 1e-6) {
+      kept.push(c);
+      continue;
+    }
+    const why = `cutaway ${c.sceneIndex}: ${shown.toFixed(2)}s on screen, under the ${minSec}s B-roll minimum, so it is left out and`;
+    const before = kept.at(-1);
+    if (before && Math.abs(before.startSec + before.seconds - c.startSec) < 0.5 / FPS) {
+      before.seconds = roundMs(c.startSec + c.seconds - before.startSec);
+      if (c.cutShortBy) before.cutShortBy = c.cutShortBy;
+      else delete before.cutShortBy;
+      const hold = before.source === "clip" ? roundMs(before.seconds - clipSeconds(before.file)) : 0;
+      if (hold > 0) before.holdSec = hold;
+      left.push(`${why} cutaway ${before.sceneIndex} plays on over it`);
+    } else {
+      left.push(`${why} the scene under it plays on`);
+    }
+  }
+  timeline.cutaways = kept;
+  return left;
+}
+
+/** speedUpSlowBroll: the most a slow cutaway is sped up. */
+export const SLOW_SHOT_SPEED_MAX = 1.6;
+
+/**
+ * speedUpSlowBroll: every shot's motion is read off its clip before the render
+ * (`motionOf(file, fromSec, seconds)`), and a cutaway that slowShots finds slow
+ * plays its clip faster, at most SLOW_SHOT_SPEED_MAX, so it shows more of its
+ * clip in the same time on screen. A cutaway whose clip is no longer than its
+ * time on screen cannot be, and is noted. Returns a line for each slow cutaway.
+ */
+export function speedUpSlowBroll(timeline, motionOf, clipSeconds) {
+  const shots = [
+    ...timeline.spine
+      .filter((seg) => seg.source === "clip")
+      .map((seg) => ({ n: seg.sceneIndex, role: roleOf(seg), file: seg.file, from: seg.inSec ?? 0, sec: seg.seconds - (seg.holdSec ?? 0) })),
+    ...timeline.cutaways
+      .filter((c) => c.source === "clip")
+      .map((c) => ({ n: c.sceneIndex, role: "b-roll", file: c.file, from: 0, sec: c.seconds, cutaway: c })),
+  ].filter((s) => s.sec > 0);
+  const measured = shots.map((s) => ({ ...s, motion: motionOf(s.file, s.from, s.sec) }));
+  const notes = [];
+  for (const slow of slowShots(measured)) {
+    const c = slow.cutaway;
+    if (!c) continue;
+    const have = clipSeconds(c.file);
+    if (!(have > c.seconds + 0.05)) {
+      notes.push(`cutaway ${c.sceneIndex} barely moves, but its clip (${have.toFixed(2)}s) is no longer than its time on screen (${c.seconds.toFixed(2)}s), so it plays as it is`);
+      continue;
+    }
+    c.speed = roundMs(Math.min(have / c.seconds, SLOW_SHOT_SPEED_MAX));
+    notes.push(`cutaway ${c.sceneIndex} barely moves, so it plays ${c.speed}x faster: ${(c.seconds * c.speed).toFixed(2)}s of its clip in ${c.seconds.toFixed(2)}s`);
+  }
+  return notes;
+}
+
 /** #3365: why the cut stopped on scenes with no clip, and the person's three ways on. */
 function noClipRefusal(missing) {
   const scenes = missing.map((m) => `scene ${m.n} (${m.status})`).join(", ");
@@ -1700,8 +1795,10 @@ function sec(n) {
  * The render. `finish` (null: today's render) carries the finishing settings'
  * part of it: levelSegments false leaves each segment's sound as it is for the
  * whole mix's loudness pass, `ass` names the captions and cards file burned in
- * (read from the folder ffmpeg runs in), and `speed` over 1 speeds the whole
- * cut, picture and sound, after the burn.
+ * (read from the folder ffmpeg runs in), `speed` over 1 speeds the whole
+ * cut, picture and sound, after the burn, `clean` (cleanVoice) is the voice's
+ * chain and the duck under it, and `meters` (cutChecks) names the two files
+ * the voice and everything under it are also written to.
  */
 export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, sound = null }) {
   const level = finish && finish.levelSegments === false ? "anull" : LOUDNORM;
@@ -1813,8 +1910,11 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
         ? addInput("-i", resolve(c.file))
         : addInput("-loop", "1", "-t", String(c.seconds), "-i", resolve(c.file));
     const end = c.startSec + c.seconds;
+    // speedUpSlowBroll: a slow cutaway plays faster; brollMinSec: one that plays on past its clip holds its last frame.
+    const faster = c.speed > 1 ? `,setpts=PTS/${c.speed}` : "";
+    const hold = c.holdSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${sec(c.holdSec)}` : "";
     filters.push(
-      `${norm(`${i}:v`)},trim=0:${sec(c.seconds)},setpts=PTS-STARTPTS+${sec(c.startSec)}/TB[cv${j}]`,
+      `${norm(`${i}:v`)}${faster}${hold},trim=0:${sec(c.seconds)},setpts=PTS-STARTPTS+${sec(c.startSec)}/TB[cv${j}]`,
     );
     // eof_action=pass keeps the spine showing once the cutaway's frames end.
     filters.push(
@@ -1867,9 +1967,10 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     beds.push(`[sfx${j}]`);
   });
   let voice = "[voice]";
+  const clean = finish?.clean ?? null;
   if (music) {
     const m = addInput("-stream_loop", "-1", "-i", music);
-    const duck = sound?.music?.duck;
+    const duck = clean ? null : sound?.music?.duck;
     if (duck) {
       filters.push("[voice]asplit=2[voiced][duckkey]");
       filters.push(`[${m}:a]${stereo},atrim=0:${pictureSec.toFixed(6)},asetpts=PTS-STARTPTS,volume=${sound.music.gainDb}dB[bedraw]`);
@@ -1877,13 +1978,42 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
         `[bedraw][duckkey]sidechaincompress=threshold=${duck.threshold}:ratio=${duck.ratio}:attack=${duck.attack}:release=${duck.release}[bed]`,
       );
       voice = "[voiced]";
+    } else if (clean && sound?.music) {
+      filters.push(`[${m}:a]${stereo},atrim=0:${pictureSec.toFixed(6)},asetpts=PTS-STARTPTS,volume=${sound.music.gainDb}dB[bed]`);
     } else {
       filters.push(`[${m}:a]${stereo},volume=${MUSIC_VOLUME}[bed]`);
     }
     beds.push("[bed]");
   }
+  let under = beds;
+  if (clean) {
+    // Each bed is trimmed to the picture, then ducked on its own by the same key, which ducks their sum the same.
+    const ducked = beds.filter((label) => !tails.includes(label));
+    const u = clean.under;
+    filters.push(`[voice]${clean.voice},asplit=${ducked.length + 1}[voiced]${ducked.map((_, j) => `[vkey${j}]`).join("")}`);
+    ducked.forEach((label, j) => {
+      filters.push(`${label}atrim=end=${pictureSec.toFixed(6)},highpass=f=${u.highpass},lowpass=f=${u.lowpass},volume=${u.db}dB[uc${j}]`);
+      filters.push(
+        `[uc${j}][vkey${j}]sidechaincompress=threshold=${u.duck.threshold}:ratio=${u.duck.ratio}:attack=${u.duck.attack}:release=${u.duck.release}[ud${j}]`,
+      );
+    });
+    voice = "[voiced]";
+    under = [...ducked.map((_, j) => `[ud${j}]`), ...tails];
+  }
+  if (finish?.meters) {
+    // cutChecks: the voice, and everything under it mixed, each also written alone to be measured.
+    filters.push(`${voice}asplit=2[metered][vmeter]`);
+    voice = "[metered]";
+    under = under.map((label, j) => {
+      filters.push(`${label}asplit=2[mu${j}][mb${j}]`, `[mb${j}]atrim=end=${pictureSec.toFixed(6)}[mt${j}]`);
+      return `[mu${j}]`;
+    });
+    filters.push(
+      `${under.map((_, j) => `[mt${j}]`).join("")}amix=inputs=${under.length}:duration=longest:dropout_transition=0:normalize=0[bedmeter]`,
+    );
+  }
   filters.push(
-    `${voice}${beds.join("")}amix=inputs=${beds.length + 1}:duration=first:dropout_transition=0:normalize=0[mix]`,
+    `${voice}${under.join("")}amix=inputs=${under.length + 1}:duration=first:dropout_transition=0:normalize=0[mix]`,
   );
   let audioLabel = "mix";
   if (speed) {
@@ -1900,6 +2030,9 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     "-c:a", "aac", "-b:a", "192k",
     "-movflags", "+faststart",
     out,
+    ...(finish?.meters
+      ? ["-map", "[vmeter]", "-c:a", "pcm_s16le", finish.meters.voice, "-map", "[bedmeter]", "-c:a", "pcm_s16le", finish.meters.bed]
+      : []),
   ];
 }
 
@@ -2196,14 +2329,113 @@ export function captionScreens(words, cap = null) {
 }
 
 /**
+ * captionsByLine: a caption screen holds the words of one script line only, a
+ * few a screen (`cap`, a source record's caption style, else 3), breaks on a
+ * pause over CAPTION_LINE_GAP_SEC, stays up CAPTION_TAIL_SEC after its last
+ * word at most and goes off CAPTION_CLEAR_SEC before the next comes on. A
+ * screen shorter than CAPTION_MIN_SEC joins the next one of its line, else the
+ * one before, one word over the few at most. `words`: [{ text, start, end, line }].
+ */
+export const CAPTION_LINE_GAP_SEC = 0.5;
+export const CAPTION_TAIL_SEC = 0.15;
+export const CAPTION_CLEAR_SEC = 0.02;
+export const CAPTION_MIN_SEC = 0.35;
+/** captionsByLine: the caption font is at most this share of the frame's height (69 px of 1920). */
+export const CAPTION_MAX_SHARE = 0.036;
+
+export function lineCaptionScreens(words, cap = null) {
+  const per = Math.max(1, Math.round(cap?.wordsPerLine?.median ?? 3));
+  const caps = /all-caps|capitals|upper/i.test(cap?.style ?? "");
+  let chunks = [];
+  let cur = [];
+  for (const w of words) {
+    const last = cur.at(-1);
+    // Script words timed by one heard word ("twenty five" for "25") stay on one screen.
+    const oneHeard = last && w.line === last.line && w.start === last.start && w.end === last.end;
+    if (last && !oneHeard && (cur.length >= per || w.line !== last.line || w.start - last.end > CAPTION_LINE_GAP_SEC)) {
+      chunks.push(cur);
+      cur = [];
+    }
+    cur.push(w);
+  }
+  if (cur.length) chunks.push(cur);
+  for (let k = 0; k < chunks.length; k++) {
+    const c = chunks[k];
+    if (c.at(-1).end - c[0].start >= CAPTION_MIN_SEC) continue;
+    const next = chunks[k + 1];
+    const prev = chunks[k - 1];
+    const joins = (a, b) => a && b && b[0].line === a[0].line && b[0].start - a.at(-1).end <= CAPTION_LINE_GAP_SEC && a.length + b.length <= per + 1;
+    if (joins(c, next)) {
+      chunks[k + 1] = [...c, ...next];
+      chunks[k] = null;
+    } else if (joins(prev, c)) {
+      chunks[k - 1] = [...prev, ...c];
+      chunks[k] = null;
+    }
+  }
+  chunks = chunks.filter(Boolean);
+  return chunks.map((ws, k) => {
+    const next = chunks[k + 1]?.[0];
+    const text = ws.map((w) => assText(w.text)).join(" ").replace(/[.,;:]+$/, "");
+    const off = next ? next.start - CAPTION_CLEAR_SEC : Infinity;
+    const e = Math.min(Math.max(ws[0].start + 0.12, ws.at(-1).end + CAPTION_TAIL_SEC), off);
+    return { text: caps ? text.toUpperCase() : text, s: roundMs(ws[0].start), e: roundMs(e), line: ws[0].line };
+  });
+}
+
+/**
+ * captionsByLine: the cut's words in its own time, each with the script line
+ * it belongs to. Where a segment's script is heard in order (alignScript),
+ * they are the script's words as written, each timed by the heard words that
+ * say it; elsewhere they are the heard words, each on the line its place among
+ * the script's words gives it, the way a cue line is found (lineInSegment).
+ */
+export function lineWords(timeline, storyboard) {
+  const texts = new Map((storyboard?.script ?? []).map((line) => [line?.lineId, line?.text]));
+  const counts = lineWordCounts(storyboard);
+  const rows = [];
+  for (const seg of timeline.spine) {
+    const heard = seg.words ?? [];
+    if (heard.length === 0) continue;
+    const at = (t) => roundMs(seg.startSec + t);
+    const lines = seg.lineIds.map((id) => scriptWords(texts.get(id)));
+    const aligned = lines.some((l) => l.length > 0) ? alignScript(heard, lines.flat()) : null;
+    if (aligned) {
+      const lineOf = lines.flatMap((ws, j) => ws.map(() => seg.lineIds[j]));
+      const { expected, heard: tokens, heardTokenOf } = aligned;
+      lines.flat().forEach((text, i) => {
+        const said = heardTokenOf.filter((_, e) => expected.sourceIndex[e] <= i && i <= expected.lastSourceIndex[e]);
+        if (said.length === 0) return;
+        const start = at(heard[tokens.sourceIndex[said[0]]].s);
+        const end = at(heard[tokens.lastSourceIndex[said.at(-1)]].e);
+        if (end > start) rows.push({ text, start, end, line: lineOf[i] });
+      });
+      continue;
+    }
+    const ends = [];
+    let n = 0;
+    for (const id of seg.lineIds) ends.push((n += counts.get(id) ?? 0));
+    heard.forEach((w, i) => {
+      const text = (w.w ?? "").trim();
+      const start = at(w.s);
+      const end = at(w.e);
+      if (!text || end <= start) return;
+      const j = ends.findIndex((last) => Math.min(i, n - 1) < last);
+      rows.push({ text, start, end, line: seg.lineIds[j] ?? seg.lineIds.at(-1) ?? `scene ${seg.sceneIndex}` });
+    });
+  }
+  return rows;
+}
+
+/**
  * One ASS file for the burn: the caption screens in their band, the cards in
  * their boxes, the hook box and the end card. Boxes are [x0, y0, x1, y1] as
  * shares of the frame. Every word on screen is the script's or the storyboard's.
  */
-export function editAss({ captions = [], cap = null, cards = [], hook = null, endCard = null }, W = WIDTH, H = HEIGHT) {
+export function editAss({ captions = [], cap = null, cards = [], hook = null, endCard = null, capMaxShare = null }, W = WIDTH, H = HEIGHT) {
   const thick = /thick black outline/i.test(cap?.style ?? "");
   const y = cap?.place ? Math.round(((cap.place[0] + cap.place[1]) / 2) * H) : Math.round(H * 0.7);
-  const capSize = Math.round(H * (thick ? 0.05 : 0.034));
+  const capSize = Math.min(Math.round(H * (thick ? 0.05 : 0.034)), capMaxShare ? Math.round(H * capMaxShare) : Infinity);
   const box = (b) => `\\pos(${Math.round(((b[0] + b[2]) / 2) * W)},${Math.round(((b[1] + b[3]) / 2) * H)})`;
   return [
     "[Script Info]", "ScriptType: v4.00+", `PlayResX: ${W}`, `PlayResY: ${H}`, "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
@@ -2339,6 +2571,157 @@ export function voicePauses(rows) {
   return pauses;
 }
 
+// ---- cutChecks: the finished cut checked before anyone grades it ----
+
+/**
+ * The bars a checked cut is held to. voiceOverBedDb and the slow-shot ratio
+ * are guesses, to be tuned against the graders' notes on the cuts they mark.
+ */
+export const CHECK_BARS = { voiceOverBedDb: 10, minBrollSec: 1.2, truePeak: -1.0, lufs: -14 };
+/** A shot is slow when it moves under this share of the cut's median motion, or under SLOW_SHOT_FLOOR. */
+const SLOW_SHOT_RATIO = 0.35;
+const SLOW_SHOT_FLOOR = 0.6;
+/** A phrase of this many words said again within REPEAT_WITHIN words is a repeat. */
+const REPEAT_WORDS = 3;
+const REPEAT_WITHIN = 14;
+const NUMBER_WORDS_AS_DIGITS = { zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10", twenty: "20", thirty: "30" };
+/** A heard word as the checks compare it: lower case, no punctuation, a number word as its digits. */
+export const checkWord = (s) => {
+  const t = String(s).toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9%$]/g, "");
+  return NUMBER_WORDS_AS_DIGITS[t] ?? t;
+};
+
+/** Caption screens that hold words of two script lines. `words` carry their line (lineWords). */
+export function lineMixes(screens, words) {
+  return screens
+    .filter((c) => new Set(words.filter((w) => w.start >= c.s - 0.01 && w.start < c.e).map((w) => w.line)).size > 1)
+    .map((c) => ({ s: c.s, text: c.text }));
+}
+
+/** A phrase of REPEAT_WORDS or more words said again within REPEAT_WITHIN words. `heard`: [{ w, s }]. */
+export function repeats(heard) {
+  const t = heard.map((h) => checkWord(h.w));
+  const out = [];
+  for (let i = 0; i + REPEAT_WORDS <= t.length; i++) {
+    const phrase = t.slice(i, i + REPEAT_WORDS).join(" ");
+    for (let j = i + REPEAT_WORDS; j + REPEAT_WORDS <= Math.min(t.length, i + REPEAT_WORDS + REPEAT_WITHIN); j++) {
+      if (t.slice(j, j + REPEAT_WORDS).join(" ") === phrase) {
+        out.push({ phrase, firstAt: roundMs(heard[i].s), againAt: roundMs(heard[j].s) });
+        i += REPEAT_WORDS - 1;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** B-roll and narrated shots on screen for less than CHECK_BARS.minBrollSec. `shots`: [{ n, role, start, end }]. */
+export function shortShots(shots, minSec = CHECK_BARS.minBrollSec) {
+  return shots
+    .filter((s) => ["b-roll", "overlay", "vo-enactment"].includes(s.role) && s.end - s.start < minSec)
+    .map((s) => ({ n: s.n, role: s.role, at: s.start, sec: roundMs(s.end - s.start) }));
+}
+
+/**
+ * Shots whose motion is far under the cut's median. A shot of someone talking
+ * to camera (a-roll) sits still at natural speed, so it is never slow here.
+ * `motion`: [{ n, role, sec, motion }].
+ */
+export function slowShots(motion) {
+  const values = motion.map((m) => m.motion).filter((x) => x != null).sort((a, b) => a - b);
+  if (!values.length) return [];
+  const median = values[Math.floor(values.length / 2)];
+  return motion
+    .filter((m) => m.role !== "a-roll" && m.motion != null && m.sec >= 1 && (m.motion < median * SLOW_SHOT_RATIO || m.motion < SLOW_SHOT_FLOOR))
+    .map((m) => ({ ...m, median: roundMs(median) }));
+}
+
+/** The voice's loudness over the rest's, in dB; null when the voice is silent, 60 when the rest is. */
+export const voiceOverBed = (voiceLufs, bedLufs) =>
+  voiceLufs == null || bedLufs == null || voiceLufs < -60 ? null : bedLufs < -60 ? 60 : roundMs(voiceLufs - bedLufs);
+
+/** What fails the bars, in words; the cut passes when nothing does. */
+export function checkVerdict(c, bars = CHECK_BARS) {
+  const fails = [];
+  if (c.lineMixes?.length) fails.push(`${c.lineMixes.length} caption screens mix two lines`);
+  if (c.voiceOverBedDb != null && c.voiceOverBedDb < bars.voiceOverBedDb) fails.push(`voice ${c.voiceOverBedDb} dB over the bed (bar ${bars.voiceOverBedDb})`);
+  if (c.repeats?.length) fails.push(`${c.repeats.length} phrase(s) said twice`);
+  if (c.shortShots?.length) fails.push(`${c.shortShots.length} b-roll shot(s) under ${bars.minBrollSec} s`);
+  if (c.slowShots === null) fails.push("shot motion could not be measured");
+  else if (c.slowShots?.length) fails.push(`${c.slowShots.length} slow shot(s)`);
+  if (c.truePeak != null && c.truePeak > bars.truePeak) fails.push(`true peak ${c.truePeak} dBTP (bar ${bars.truePeak})`);
+  if (c.lufs != null && Math.abs(c.lufs - bars.lufs) > 1) fails.push(`loudness ${c.lufs} LUFS (bar ${bars.lufs} ± 1)`);
+  return { pass: !fails.length, fails };
+}
+
+/** Frame-to-frame change of a file's picture, on a 90 px wide copy, printed per frame. `from`/`seconds` read a stretch. */
+export function motionArgs(file, from = null, seconds = null) {
+  return [
+    "-hide_banner", "-nostats",
+    ...(from !== null ? ["-ss", sec(from)] : []), ...(seconds !== null ? ["-t", sec(seconds)] : []),
+    "-i", file, "-an",
+    "-vf", "scale=90:-2,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+    "-f", "null", "-",
+  ];
+}
+
+/** motionArgs' printout as [{ t, y }]: each frame's time and its mean change. */
+export function readMotion(stdout) {
+  const rows = [];
+  let t = null;
+  for (const line of String(stdout ?? "").split("\n")) {
+    const time = line.match(/pts_time:([\d.]+)/);
+    if (time) {
+      t = Number(time[1]);
+      continue;
+    }
+    const y = line.match(/YAVG=([\d.]+)/);
+    if (y && t !== null) rows.push({ t, y: Number(y[1]) });
+  }
+  return rows;
+}
+
+/** Each shot's mean motion, its first and last 0.1 s left out so a cut is not counted as motion. */
+export function motionByShot(rows, shots) {
+  return shots.map((s) => {
+    const v = rows.filter((r) => r.t > s.start + 0.1 && r.t < s.end - 0.1).map((r) => r.y);
+    return { n: s.n, role: s.role, at: roundMs(s.start), sec: roundMs(s.end - s.start), motion: v.length ? roundMs(v.reduce((x, y) => x + y, 0) / v.length) : null };
+  });
+}
+
+/** The part a spine segment plays on screen, as the checks read shots: a scene speaking its own lines (or a reaction) is a-roll. */
+const roleOf = (seg) => (seg.reaction || seg.audio === "clip" ? "a-roll" : seg.audio === "narration" ? "vo-enactment" : "b-roll");
+
+/**
+ * cutChecks: the finished cut against CHECK_BARS. `screens` are the caption
+ * screens burned in (null for none), `rows` and `scenes` the cut's words and
+ * shots as written beside it, `levels` the voice's and the bed's loudness from
+ * the render. Caption sync is not checked: it needs a transcription of the
+ * finished cut of its own, and the cut's words are the ones its captions came from.
+ */
+function checkCut({ timeline, storyboard, screens, rows, scenes, out, loudness, levels }) {
+  const roles = new Map(timeline.spine.map((seg) => [seg.sceneIndex, roleOf(seg)]));
+  for (const c of timeline.cutaways) roles.set(c.sceneIndex, "b-roll");
+  const shots = scenes.map((p) => ({ n: p.scene, role: roles.get(p.scene) ?? "b-roll", start: p.startSec, end: roundMs(p.startSec + p.seconds) }));
+  const read = spawnSync("ffmpeg", motionArgs(out), { encoding: "utf8", maxBuffer: 1 << 28 });
+  const motion = read.status === 0 ? readMotion(read.stdout) : [];
+  const finished = loudness ? { i: loudness.lufs, tp: loudness.truePeak } : measureLoudness(out);
+  const checks = {
+    lineMixes: screens ? lineMixes(screens, lineWords(timeline, storyboard)) : null,
+    // A song laid whole is the voice and the music at once, so it has no level over a bed.
+    voiceOverBedDb: timeline.wholeVoice ? null : voiceOverBed(levels.voiceLufs, levels.bedLufs),
+    voiceLufs: levels.voiceLufs,
+    bedLufs: levels.bedLufs,
+    repeats: repeats(rows.map((r) => ({ w: r.text, s: r.start }))),
+    shortShots: shortShots(shots),
+    // null: ffmpeg could not read the motion, so no shot was checked.
+    slowShots: motion.length ? slowShots(motionByShot(motion, shots)) : null,
+    lufs: finished ? round2(finished.i) : null,
+    truePeak: finished ? round2(finished.tp) : null,
+  };
+  return { ...checks, verdict: checkVerdict(checks) };
+}
+
 const LOUDNORM_TARGET = `I=${FINISH_LUFS}:TP=${FINISH_TRUE_PEAK}:LRA=${FINISH_LRA}`;
 
 /** finishLoudness, pass one: measure a file's sound. Its numbers come back on stderr as JSON. */
@@ -2366,9 +2749,10 @@ export function readLoudness(stderr) {
 /**
  * finishLoudness, pass two: the whole mix normalized with pass one's numbers,
  * the picture copied as it is. Without them (pass one could not read the
- * sound) loudnorm runs on its own, in one pass.
+ * sound) loudnorm runs on its own, in one pass. `limiter` (limitPeaks) runs
+ * after it.
  */
-export function loudnessApplyArgs(mix, measured, out) {
+export function loudnessApplyArgs(mix, measured, out, limiter = null) {
   const second = measured
     ? `:measured_I=${measured.i}:measured_TP=${measured.tp}:measured_LRA=${measured.lra}` +
       `:measured_thresh=${measured.thresh}:offset=${measured.offset}:linear=true`
@@ -2376,7 +2760,7 @@ export function loudnessApplyArgs(mix, measured, out) {
   return [
     "-y", "-hide_banner", "-loglevel", "error", "-i", mix,
     "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
-    "-af", `loudnorm=${LOUDNORM_TARGET}${second},aresample=48000`,
+    "-af", `loudnorm=${LOUDNORM_TARGET}${second}${limiter ? `,${limiter}` : ""},aresample=48000`,
     "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
   ];
 }
@@ -2405,9 +2789,9 @@ function measureLufs(file) {
 }
 
 /** Both passes on the rendered mix, then the finished cut measured again; throws LoudnessRefusal over the limit. */
-export function finishLoudnessPass(mix, out) {
+export function finishLoudnessPass(mix, out, limiter = null) {
   const measured = measureLoudness(mix);
-  const args = loudnessApplyArgs(mix, measured, out);
+  const args = loudnessApplyArgs(mix, measured, out, limiter);
   const res = spawnSync("ffmpeg", args, { stdio: "inherit" });
   if (res.status !== 0) {
     const quoted = args.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
@@ -2416,16 +2800,24 @@ export function finishLoudnessPass(mix, out) {
   const finished = measureLoudness(out);
   const refusal = truePeakRefusal(finished);
   if (refusal) throw new LoudnessRefusal(refusal, finished);
-  return { lufs: round2(finished.i), truePeak: round2(finished.tp), passes: measured ? 2 : 1 };
+  return { lufs: round2(finished.i), truePeak: round2(finished.tp), passes: measured ? 2 : 1, ...(limiter ? { limited: true } : {}) };
+}
+
+/** The filters of `names` this ffmpeg does not have. */
+function missingFilters(names) {
+  const listed = spawnSync("ffmpeg", ["-hide_banner", "-filters"]).stdout?.toString() ?? "";
+  return names.filter((name) => !new RegExp(`^\\s*\\S+\\s+${name}\\s`, "m").test(listed));
 }
 
 /** Whether this ffmpeg has a filter (the captions and cards need `subtitles`, which needs libass). */
 function hasFilter(name) {
-  const listed = spawnSync("ffmpeg", ["-hide_banner", "-filters"]).stdout?.toString() ?? "";
-  return new RegExp(`^\\s*\\S+\\s+${name}\\s`, "m").test(listed);
+  return missingFilters([name]).length === 0;
 }
 
-/** The files the finishing settings write beside the cut: the pace record, and the mix before the loudness pass. */
+/**
+ * The files the finishing settings write beside the cut: the pace record, the
+ * mix before the loudness pass, and the voice and bed cutChecks measures.
+ */
 export function finishPaths(outPath) {
   const dir = path.dirname(outPath);
   const base = path.basename(outPath, path.extname(outPath));
@@ -2434,6 +2826,8 @@ export function finishPaths(outPath) {
     mix: path.join(dir, `${base}.mix${path.extname(outPath)}`),
     sound: path.join(dir, `${base}.sound.json`),
     master: path.join(dir, `${base}.music-only${path.extname(outPath)}`),
+    voice: path.join(dir, `${base}.voice.wav`),
+    bed: path.join(dir, `${base}.bed.wav`),
   };
 }
 
@@ -2560,7 +2954,22 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
   // A voice laid whole is a song: it is never sped up.
   const speed = finish?.cutPace && !timeline.wholeVoice ? speedFor(pictureSec, finish.targetSeconds) : 1;
+  if (finish?.brollMinSec) {
+    const held = holdBroll(timeline, finish.brollMinSec, speed, (file) => probe(file).seconds);
+    timeline.left.push(...held);
+    notes.push(...held);
+  }
+  if (finish?.speedUpSlowBroll && timeline.cutaways.length > 0) {
+    const motionOf = (file, from, seconds) => {
+      const res = spawnSync("ffmpeg", motionArgs(here(file), from, seconds), { encoding: "utf8", maxBuffer: 1 << 28 });
+      if (res.status !== 0) return null;
+      return motionByShot(readMotion(res.stdout), [{ n: 0, role: null, start: 0, end: seconds }])[0].motion;
+    };
+    notes.push(...speedUpSlowBroll(timeline, motionOf, (file) => probe(file).seconds));
+  }
   let ass = null;
+  // The caption screens burned in, which cutChecks reads.
+  let burned = null;
   // A copied ad: its words in the record's boxes and its product photos from the product sheet.
   const copied = sourceAd && finish?.cards ? sourceAdEdit(storyboard, sourceAd, timeline.sourceGroups ?? []) : null;
   if (copied) notes.push(...copied.notes);
@@ -2580,9 +2989,16 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     if (hasFilter("subtitles")) {
       ass = "edit.ass";
       const cap = sourceAd?.captions ?? null;
+      const screens = !finish.captions
+        ? []
+        : finish.captionsByLine
+          ? lineCaptionScreens(lineWords(timeline, storyboard), cap)
+          : captionScreens(wordRows(timeline), cap);
+      if (finish.captions) burned = screens;
       writeFileSync(here(ass), editAss({
-        captions: finish.captions ? captionScreens(wordRows(timeline), cap) : [],
+        captions: screens,
         cap,
+        ...(finish.captionsByLine ? { capMaxShare: CAPTION_MAX_SHARE } : {}),
         cards: finish.cards ? (copied ? copied.cards : storyboardCards(storyboard, timeline)) : [],
         hook: copied?.hook ?? null,
         // A copied ad has an end card only where its source does.
@@ -2592,8 +3008,22 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       notes.push("this ffmpeg has no subtitles filter (libass), so the captions and cards were not burned in");
     }
   }
+  // cleanVoice, where this ffmpeg has the filters. A voice laid whole is a song, kept as it is.
+  let clean = null;
+  if (finish?.cleanVoice) {
+    const missing = timeline.wholeVoice ? [] : missingFilters(CLEAN_FILTERS);
+    if (timeline.wholeVoice) notes.push("the voice is a song laid whole, so it was kept as it is, not cleaned");
+    else if (missing.length > 0) notes.push(`this ffmpeg has no ${missing.join(", ")} filter, so the voice was not cleaned`);
+    else clean = { voice: VOICE_CLEAN, under: UNDER_VOICE };
+  }
+  let limiter = null;
+  if (finish?.limitPeaks) {
+    if (hasFilter("alimiter")) limiter = PEAK_LIMITER;
+    else notes.push("this ffmpeg has no alimiter filter, so the loudness pass ran without the limiter");
+  }
   const paths = finishPaths(out);
   const rendered = finish?.finishLoudness ? paths.mix : out;
+  const meters = finish?.cutChecks ? { voice: paths.voice, bed: paths.bed } : null;
   // The burn reads its file from the folder ffmpeg runs in, so every path is absolute then.
   const at = ass ? (file) => path.resolve(dir, file) : here;
 
@@ -2621,7 +3051,14 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     resolve: at,
     music: music ? at(music) : null,
     out: rendered,
-    ...(finish ? { finish: { levelSegments: !finish.finishLoudness, ass, speed, ...(pictures.length ? { pictures } : {}) } } : {}),
+    ...(finish
+      ? {
+        finish: {
+          levelSegments: !finish.finishLoudness, ass, speed,
+          ...(pictures.length ? { pictures } : {}), ...(clean ? { clean } : {}), ...(meters ? { meters } : {}),
+        },
+      }
+      : {}),
     ...(mixSound ? { sound: mixSound } : {}),
   });
   const res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass ? { cwd: path.resolve(dir) } : {}) });
@@ -2629,10 +3066,16 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     const quoted = ffmpegArgs.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
     throw new FirstCutError(1, `ffmpeg failed. The command it ran:\n  ffmpeg ${quoted}`);
   }
+  let meterLevels = null;
+  if (meters) {
+    meterLevels = { voiceLufs: measureLufs(meters.voice), bedLufs: measureLufs(meters.bed) };
+    rmSync(meters.voice, { force: true });
+    rmSync(meters.bed, { force: true });
+  }
   let loudness = null;
   if (finish?.finishLoudness) {
     try {
-      loudness = finishLoudnessPass(rendered, out);
+      loudness = finishLoudnessPass(rendered, out, limiter);
     } finally {
       rmSync(rendered, { force: true });
     }
@@ -2686,8 +3129,11 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const withSound = (cut) => (soundRecord ? { ...cut, sound: soundRecord, ...(soundRecord.master ? { musicOnlyMaster: paths.master } : {}) } : cut);
   if (!finish) return withSound({ out, durationSec, manifest, timeline, music, rows, sidecars });
 
+  const checks = finish.cutChecks
+    ? checkCut({ timeline, storyboard, screens: burned, rows, scenes, out, loudness, levels: meterLevels })
+    : null;
   // The pace record: the cut's own numbers, the settings it was cut with (so
-  // a redo of the run matches), and its loudness once the pass ran.
+  // a redo of the run matches), its loudness once the pass ran, and its checks.
   const pace = {
     ...paceReport({
       ourShots: scenes.map((p) => ({ start: p.startSec, end: roundMs(p.startSec + p.seconds) })),
@@ -2699,6 +3145,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     }),
     finishing: finish,
     ...(loudness ? { loudness } : {}),
+    ...(checks ? { checks } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
   writeFileSync(paths.pace, `${JSON.stringify(pace, null, 2)}\n`);

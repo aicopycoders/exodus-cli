@@ -1,11 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { apiGet, apiPost, getDashboardUrl } from "../lib/client.js";
 import { displayRunStatus, formatApiError } from "../lib/format.js";
 import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
-import { hasBinary } from "../lib/preflight.js";
+import { probeDurationSec } from "../lib/preflight.js";
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, } from "./video-customer.js";
@@ -74,6 +74,15 @@ The whole loop, in order:
      here only when its checks find a problem.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
+     exodus video broll <runId>
+       On a run started with --broll: the B-roll shots and the script lines.
+       Add a shot on a line, move one, or remove one while the storyboard
+       waits. Each change redraws only the pictures it changes, and every
+       other picture stays as it was. Wait for it before you approve.
+     exodus video quote <runId> [--private]
+       A format that quotes its video requests stops before a prepared paid
+       request, even on a One-shot run. Review its exact requests and prices here,
+       then approve those same requests with --request-quote <reviewSha256>.
 
   7. exodus video status <runId>
      Where the run is and how each scene's clip turned out. If the storyboard
@@ -86,6 +95,30 @@ The whole loop, in order:
 
   8. exodus video pull <runId> --out ./ad
      Writes every piece to that folder plus a manifest.json index.
+
+     exodus video review <runId> --file ./cut.mp4 --accept | --reject
+       [--resolve "<findingKey>|accepted-as-is|<why>" ...] [--disagree "<findingKey>|<your words>" ...]
+       Record YOUR review of the final cut as it is now. It binds to that exact
+       local file's bytes and filename; its hash must match the stored final cut.
+       A different cut needs a new review. Give every critical finding a note; a
+       finding still on the cut cannot be called fixed, and your disagreement is
+       kept as you wrote it.
+       --heard "<scene>|<observed speaker>|<term>|<what you heard>|accept|reject"
+       records your own listen against the selected take's actual bytes. Repeat
+       per watched term. The script's speaker and ASR are never a human listen.
+       --heard-final "<observed speaker>|<term>|<what you heard>|accept|reject"
+       listens to the exact final file instead, including its narration or Song.
+       A scene-take listen is never reinterpreted as a final-file listen.
+
+     exodus video song <runId>
+       The Song master to listen to: its sha256s, lyric, coverage, and whether
+       it can be approved at all. Never the audio bytes.
+     exodus video song approve <runId> --master <masterSha256>
+       Approve exactly the master you listened to (a changed one is refused).
+     exodus video song import <runId> --file song.mp3 --lyric @lyric.txt --rights "<who owns it and consents>" [--from <s> --to <s>]
+       Use your own recording as the Song. The rights statement is kept
+       verbatim; the lyric is one line per scene, and a lyric line nobody can
+       hear on the recording keeps it from being approved.
 
      exodus video retry-clip <runId> --scene <n>
        Redo ONE finished clip while the run waits for the cut. Everything
@@ -112,16 +145,24 @@ The whole loop, in order:
 
 Usage:
   exodus video status <runId> [--rejected-draft] [--json]
+  exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
+  exodus video song <runId> [--json]
+  exodus video song approve <runId> --master <masterSha256> [--json]
+  exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "<statement>" [--from <s> --to <s>] [--json]
   exodus video storyboard <runId> [--json]
   exodus video approve <runId> [--approve-stale-cut] [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
+  exodus video broll <runId> [--json]
+  exodus video broll add <runId> --line <id> [--note "..."] [--json]
+  exodus video broll move <runId> --scene <n> --line <id> [--note "..."] [--json]
+  exodus video broll remove <runId> --scene <n> [--json]
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--music] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
   exodus video director <runId> <on|off|follow> [--json]
 
 Options:
@@ -129,13 +170,17 @@ Options:
   --file <cut.mp4>     Your finished cut (upload). MP4, MOV or WebM, up to 200MB
   --duration <sec>     How long your cut is, in seconds. Only needed when the
                        length can't be read off the file itself
-  --note "<text>"      How to steer one redo (retry-frame, retry-clip)
+  --note "<text>"      How to steer one redo (retry-frame, retry-clip), or
+                       what a B-roll shot should show (broll add, broll move)
+  --line <id>          The script line a B-roll shot goes on (broll add,
+                       broll move). exodus video broll <runId> lists the ids
   --node <nodeId>      Which scene-frames node holds the still (retry-frame;
                        admins pass it, beta testers leave it off).
                        Which video step holds the clip, when a scene has one on
                        more than one step (retry-clip, revoice)
   --scene <n>          Which scene to redo. One scene only, a whole number
-                       (retry-frame, retry-clip, revoice)
+                       (retry-frame, retry-clip, revoice). Which B-roll shot
+                       to move or remove (broll move, broll remove)
   --all                Every finished clip that kept the video model's voice
                        (revoice)
   --voice-first        Record the scene's line in the character's own voice,
@@ -144,6 +189,9 @@ Options:
   --approve-stale-cut  Deliver the cut you uploaded even though a clip changed
                        after you uploaded it (approve). Without it, approving
                        stops and names the scenes that changed
+  --accept-findings    Go on past the check's findings on a storyboard it
+                       stopped (approve). Without it, approving that
+                       storyboard stops and says why
   --set <who>=<voice>  Give a character a voice (voices). The voice is a
                        catalog voice's name, like George, or an ElevenLabs
                        voice ID. Name the character by its ID or by the name
@@ -165,6 +213,16 @@ Options:
                        the server can't tell who says a line, it asks and
                        starts nothing. If a description is too thin to write
                        from, it says what is missing and starts nothing
+  --source-record <file.json>
+                       A real ad's source record (start, with --conceit), for
+                       a kind of ad that copies an ad shot for shot. Without
+                       one such a kind plans its own scenes; any other kind
+                       refuses it
+  --adaptation-plan <file|original>
+                       A swipe's adaptation plan JSON (start, with --conceit),
+                       for a template that keeps its source's roles and beats,
+                       or "original" for a brief with no source ad. Any other
+                       kind refuses it
   --stop-at-script     Print the script the run would start on, and start
                        nothing (start, with --conceit). To read a written or
                        laid-out script first; send it back with --script
@@ -194,6 +252,8 @@ Options:
   --music              Put a music bed under the ad (start). An ad has no music
                        unless you ask for it here
   --no-music           Leave the music bed off (start), which it already is
+  --broll              Cut away to B-roll shots in the ad (start, with
+                       --conceit). Only for accounts with B-roll switched on
   --one-shot           Make the whole video with no stop (start, with
                        --conceit). The app approves its own storyboard when
                        its checks pass and goes straight on to the clips,
@@ -213,13 +273,14 @@ Options:
 
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
---style, --direction, --frame, --pacing, --music, --one-shot,
+--style, --direction, --frame, --pacing, --music, --source-record, --one-shot,
 --review-storyboard, --stop-at-script, --rewrite-to-fit),
 status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
 picture while the storyboard waits), pull (the finished video, each scene's
 clip and voice, and the music) and upload. These stay admin-only:
 start --video-model / --voice / --voice-path / --director, director,
-status --rejected-draft, retry-clip and revoice.
+status --rejected-draft, retry-clip, revoice and broll. start --broll works
+for whoever B-roll is switched on for.
 If a command answers "video isn't enabled for this key", the run id is wrong,
 the command is admin-only, or video isn't switched on for your dashboard user.
 
@@ -230,6 +291,8 @@ Examples:
   exodus video storyboard run_123
   exodus video approve run_123
   exodus video retry-frame run_123 --node frames-1 --scene 2
+  exodus video broll run_123
+  exodus video broll add run_123 --line L4 --note "close on the jar lid"
   exodus video retry-clip run_123 --scene 3 --note "keep the handshake in frame"
   exodus video retry-clip run_123 --scene 3 --voice-first
   exodus video revoice run_123 --all
@@ -251,8 +314,17 @@ export const ITEMS_PATH = "/api/v2/workflow/items";
 const REJECTED_DRAFT_PATH = "/api/v2/workflow/rejected-draft";
 const REJECTED_DRAFT_NOT_ON_THIS_SERVER = "This Exodus server does not keep rejected drafts yet, so there is nothing to read. It arrives " +
     "with the next server update.";
+const LINEAGE_PATH = "/api/v2/video/lineage";
+const LINEAGE_NOT_ON_THIS_SERVER = "This Exodus server does not keep run lineage yet, so there is nothing to read. It arrives " +
+    "with the next server update.";
+const REVIEW_PATH = "/api/v2/video/review";
+const SONG_PATH = "/api/v2/video/song";
+const SONG_APPROVE_PATH = "/api/v2/video/song/approve";
+const SONG_IMPORT_PATH = "/api/v2/video/song/import";
+const QUOTE_PATH = "/api/v2/video/quote";
 const STORYBOARD_PATH = "/api/v2/video/storyboard";
 const FLAG_PATH = "/api/v2/video/storyboard/flag";
+const BROLL_PATH = "/api/v2/video/storyboard/broll";
 const APPROVE_PATH = "/api/v2/workflow/approve";
 const SCENE_RETRY_PATH = "/api/v2/workflow/scene/retry";
 const SCENE_REVOICE_PATH = "/api/v2/workflow/scene/revoice";
@@ -317,15 +389,6 @@ export function asVideoRun(data) {
     const run = (data ?? {});
     return { ...run, nodes: Array.isArray(run.nodes) ? run.nodes : [] };
 }
-function defaultProbeDurationSec(filePath) {
-    if (!hasBinary("ffprobe"))
-        return null;
-    const res = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath], { encoding: "utf-8" });
-    if (res.error || res.status !== 0)
-        return null;
-    const seconds = Number.parseFloat((res.stdout ?? "").trim());
-    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
-}
 export const defaultDeps = {
     get: (p) => apiGet(p),
     post: (p, body) => apiPost(p, body),
@@ -363,14 +426,14 @@ export const defaultDeps = {
         const parsed = (await res.json().catch(() => ({})));
         return { ok: true, status: res.status, storageId: parsed.storageId };
     },
-    probeDurationSec: defaultProbeDurationSec,
+    probeDurationSec,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     dashboardUrl: getDashboardUrl(),
 };
 export const VIDEO_NOT_FOUND_MESSAGE = "video isn't enabled for this key\n" +
     "One of three things: that run id doesn't exist on this brand, this command is for admins only " +
-    "(director, status --rejected-draft, retry-clip, revoice), or video isn't " +
+    "(director, status --rejected-draft, retry-clip, revoice, broll), or video isn't " +
     "switched on for your dashboard user on this brand. Check the id first, then ask Brad.";
 export function videoApiError(res) {
     const behind = missingRouteLine(res, "exodus video");
@@ -432,6 +495,8 @@ export function classifyRun(run) {
                 ...(why ? { error: why } : {}),
             };
         }
+        if (run.requestQuotePending === true)
+            return { at: "request-quote" };
         const pausedNode = run.nodes.find((n) => n.nodeId === run.pausedNodeId);
         if (pausedNode && parkedAtStoryboardGate(run, pausedNode)) {
             const held = heldReason(run);
@@ -558,6 +623,12 @@ function missingSceneLines(missing, framesNodeId, runId, runUrl) {
     return lines;
 }
 export function stopLines(stop, runId, runUrl) {
+    if (stop.at === "request-quote")
+        return [
+            "Parked: final provider requests are prepared; the unapproved paid operations have not been sent.",
+            `Review the exact requests and prices: exodus video quote ${runId}`,
+            `Approve the reviewed identities: exodus video approve ${runId} --request-quote <reviewSha256>`,
+        ];
     if (stop.at === "storyboard-gate") {
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
@@ -738,6 +809,7 @@ function clipFromArtifact(sceneIndex, artifact) {
         voiceFirstBlockedBy: artifact.voiceFirstBlockedBy ?? null,
         voicePitchHz: artifact.voicePitchHz ?? null,
         voicePitchMethod: artifact.voicePitchMethod ?? null,
+        replannedIdea: artifact.replannedIdea ?? null,
     };
 }
 function keyframeDownload(sceneIndex, imageUrl) {
@@ -894,23 +966,37 @@ function isNarrationMaster(artifact) {
         artifact.sceneIndex === undefined &&
         Array.isArray(artifact.narration?.cuts));
 }
+function withoutLookRider(prompt) {
+    return prompt.replace(/\n\nCUTAWAY STYLE: [\s\S]*$/, "");
+}
+function withReplannedPrompts(raw, replanned) {
+    let board;
+    try {
+        board = JSON.parse(raw);
+    }
+    catch {
+        return raw;
+    }
+    if (!Array.isArray(board.scenes))
+        return raw;
+    const scenes = board.scenes.map((scene) => {
+        const idea = typeof scene.sceneIndex === "number" ? replanned.get(scene.sceneIndex) : undefined;
+        return idea ? { ...scene, ...idea } : scene;
+    });
+    return JSON.stringify({ ...board, scenes }, null, 2);
+}
 export function planPull(run, items, opts) {
     const texts = [];
     const storyboardArtifact = run.nodes
         .flatMap((n) => n.outputs ?? [])
         .find((a) => a.type === "storyboard");
-    let storyboard = null;
-    if (storyboardArtifact) {
-        const raw = typeof storyboardArtifact.storyboardJson === "string"
+    const storyboardRaw = storyboardArtifact
+        ? typeof storyboardArtifact.storyboardJson === "string"
             ? storyboardArtifact.storyboardJson
             : storyboardArtifact.storyboard !== undefined
                 ? JSON.stringify(storyboardArtifact.storyboard, null, 2)
-                : undefined;
-        if (raw !== undefined) {
-            storyboard = "storyboard.json";
-            texts.push({ file: storyboard, body: raw.endsWith("\n") ? raw : `${raw}\n` });
-        }
-    }
+                : undefined
+        : undefined;
     let reference = null;
     let productSheet = null;
     let setPlate = null;
@@ -1047,6 +1133,21 @@ export function planPull(run, items, opts) {
     const pendingRedo = scenesBeingRedone(run, items);
     for (const sceneIndex of pendingRedo)
         clipByScene.delete(sceneIndex);
+    const replanned = new Map();
+    for (const [sceneIndex, clip] of clipByScene) {
+        if (!clip.replannedIdea)
+            continue;
+        const { imageUrl, framePrompt, videoPrompt } = clip.replannedIdea;
+        keyframeByScene.set(sceneIndex, keyframeDownload(sceneIndex, imageUrl));
+        if (framePrompt && videoPrompt)
+            replanned.set(sceneIndex, { framePrompt, videoPrompt });
+    }
+    let storyboard = null;
+    if (storyboardRaw !== undefined) {
+        const body = replanned.size > 0 ? withReplannedPrompts(storyboardRaw, replanned) : storyboardRaw;
+        storyboard = "storyboard.json";
+        texts.unshift({ file: storyboard, body: body.endsWith("\n") ? body : `${body}\n` });
+    }
     const sceneIndexes = [
         ...new Set([
             ...clipByScene.keys(),
@@ -1137,6 +1238,10 @@ export function planPull(run, items, opts) {
                 .filter((scene) => scene.findings.some((f) => f.code === MUSIC_HEARD_CODE))
                 .map((scene) => scene.sceneIndex),
             pendingRedo,
+            dropped: [...clipItemByScene.values()]
+                .filter((item) => item.status === "rejected")
+                .map((item) => item.sceneIndex)
+                .sort((a, b) => a - b),
             cast,
             narration: narrationDownload
                 ? { file: narrationDownload.file, timing: "narration.json" }
@@ -1414,6 +1519,12 @@ export function planVideoStart(flags, occurrences) {
     const pacingFlag = planValueFlag(occurrences, "pacing");
     if (!pacingFlag.ok)
         return { kind: "usage", line: pacingFlag.line };
+    const recordFlag = planValueFlag(occurrences, "source-record");
+    if (!recordFlag.ok)
+        return { kind: "usage", line: recordFlag.line };
+    const planFlag = planValueFlag(occurrences, "adaptation-plan");
+    if (!planFlag.ok)
+        return { kind: "usage", line: planFlag.line };
     const videoModel = videoModelFlag.value;
     const voiceMode = voiceFlag.value;
     const reviewStoryboardFlag = occurrences.some((o) => o.flag === "review-storyboard");
@@ -1450,6 +1561,14 @@ export function planVideoStart(flags, occurrences) {
         };
     }
     const director = directorFlags.length > 0;
+    const brollFlags = occurrences.filter((o) => o.flag === "broll");
+    if (brollFlags.some((o) => o.value !== undefined && !o.value.startsWith("--"))) {
+        return {
+            kind: "usage",
+            line: "--broll takes no value. Leave it off to start without B-roll.",
+        };
+    }
+    const broll = brollFlags.length > 0;
     const stopFlags = occurrences.filter((o) => o.flag === "stop-at-script");
     if (stopFlags.some((o) => o.value !== undefined && !o.value.startsWith("--"))) {
         return {
@@ -1482,6 +1601,24 @@ export function planVideoStart(flags, occurrences) {
         return {
             kind: "usage",
             line: "--director works with --conceit, not --show.",
+        };
+    }
+    if (showId && recordFlag.value) {
+        return {
+            kind: "usage",
+            line: "--source-record works with --conceit, not --show.",
+        };
+    }
+    if (showId && planFlag.value) {
+        return {
+            kind: "usage",
+            line: "--adaptation-plan works with --conceit, not --show.",
+        };
+    }
+    if (showId && broll) {
+        return {
+            kind: "usage",
+            line: "--broll works with --conceit, not --show.",
         };
     }
     if (showId && (frameFlag.value || pacingFlag.value)) {
@@ -1550,10 +1687,16 @@ export function planVideoStart(flags, occurrences) {
         opts.reviewStoryboard = true;
     if (director)
         opts.director = true;
+    if (broll)
+        opts.broll = true;
     if (stopAtScript)
         opts.stopAtScript = true;
     if (rewriteToFit)
         opts.rewriteToFit = true;
+    if (recordFlag.value)
+        opts.sourceRecordFile = recordFlag.value;
+    if (planFlag.value)
+        opts.adaptationPlanFile = planFlag.value;
     if (frameFlag.value || pacingFlag.value) {
         opts.shots = {
             ...(frameFlag.value ? { frame: frameFlag.value } : {}),
@@ -1819,6 +1962,31 @@ export async function startScriptFlow(opts, deps) {
     if (script.trim().length === 0) {
         return { code: 1, lines: [`The script file "${opts.scriptFile}" is empty.`] };
     }
+    let sourceRecord;
+    if (opts.sourceRecordFile) {
+        try {
+            sourceRecord = JSON.parse(deps.readFile(opts.sourceRecordFile));
+        }
+        catch (e) {
+            return {
+                code: 1,
+                lines: [
+                    `Can't read the source record "${opts.sourceRecordFile}" as JSON: ${e instanceof Error ? e.message : String(e)}`,
+                ],
+            };
+        }
+    }
+    let adaptationPlan;
+    if (opts.adaptationPlanFile) {
+        try {
+            adaptationPlan = opts.adaptationPlanFile === "original"
+                ? { kind: "original", reason: "Member explicitly selected an original brief." }
+                : JSON.parse(deps.readFile(opts.adaptationPlanFile));
+        }
+        catch (error) {
+            return { code: 1, lines: [`Can't read semantic adaptation JSON: ${String(error)}`] };
+        }
+    }
     const listed = await deps.get(SCRIPT_RUNS_PATH).catch(() => null);
     if (listed?.ok) {
         const options = scriptRunOptionsOf(listed.data);
@@ -1841,9 +2009,12 @@ export async function startScriptFlow(opts, deps) {
         ...(opts.music === true ? { music: true } : {}),
         ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
         ...(opts.director ? { director: true } : {}),
+        ...(opts.broll ? { broll: true } : {}),
         ...(opts.shots ? { shots: opts.shots } : {}),
         ...(opts.stopAtScript ? { stopAtScript: true } : {}),
         ...(opts.rewriteToFit ? { rewriteToFit: true } : {}),
+        ...(sourceRecord !== undefined ? { sourceRecord } : {}),
+        ...(adaptationPlan !== undefined ? { adaptationPlan } : {}),
     });
     if (!res.ok)
         return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
@@ -2019,6 +2190,7 @@ const ITEM_STATUS_WORD = {
     running: "working",
     idle: "waiting",
     skipped: "skipped",
+    rejected: "left out",
 };
 function itemWord(item) {
     if (!item)
@@ -2170,6 +2342,10 @@ export async function statusFlow(runId, json, deps) {
             }
             if (row.clip?.error)
                 lines.push(`       ${row.clip.error}`);
+            const usedIdea = row.clip?.artifact?.type === "video" ? row.clip.artifact.replannedIdea : undefined;
+            if (usedIdea?.framePrompt) {
+                lines.push(`       clip: made from a new idea instead of the approved one. It shows: ${withoutLookRider(usedIdea.framePrompt)}`);
+            }
             if (revoicedByScene.has(sceneIndex))
                 lines.push("       voice: cast voice applied");
             if (voiceFirstByScene.has(sceneIndex))
@@ -2366,12 +2542,29 @@ export async function storyboardFlow(runId, json, deps) {
         .get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`)
         .catch(() => null);
     const showAd = runRes?.ok === true && isShowAd(asVideoRun(runRes.data));
-    lines.push("", `approve with: exodus video approve ${runId}`);
+    const logic = cards.logicFindings;
+    if (logic) {
+        lines.push("", "The check before pictures");
+        if (logic.findings.length === 0)
+            lines.push("  nothing found");
+        for (const f of logic.findings) {
+            const where = f.scenes.length ? ` (scene ${f.scenes.join(", ")})` : "";
+            lines.push(`  ${f.id} ${f.severity}, ${f.kind}${where}: ${f.what}`);
+        }
+        for (const n of logic.notes ?? [])
+            lines.push(`  note: ${n}`);
+    }
+    lines.push("", logic?.open
+        ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
+        : `approve with: exodus video approve ${runId}`);
     if (showAd) {
         lines.push(`send it back: exodus video flag ${runId} --note "what's wrong"`);
     }
     if (cards.framesNodeId) {
         lines.push(`redo one frame: exodus video retry-frame ${runId} --node ${cards.framesNodeId} --scene <n>`);
+    }
+    if (cards.broll === true) {
+        lines.push(`change the B-roll shots: exodus video broll ${runId}`);
     }
     return { code: 0, lines };
 }
@@ -2397,14 +2590,88 @@ function sceneCardLines(scene) {
         lines.push(`    picture: ${scene.frame.status}`);
     return lines;
 }
+function readPreparedQuotes(data) {
+    if (!data || typeof data !== "object" || !("prepared" in data) || !Array.isArray(data.prepared))
+        return null;
+    const result = [];
+    const seen = new Set();
+    for (const q of data.prepared) {
+        if (!q || typeof q !== "object" ||
+            !Number.isInteger(q.sceneIndex) || q.sceneIndex < 0 || seen.has(q.sceneIndex) ||
+            q.operation !== "clip" ||
+            typeof q.requestSha256 !== "string" || !/^[0-9a-f]{64}$/.test(q.requestSha256) ||
+            typeof q.refsSha256 !== "string" || !/^[0-9a-f]{64}$/.test(q.refsSha256) ||
+            typeof q.model !== "string" || typeof q.mode !== "string" ||
+            typeof q.durationSec !== "number" || !Number.isFinite(q.durationSec) || q.durationSec <= 0 ||
+            typeof q.quotedUsd !== "number" || !Number.isFinite(q.quotedUsd) || q.quotedUsd < 0 ||
+            (q.voiceId !== undefined && typeof q.voiceId !== "string"))
+            return null;
+        seen.add(q.sceneIndex);
+        result.push({
+            sceneIndex: q.sceneIndex, requestSha256: q.requestSha256, refsSha256: q.refsSha256,
+            operation: q.operation,
+            model: q.model, mode: q.mode, durationSec: q.durationSec, quotedUsd: q.quotedUsd,
+            ...(q.voiceId !== undefined ? { voiceId: q.voiceId } : {}),
+        });
+    }
+    return result;
+}
+function quoteReviewHash(prepared) {
+    return createHash("sha256").update(JSON.stringify([...prepared].sort((a, b) => a.sceneIndex - b.sceneIndex || a.operation.localeCompare(b.operation)))).digest("hex");
+}
+export async function quoteFlow(runId, json, deps, privateExport = false) {
+    const res = await deps.get(`${QUOTE_PATH}?runId=${encodeURIComponent(runId)}${privateExport ? "&private=1" : ""}`);
+    if (!res.ok)
+        return errorResult(res, json);
+    const prepared = readPreparedQuotes(res.data);
+    if (!prepared)
+        return { code: 1, lines: ["The server did not return readable prepared request identities. Nothing was approved."] };
+    if (prepared.length === 0)
+        return { code: 1, lines: ["No final requests have been prepared yet. Nothing can be quoted or approved."] };
+    const reviewSha256 = quoteReviewHash(prepared);
+    const privateView = res.data && typeof res.data === "object" && "private" in res.data ? res.data.private : undefined;
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ runId, prepared, reviewSha256, ...(privateView !== undefined ? { private: privateView } : {}) })] };
+    return { code: 0, lines: [
+            `EXACT REQUEST QUOTE — ${runId}`,
+            ...prepared.flatMap((q) => [
+                `  scene ${q.sceneIndex} ${q.operation}: ${q.model} / ${q.mode} / ${q.durationSec}s / $${q.quotedUsd.toFixed(4)}${q.voiceId ? ` / voice ${q.voiceId}` : ""}`,
+                `    request sha256: ${q.requestSha256}`,
+                `    references sha256: ${q.refsSha256}`,
+            ]),
+            `  total: $${prepared.reduce((sum, q) => sum + q.quotedUsd, 0).toFixed(4)}`,
+            `Approve only these requests: exodus video approve ${runId} --request-quote ${reviewSha256}`,
+            ...(privateExport ? [privateView === undefined
+                    ? "Private request review is not available for this caller or run."
+                    : `AUTHORIZED RAW REQUEST REVIEW: ${JSON.stringify(privateView)}`] : []),
+        ] };
+}
 export async function approveFlow(runId, opts, deps) {
+    let requestQuote;
+    if (opts.requestQuoteHash !== undefined) {
+        const read = await deps.get(`${QUOTE_PATH}?runId=${encodeURIComponent(runId)}`);
+        if (!read.ok)
+            return errorResult(read, opts.json);
+        const prepared = readPreparedQuotes(read.data);
+        if (!prepared)
+            return { code: 1, lines: ["The server did not return readable prepared request identities. Nothing was approved."] };
+        if (!prepared.length || quoteReviewHash(prepared) !== opts.requestQuoteHash) {
+            return { code: 1, lines: [`The prepared requests are not the quote you reviewed. Review again: exodus video quote ${runId}`] };
+        }
+        requestQuote = { quotes: prepared };
+    }
     const res = await deps.post(APPROVE_PATH, {
         runId,
+        ...(opts.acceptFindings ? { acceptFindings: true } : {}),
         ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
+        ...(requestQuote ? { requestQuote } : {}),
     });
     if (!res.ok) {
         const refusal = errorResult(res, opts.json);
         const staleCut = !opts.json && videoApiError(res).includes("approve this cut anyway");
+        if (!opts.json && videoApiError(res).includes("accept the findings")) {
+            return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId} --accept-findings`] };
+        }
         return staleCut
             ? {
                 ...refusal,
@@ -2503,6 +2770,144 @@ export async function retryFrameFlow(runId, nodeId, sceneIndex, note, json, deps
             `Redoing scene ${sceneIndex} on ${nodeId}.`,
             `triggerRunId: ${triggerRunId ?? "-"}`,
             "Neighbours stay. The pixel gate holds.",
+        ],
+    };
+}
+export const BROLL_EDIT_STALE_MS = 10 * 60 * 1000;
+const BROLL_OPS = ["add", "move", "remove"];
+export function planBrollCommand(rest, flags) {
+    const op = BROLL_OPS.find((o) => o === rest[0]);
+    if (!op) {
+        if (!rest[0])
+            return { kind: "usage", line: "video broll needs a run id: exodus video broll <runId>" };
+        return { kind: "list", runId: rest[0] };
+    }
+    const runId = rest[1];
+    if (!runId) {
+        return { kind: "usage", line: `video broll ${op} needs a run id: exodus video broll ${op} <runId>` };
+    }
+    const lineId = nonBlank(flagString(flags, "line"))?.trim();
+    const note = nonBlank(flagString(flags, "note"))?.trim();
+    const sceneRaw = flagString(flags, "scene");
+    const sceneIndex = sceneRaw === undefined ? undefined : Number(sceneRaw);
+    if (sceneIndex !== undefined && !(Number.isInteger(sceneIndex) && sceneIndex >= 1)) {
+        return { kind: "usage", line: `video broll ${op} --scene must be a scene number, not "${sceneRaw}".` };
+    }
+    const withNote = note ? { note } : {};
+    if (op === "add") {
+        if (!lineId) {
+            return { kind: "usage", line: "video broll add needs --line <id>, the script line the shot goes on." };
+        }
+        return { kind: "edit", runId, edit: { op, lineId, ...withNote } };
+    }
+    if (sceneIndex === undefined) {
+        return {
+            kind: "usage",
+            line: `video broll ${op} needs --scene <n>, the B-roll shot to ${op}.`,
+        };
+    }
+    if (op === "remove") {
+        if (note)
+            return { kind: "usage", line: "video broll remove takes no --note." };
+        return { kind: "edit", runId, edit: { op, sceneIndex } };
+    }
+    if (!lineId) {
+        return { kind: "usage", line: "video broll move needs --line <id>, the script line to move the shot to." };
+    }
+    return { kind: "edit", runId, edit: { op, sceneIndex, lineId, ...withNote } };
+}
+function seconds(value) {
+    return `${Number(value.toFixed(1))}s`;
+}
+function brollEditLines(edit, now) {
+    if (!edit || edit.landed)
+        return [];
+    const asked = edit.op === "move"
+        ? `moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}`
+        : `a new B-roll shot on line ${edit.lineId}`;
+    if (edit.error !== undefined) {
+        return [`The last B-roll change (${asked}) didn't work: ${edit.error}`];
+    }
+    if (now - edit.requestedAt >= BROLL_EDIT_STALE_MS) {
+        return [`The last B-roll change (${asked}) never finished. You can ask for it again.`];
+    }
+    return [`Planning now: ${asked}. Then the storyboard pictures it changes are redrawn.`, BROLL_WAIT];
+}
+const BROLL_WAIT = "Wait for it to finish before you change another shot or approve the storyboard.";
+export async function brollFlow(runId, json, deps) {
+    const res = await deps.get(`${STORYBOARD_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (!res.ok)
+        return errorResult(res, json);
+    if (customerAnswer(res.data)) {
+        return adminOnlyResult("Changing the B-roll from the CLI isn't open to this key.", json);
+    }
+    const gate = res.data;
+    if (gate.broll !== true) {
+        if (json)
+            return { code: 0, lines: [JSON.stringify({ runId, broll: false })] };
+        return { code: 0, lines: ["This video was made without B-roll, so there are no B-roll shots to change."] };
+    }
+    const shots = gate.brollShots ?? [];
+    const scriptLines = gate.scriptLines ?? [];
+    const edit = gate.brollEdit ?? null;
+    const now = deps.now();
+    const planning = !!edit && edit.error === undefined && !edit.landed && now - edit.requestedAt < BROLL_EDIT_STALE_MS;
+    if (json) {
+        return {
+            code: 0,
+            lines: [JSON.stringify({ runId, broll: true, planning, brollEdit: edit, brollShots: shots, scriptLines })],
+        };
+    }
+    if (scriptLines.length === 0) {
+        return {
+            code: 0,
+            lines: [
+                "The storyboard isn't finished yet, so there are no B-roll shots to change yet.",
+                `Check where it is: exodus video status ${runId}`,
+            ],
+        };
+    }
+    const lines = brollEditLines(edit, now);
+    if (lines.length > 0)
+        lines.push("");
+    lines.push("B-roll shots");
+    if (shots.length === 0)
+        lines.push("  None yet.");
+    for (const shot of shots) {
+        lines.push(`  Scene ${shot.sceneIndex}, on line ${shot.lineId}, ${seconds(shot.plannedSec)}: "${shot.covers}"`);
+    }
+    lines.push("", "Script lines (pick one by its id)");
+    for (const line of scriptLines) {
+        lines.push(`  ${line.lineId}  ${line.speakerId ?? "narrator"}: ${line.text}`);
+    }
+    lines.push("");
+    if (planning) {
+        lines.push(`Check again: exodus video broll ${runId}`);
+    }
+    else {
+        lines.push(`Add a shot:    exodus video broll add ${runId} --line <id> --note "what it shows"`, `Move a shot:   exodus video broll move ${runId} --scene <n> --line <id>`, `Remove a shot: exodus video broll remove ${runId} --scene <n>`);
+    }
+    return { code: 0, lines };
+}
+export async function brollEditFlow(runId, edit, json, deps) {
+    const res = await deps.post(BROLL_PATH, { runId, ...edit });
+    if (!res.ok)
+        return errorResult(res, json);
+    const said = edit.op === "remove"
+        ? `B-roll scene ${edit.sceneIndex} is gone. The storyboard pictures it changes are being redrawn.`
+        : `${edit.op === "add"
+            ? `Planning a B-roll shot on line ${edit.lineId}.`
+            : `Moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}.`} Then the storyboard pictures it changes are redrawn.`;
+    if (json) {
+        return { code: 0, lines: [JSON.stringify({ runId, ...res.data, message: `${said} ${BROLL_WAIT}` })] };
+    }
+    return {
+        code: 0,
+        lines: [
+            said,
+            BROLL_WAIT,
+            `Check on it: exodus video broll ${runId}`,
+            `See the pictures: exodus video storyboard ${runId}`,
         ],
     };
 }
@@ -3180,9 +3585,11 @@ export async function pullFlow(runId, dir, json, deps) {
         if (failure)
             markPullFailure(plan.manifest, failure);
     }
+    if (run.sourceEditMap === true)
+        plan.manifest.lineage = await pullLineage(runId, dir, deps);
     deps.writeFile(path.join(dir, "manifest.json"), `${JSON.stringify(plan.manifest, null, 2)}\n`);
     const failed = plan.manifest.failed;
-    const wrote = plan.downloads.length + plan.texts.length - failed.length + 1;
+    const wrote = plan.downloads.length + plan.texts.length - failed.length + 1 + (plan.manifest.lineage?.file ? 1 : 0);
     if (json) {
         return {
             code: failed.length > 0 ? 1 : 0,
@@ -3194,6 +3601,9 @@ export async function pullFlow(runId, dir, json, deps) {
         `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
         ...musicLines(plan.manifest),
     ];
+    if (plan.manifest.dropped.length > 0) {
+        lines.push("", `B-roll left out on purpose (no clip; the edit stays on the speaker): scene${plan.manifest.dropped.length === 1 ? "" : "s"} ${plan.manifest.dropped.join(", ")}. Cut with --skip ${plan.manifest.dropped.join(",")}.`);
+    }
     for (const sceneIndex of plan.manifest.pendingRedo) {
         lines.push("", `Scene ${sceneIndex} is being redone right now; its file will change. Run \`exodus video wait ${runId}\`, then pull again.`);
     }
@@ -3390,13 +3800,33 @@ function readSidecar(file, parse, max, deps) {
     const parsed = rows.map(parse);
     return parsed.every((r) => r !== null) ? parsed : null;
 }
+async function pullLineage(runId, dir, deps) {
+    const res = await deps.get(`${LINEAGE_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (!res.ok) {
+        return { file: null, reason: res.status === 404 ? LINEAGE_NOT_ON_THIS_SERVER : `could not read it: ${videoApiError(res)}` };
+    }
+    const lineage = res.data?.lineage;
+    if (typeof lineage !== "object" || lineage === null) {
+        return { file: null, reason: "the server answered without a lineage" };
+    }
+    deps.writeFile(path.join(dir, "lineage.json"), `${JSON.stringify(res.data, null, 2)}\n`);
+    return { file: "lineage.json" };
+}
 export function cutSidecars(filePath, deps) {
     const base = path.join(path.dirname(filePath), path.basename(filePath, path.extname(filePath)));
     const cutScenes = readSidecar(`${base}.scenes.json`, cutScene, CUT_SCENES_MAX, deps);
     const cutWords = readSidecar(`${base}.words.json`, cutWord, CUT_WORDS_MAX, deps);
-    return { ...(cutScenes ? { cutScenes } : {}), ...(cutWords ? { cutWords } : {}) };
+    let finalSourceMap;
+    try {
+        const raw = JSON.parse(deps.readFile(`${base}.source-map.json`));
+        if (raw && typeof raw === "object" && "version" in raw && raw.version === "source-edit-map.v2")
+            finalSourceMap = raw;
+    }
+    catch {
+    }
+    return { ...(cutScenes ? { cutScenes } : {}), ...(cutWords ? { cutWords } : {}), ...(finalSourceMap ? { finalSourceMap } : {}) };
 }
-export async function uploadFlow(runId, filePath, durationFlag, json, deps) {
+export async function uploadFlow(runId, filePath, durationFlag, json, deps, options = {}) {
     const stat = deps.statFile(filePath);
     if (!stat)
         return { code: 1, lines: [`No such file: ${filePath}`] };
@@ -3475,11 +3905,15 @@ export async function uploadFlow(runId, filePath, durationFlag, json, deps) {
     if (!assetId) {
         return { code: 1, lines: ["The server stored the file but did not say what to call it."] };
     }
+    const finalSha256 = timing.finalSourceMap || options.bindFinalBytes
+        ? createHash("sha256").update(bytes).digest("hex")
+        : undefined;
     const attaching = await withUploadRetry("attach", deps, () => deps.post(FINAL_PATH, {
         runId,
         assetId,
         durationSec,
         ...timing,
+        ...(finalSha256 ? { finalSha256 } : {}),
     }));
     if (!attaching.ok)
         return uploadRetryResult(attaching, json);
@@ -3524,6 +3958,226 @@ export async function uploadFlow(runId, filePath, durationFlag, json, deps) {
             ],
     };
 }
+export function parseReviewFlags(flags, occurrences) {
+    const accept = flags["accept"] !== undefined && flags["accept"] !== false;
+    const reject = flags["reject"] !== undefined && flags["reject"] !== false;
+    if (accept === reject)
+        return { ok: false, line: "video review needs exactly one of --accept or --reject." };
+    const file = flagString(flags, "file");
+    if (!file)
+        return { ok: false, line: "video review needs --file <cut.mp4>, the actual final file you reviewed." };
+    const resolutions = [];
+    const disagreements = [];
+    const humanListens = [];
+    for (const o of occurrences) {
+        if (o.flag === "resolve") {
+            const [findingKey, resolution, ...why] = (o.value ?? "").split("|");
+            if (!findingKey || (resolution !== "accepted-as-is" && resolution !== "waived") || !why.join("|").trim()) {
+                return { ok: false, line: 'video review --resolve is "<findingKey>|accepted-as-is|<why>" (or waived); a finding still on the cut is never "fixed".' };
+            }
+            resolutions.push({ findingKey, resolution, note: why.join("|").trim() });
+        }
+        else if (o.flag === "disagree") {
+            const [findingKey, ...words] = (o.value ?? "").split("|");
+            if (!findingKey || !words.join("|").trim())
+                return { ok: false, line: 'video review --disagree is "<findingKey>|<your words>".' };
+            disagreements.push({ findingKey, note: words.join("|").trim() });
+        }
+        else if (o.flag === "heard") {
+            const [scene, speaker, term, heard, decision, ...extra] = (o.value ?? "").split("|");
+            if (extra.length || !scene?.trim() || !Number.isInteger(Number(scene)) ||
+                !speaker?.trim() || !term?.trim() || !heard?.trim() || (decision !== "accept" && decision !== "reject")) {
+                return { ok: false, line: 'video review --heard is "<scene>|<observed speaker>|<term>|<what you heard>|accept|reject".' };
+            }
+            humanListens.push({ scope: "selected-take", sceneIndex: Number(scene), speaker: speaker.trim(), term: term.trim(), heard: heard.trim(), accepted: decision === "accept" });
+        }
+        else if (o.flag === "heard-final") {
+            const [speaker, term, heard, decision, ...extra] = (o.value ?? "").split("|");
+            if (extra.length || !speaker?.trim() || !term?.trim() || !heard?.trim() || (decision !== "accept" && decision !== "reject")) {
+                return { ok: false, line: 'video review --heard-final is "<observed speaker>|<term>|<what you heard>|accept|reject".' };
+            }
+            humanListens.push({ scope: "final-file", speaker: speaker.trim(), term: term.trim(), heard: heard.trim(), accepted: decision === "accept" });
+        }
+    }
+    return {
+        ok: true,
+        opts: {
+            verdict: accept ? "accept" : "reject",
+            file,
+            resolutions,
+            disagreements,
+            ...(humanListens.length ? { humanListens } : {}),
+            ...(flagString(flags, "grade") ? { gradeVersion: flagString(flags, "grade") } : {}),
+            ...(flagString(flags, "media") ? { mediaVersion: flagString(flags, "media") } : {}),
+        },
+    };
+}
+export async function reviewFlow(runId, opts, deps) {
+    const read = await deps.get(`${LINEAGE_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (missingRouteLine(read, "exodus video review"))
+        return { code: 1, lines: [LINEAGE_NOT_ON_THIS_SERVER] };
+    if (!read.ok)
+        return errorResult(read, opts.json);
+    const final = read.data.lineage.final;
+    if (final.state !== "known")
+        return { code: 1, lines: [`There is no final cut to review yet (${final.reason}).`] };
+    const file = final.value.file;
+    if (file.sha256Base64.state !== "known") {
+        return { code: 1, lines: [`The final cut's stored hash could not be read (${file.sha256Base64.reason}), so it cannot be reviewed yet.`] };
+    }
+    let reviewedBytes;
+    try {
+        reviewedBytes = deps.readFileBytes(opts.file);
+    }
+    catch (err) {
+        return { code: 1, lines: [`Cannot read the reviewed file: ${err instanceof Error ? err.message : String(err)}`] };
+    }
+    const reviewedHash = createHash("sha256").update(reviewedBytes).digest("base64");
+    if (reviewedHash !== file.sha256Base64.value) {
+        return { code: 1, lines: ["That file's bytes do not match the current stored final cut. Pull and review the current file."] };
+    }
+    const res = await deps.post(REVIEW_PATH, {
+        runId,
+        verdict: opts.verdict,
+        storageId: file.storageId,
+        sha256Base64: file.sha256Base64.value,
+        filename: path.basename(opts.file),
+        ...(opts.gradeVersion ? { gradeVersion: opts.gradeVersion } : {}),
+        ...(opts.mediaVersion ? { mediaVersion: opts.mediaVersion } : {}),
+        resolutions: opts.resolutions,
+        disagreements: opts.disagreements,
+        ...(opts.humanListens?.length ? { humanListens: opts.humanListens } : {}),
+    });
+    if (missingRouteLine(res, "exodus video review"))
+        return { code: 1, lines: ["This Exodus server does not record final reviews yet."] };
+    if (!res.ok)
+        return errorResult(res, opts.json);
+    const verdict = res.data;
+    if (opts.json)
+        return { code: 0, lines: [JSON.stringify({ runId, storageId: file.storageId, filename: path.basename(opts.file), sha256Base64: reviewedHash, ...verdict })] };
+    const lines = [`Recorded your ${opts.verdict} of ${path.basename(opts.file)} — ${file.storageId} (sha256 base64 ${reviewedHash}).`];
+    if (verdict.ok)
+        lines.push("This final-file review accepts these exact bytes. Delivery still checks the current run gates.");
+    for (const b of verdict.blockers) {
+        lines.push(b.finding
+            ? `  still open: ${b.finding.key} [${b.finding.status}] — answer it with --resolve "${b.finding.key}|accepted-as-is|<why>"`
+            : `  blocks delivery: ${b.kind}${b.scene !== undefined ? ` (scene ${b.scene})` : ""}`);
+    }
+    return { code: 0, lines };
+}
+async function readSongListen(runId, deps) {
+    const res = await deps.get(`${SONG_PATH}?runId=${encodeURIComponent(runId)}`);
+    return { res, song: res.ok ? (res.data.song ?? null) : null };
+}
+const SONG_NOT_ON_THIS_SERVER = "This Exodus server does not hold Song masters for approval yet.";
+export async function songListenFlow(runId, json, deps) {
+    const { res, song } = await readSongListen(runId, deps);
+    if (missingRouteLine(res, "exodus video song"))
+        return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
+    if (!res.ok)
+        return errorResult(res, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ runId, song })] };
+    if (!song)
+        return { code: 0, lines: ["This run holds no Song master yet, so there is nothing to listen to."] };
+    const heard = song.coverage.status === "full" ? "every lyric line heard" : `lyric ${song.coverage.status}${song.coverage.unheardLines.length ? `; no word heard on line ${song.coverage.unheardLines.map((n) => n + 1).join(", ")}` : ""}`;
+    return {
+        code: 0,
+        lines: [
+            `SONG MASTER — ad run ${runId} (${song.source}, ${song.status}, ${song.seconds}s, track ${song.identity.track})`,
+            `  ${song.stop}`,
+            `  listen: ${song.audioUrl}`,
+            `  master sha256: ${song.identity.masterSha256}`,
+            `  lyric sha256: ${song.identity.lyricSha256} — ${heard}`,
+            ...song.lyric.split("\n").map((line, i) => `    ${i + 1}. ${line}`),
+            ...(song.cannotApprove ? [`  cannot be approved: ${song.cannotApprove}`] : []),
+            song.status === "approved"
+                ? `  approved at ${new Date(song.approvedAt ?? 0).toISOString()}`
+                : `  approve it after listening: exodus video song approve ${runId} --master ${song.identity.masterSha256}`,
+        ],
+    };
+}
+export async function songApproveFlow(runId, masterSha256, json, deps) {
+    const { res, song } = await readSongListen(runId, deps);
+    if (missingRouteLine(res, "exodus video song approve"))
+        return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
+    if (!res.ok)
+        return errorResult(res, json);
+    if (!song)
+        return { code: 1, lines: ["This run holds no Song master yet, so there is nothing to approve."] };
+    if (song.identity.masterSha256 !== masterSha256) {
+        return { code: 1, lines: [`The Song master now held is ${song.identity.masterSha256}, not the one you listened to. Listen again: exodus video song ${runId}`] };
+    }
+    const approved = await deps.post(SONG_APPROVE_PATH, { runId, ...song.identity });
+    if (!approved.ok)
+        return errorResult(approved, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, ...approved.data })] };
+    return { code: 0, lines: ["Song master approved. The run may go on to timing and motion."] };
+}
+export async function songImportFlow(runId, opts, json, deps) {
+    const stat = deps.statFile(opts.file);
+    if (!stat)
+        return { code: 1, lines: [`No such file: ${opts.file}`] };
+    const policy = ASSET_UPLOAD_POLICY.audio;
+    const mime = policy.mimeByExtension[path.extname(opts.file).toLowerCase()];
+    if (!mime)
+        return { code: 1, lines: [`"${path.basename(opts.file)}" isn't an audio file the dashboard accepts. It takes ${policy.accepts}.`] };
+    if (stat.size > policy.maxBytes)
+        return { code: 1, lines: [`"${path.basename(opts.file)}" is over the ${Math.round(policy.maxBytes / MB)}MB limit.`] };
+    const lyric = opts.lyric.startsWith("@") ? deps.readFile(opts.lyric.slice(1)) : opts.lyric;
+    let bytes;
+    try {
+        bytes = deps.readFileBytes(opts.file);
+    }
+    catch (e) {
+        return { code: 1, lines: [`Can't read "${opts.file}": ${e instanceof Error ? e.message : String(e)}`] };
+    }
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const minting = await withUploadRetry("mint", deps, () => deps.post(ASSET_UPLOAD_URL_PATH, {}));
+    if (!minting.ok)
+        return uploadRetryResult(minting, json);
+    if (!minting.value.ok)
+        return errorResult(minting.value, json);
+    const { uploadUrl, receiptId } = minting.value.data;
+    if (!uploadUrl || !receiptId)
+        return { code: 1, lines: ["The server did not hand back a place to upload to."] };
+    const storing = await withUploadRetry("store", deps, () => deps.uploadBytes(uploadUrl, mime, bytes));
+    if (!storing.ok)
+        return uploadRetryResult(storing, json);
+    if (!storing.value.ok || !storing.value.storageId)
+        return { code: 1, lines: [`Upload failed (HTTP ${storing.value.status})`] };
+    const storageId = storing.value.storageId;
+    const registering = await withUploadRetry("register", deps, () => deps.post(ASSETS_PATH, { storageId, receiptId, filename: path.basename(opts.file) }));
+    if (!registering.ok)
+        return uploadRetryResult(registering, json);
+    if (!registering.value.ok)
+        return errorResult(registering.value, json);
+    const assetId = registering.value.data.assetId;
+    if (!assetId)
+        return { code: 1, lines: ["The server stored the file but did not say what to call it."] };
+    const res = await deps.post(SONG_IMPORT_PATH, {
+        runId,
+        assetId,
+        sha256,
+        lyric,
+        rightsStatement: opts.rights,
+        ...(opts.trim ? { trim: opts.trim } : {}),
+    });
+    if (missingRouteLine(res, "exodus video song import"))
+        return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
+    if (!res.ok)
+        return errorResult(res, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, assetId, sha256 })] };
+    return {
+        code: 0,
+        lines: [
+            `Your recording is the Song for this run (sha256 ${sha256}).`,
+            `Listen to it and approve it before motion: exodus video song ${runId}`,
+        ],
+    };
+}
 const VALUE_FLAGS = new Set([
     "show",
     "script",
@@ -3535,15 +4189,23 @@ const VALUE_FLAGS = new Set([
     "voice",
     "frame",
     "pacing",
+    "source-record",
+    "adaptation-plan",
     "note",
     "out",
     "file",
     "duration",
     "node",
     "scene",
+    "line",
     "set",
     "clear",
     "from",
+    "to",
+    "master",
+    "lyric",
+    "rights",
+    "request-quote",
 ]);
 export function parsePositional(args = process.argv.slice(3)) {
     const out = [];
@@ -3599,6 +4261,14 @@ export async function run(flags, occurrences) {
             usage(started.lines[0] ?? "");
         return printResult(started);
     }
+    if (sub === "broll") {
+        const plan = planBrollCommand(rest, flags);
+        if (plan.kind === "usage")
+            usage(plan.line);
+        if (plan.kind === "list")
+            return printResult(await brollFlow(plan.runId, json, defaultDeps));
+        return printResult(await brollEditFlow(plan.runId, plan.edit, json, defaultDeps));
+    }
     const runId = rest[0];
     const needsRunId = [
         "status",
@@ -3612,6 +4282,9 @@ export async function run(flags, occurrences) {
         "pull",
         "upload",
         "director",
+        "review",
+        "song",
+        "quote",
     ];
     if (sub === "voices" && flags["catalog"] !== undefined && flags["catalog"] !== false) {
         return printResult(await voiceCatalogFlow(runId, json, defaultDeps));
@@ -3625,6 +4298,37 @@ export async function run(flags, occurrences) {
         }
         return printResult(await statusFlow(runId, json, defaultDeps));
     }
+    if (sub === "review") {
+        const plan = parseReviewFlags(flags, occurrences);
+        if (!plan.ok)
+            usage(plan.line);
+        return printResult(await reviewFlow(runId, { ...plan.opts, json }, defaultDeps));
+    }
+    if (sub === "song") {
+        if (runId === "approve" || runId === "import") {
+            const songRun = rest[1];
+            if (!songRun)
+                usage(`video song ${runId} needs a run id: exodus video song ${runId} <runId>`);
+            if (runId === "approve") {
+                const master = flagString(flags, "master");
+                if (!master)
+                    usage("video song approve needs --master <masterSha256>, the master you listened to.");
+                return printResult(await songApproveFlow(songRun, master, json, defaultDeps));
+            }
+            const file = flagString(flags, "file");
+            const lyric = flagString(flags, "lyric");
+            const rights = flagString(flags, "rights");
+            if (!file || !lyric || !rights)
+                usage('video song import needs --file <audio>, --lyric <text|@file> and --rights "<who owns it and consents>".');
+            const from = flagString(flags, "from");
+            const to = flagString(flags, "to");
+            if ((from === undefined) !== (to === undefined) || (from !== undefined && !(Number(from) >= 0 && Number(to) > Number(from)))) {
+                usage("video song import --from and --to are a cut of the recording in seconds, given together, with --to after --from.");
+            }
+            return printResult(await songImportFlow(songRun, { file, lyric, rights, ...(from !== undefined ? { trim: { from: Number(from), to: Number(to) } } : {}) }, json, defaultDeps));
+        }
+        return printResult(await songListenFlow(runId, json, defaultDeps));
+    }
     if (sub === "storyboard")
         return printResult(await storyboardFlow(runId, json, defaultDeps));
     if (sub === "director") {
@@ -3633,8 +4337,19 @@ export async function run(flags, occurrences) {
             usage(`video director needs on, off or follow: exodus video director ${runId} on`);
         return printResult(await directorFlow(runId, choice.on, json, defaultDeps));
     }
+    if (sub === "quote")
+        return printResult(await quoteFlow(runId, json, defaultDeps, flags["private"] !== undefined && flags["private"] !== false));
     if (sub === "approve") {
-        return printResult(await approveFlow(runId, { json, approveStaleCut: flags["approve-stale-cut"] === true }, defaultDeps));
+        const requestQuoteHash = flagString(flags, "request-quote");
+        if (flags["request-quote"] !== undefined && !/^[0-9a-f]{64}$/.test(requestQuoteHash ?? "")) {
+            usage("--request-quote needs the reviewSha256 printed by exodus video quote.");
+        }
+        return printResult(await approveFlow(runId, {
+            json,
+            approveStaleCut: flags["approve-stale-cut"] === true,
+            acceptFindings: flags["accept-findings"] === true,
+            ...(requestQuoteHash ? { requestQuoteHash } : {}),
+        }, defaultDeps));
     }
     if (sub === "flag") {
         const note = flagString(flags, "note");

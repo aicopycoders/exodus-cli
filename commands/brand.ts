@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { apiGetDashboard, apiPostDashboard } from "../lib/client.js";
-import { sniffImageType, BRAND_IMAGE_MAX_BYTES } from "../lib/image-sniff.js";
+import { apiDeleteDashboard, apiGetDashboard, apiPostDashboard } from "../lib/client.js";
+import {
+  sniffImageType,
+  sniffBrollType,
+  BRAND_IMAGE_MAX_BYTES,
+  BROLL_KIT_MAX_BYTES,
+} from "../lib/image-sniff.js";
+import { probeDurationSec } from "../lib/preflight.js";
 import {
   getActiveBrand,
   setActiveBrand,
@@ -21,6 +27,15 @@ import { pkgRef } from "../lib/channel.js";
 const AUTO_END_MARKER =
   "<!-- exodus:auto-section-end — manual brand notes below survive `brand use` refreshes -->";
 
+// #3918: kinds a member uploads into the B-roll kit (convex/lib/brollKit.ts
+// BROLL_KIT_UPLOAD_KINDS). Logos and product photos come from the brand record.
+const BROLL_KIT_KINDS = ["screen", "result", "testimonial", "crew", "product", "legal"] as const;
+type BrollKitKind = (typeof BROLL_KIT_KINDS)[number];
+const BROLL_KIT_NEEDS_PERMISSION: readonly BrollKitKind[] = ["result", "testimonial"];
+const BROLL_KINDS_HELP =
+  "screen (app or site screen recording), result (client result), testimonial,\n" +
+  "                                crew (crew or job-site footage), product (in hand or in use), legal";
+
 export const helpText = `
 exodus brand — list, switch, and inspect brands available to your CLI
 
@@ -34,6 +49,19 @@ Subcommands:
   exodus brand images add <files...> --kind founder|product|reference
                                 Upload brand-identity images (png/jpg/webp, max 15MB each)
   exodus brand images list      Show the active brand's uploaded identity images
+  exodus brand broll add <file> --kind <kind> --what "<what it shows>" [--permission]
+                                Add a clip or picture to the brand's B-roll kit
+                                (mp4/mov/webm up to 200MB, png/jpg/webp up to 15MB).
+                                Kinds: ${BROLL_KINDS_HELP}
+                                --permission (put it after the file) says you may show
+                                the person; required for result and testimonial
+  exodus brand broll list       Show the B-roll kit (your logo and product photos count too)
+  exodus brand broll remove <id>
+                                Remove one kit item (ids come from broll list)
+  exodus brand show             Show the active brand's two business-type tags
+  exodus brand set --sells <product|service|app|expertise|finance|other>
+                   --promise <body|money|neither>
+                                Change those tags (either flag alone is fine)
 
 Any user can create and own unlimited brands (\`brand create\`) — you do NOT
 need to be an admin, and brands are scoped to you (two users can have the
@@ -388,6 +416,91 @@ function runCurrent(): void {
   }
 }
 
+// Same words the dashboard shows (convex/lib/brandTags.ts). Kept here because
+// the CLI is published on its own and cannot import from convex/.
+const WHAT_YOU_SELL_LABELS = {
+  product: "Products we ship",
+  service: "A service our people do in person",
+  app: "An app or software",
+  expertise: "Coaching, courses or expert help",
+  finance: "Insurance, loans or investing",
+  other: "Something else",
+} as const;
+
+const AD_PROMISE_LABELS = {
+  body: "A better body, health or looks",
+  money: "Money: income, a payout, debt relief or investment returns",
+  neither: "Neither",
+} as const;
+
+type WhatYouSell = keyof typeof WHAT_YOU_SELL_LABELS;
+type AdPromise = keyof typeof AD_PROMISE_LABELS;
+
+interface TagsResp {
+  name: string;
+  whatYouSell: WhatYouSell | null;
+  adPromise: AdPromise | null;
+  setBy: "ai" | "member" | null;
+  unsure: true | null;
+}
+
+const SET_HINT =
+  "Change them with: exodus brand set --sells <product|service|app|expertise|finance|other> --promise <body|money|neither>";
+
+function printTags(t: TagsResp): void {
+  console.log(`Brand: ${t.name}`);
+  if (!t.whatYouSell || !t.adPromise) {
+    console.log("Business type: not set yet. The video will guess from your script.");
+    console.log(SET_HINT);
+    return;
+  }
+  console.log(`What you sell: ${WHAT_YOU_SELL_LABELS[t.whatYouSell]} (${t.whatYouSell})`);
+  console.log(`What the ad promises: ${AD_PROMISE_LABELS[t.adPromise]} (${t.adPromise})`);
+  if (t.setBy === "member") {
+    console.log("Set by: a person on your team");
+  } else {
+    console.log("Set by: AI, from your brand info");
+    if (t.unsure) {
+      console.log("Please check these. The AI had little to go on.");
+    }
+  }
+  console.log(SET_HINT);
+}
+
+function failResponse(status: number, data: unknown): never {
+  const body = data as ApiError;
+  fail(body?.hint ?? body?.detail ?? body?.error ?? `HTTP ${status}`);
+}
+
+async function runShow(): Promise<void> {
+  const res = await apiGetDashboard<TagsResp | ApiError>("/api/brands/tags");
+  if (!res.ok) failResponse(res.status, res.data);
+  printTags(res.data as TagsResp);
+}
+
+async function runSet(flags: Record<string, string | boolean>): Promise<void> {
+  const body: { whatYouSell?: WhatYouSell; adPromise?: AdPromise } = {};
+  if (flags.sells !== undefined) {
+    if (typeof flags.sells !== "string" || !Object.hasOwn(WHAT_YOU_SELL_LABELS, flags.sells)) {
+      fail(`--sells must be one of: ${Object.keys(WHAT_YOU_SELL_LABELS).join(", ")}`);
+    }
+    body.whatYouSell = flags.sells as WhatYouSell;
+  }
+  if (flags.promise !== undefined) {
+    if (typeof flags.promise !== "string" || !Object.hasOwn(AD_PROMISE_LABELS, flags.promise)) {
+      fail(`--promise must be one of: ${Object.keys(AD_PROMISE_LABELS).join(", ")}`);
+    }
+    body.adPromise = flags.promise as AdPromise;
+  }
+  if (!body.whatYouSell && !body.adPromise) {
+    fail(`nothing to change. ${SET_HINT}`);
+  }
+  const res = await apiPostDashboard<TagsResp | ApiError>("/api/brands/tags", body);
+  if (!res.ok) failResponse(res.status, res.data);
+  console.log("✓ Saved.");
+  printTags(res.data as TagsResp);
+}
+
 function runClear(): void {
   clearActiveBrand();
   console.log("✓ Cleared local active brand. Falling back to the key's default.");
@@ -555,6 +668,138 @@ async function runImagesList(): Promise<void> {
   }
 }
 
+// ── Subcommand: broll (#3918) ─────────────────────────────────────
+// The brand's B-roll kit: its own clips and pictures that video ads may cut
+// to. Same upload path as `brand images`: content sniff, one minted URL,
+// bytes straight to Convex storage, then the route records the item.
+
+export type BrollAddArgs =
+  | { ok: true; file: string; kind: BrollKitKind; what: string; permission: boolean }
+  | { ok: false; error: string };
+
+export function parseBrollAdd(files: string[], flags: Record<string, string | boolean>): BrollAddArgs {
+  if (typeof flags["permission"] === "string") {
+    return { ok: false, error: "--permission takes no value; put it after the file" };
+  }
+  if (files.length !== 1) {
+    return { ok: false, error: "brand broll add takes exactly one file" };
+  }
+  const kind = flags["kind"];
+  if (typeof kind !== "string" || !BROLL_KIT_KINDS.includes(kind as BrollKitKind)) {
+    return {
+      ok: false,
+      error:
+        `brand broll add requires --kind ${BROLL_KIT_KINDS.join("|")}` +
+        (kind === "logo" ? " (the logo is uploaded on the dashboard and is already in the kit)" : ""),
+    };
+  }
+  const what = typeof flags["what"] === "string" ? flags["what"].trim() : "";
+  if (!what) {
+    return { ok: false, error: 'brand broll add requires --what "<what it shows>"' };
+  }
+  const permission = flags["permission"] === true;
+  if (BROLL_KIT_NEEDS_PERMISSION.includes(kind as BrollKitKind) && !permission) {
+    return {
+      ok: false,
+      error: `--kind ${kind} needs --permission: you must have permission to show this person`,
+    };
+  }
+  return { ok: true, file: files[0], kind: kind as BrollKitKind, what, permission };
+}
+
+interface BrollKitListItem {
+  id: string;
+  kind: string;
+  media: "video" | "image";
+  description: string;
+  durationSec?: number;
+  url: string | null;
+}
+
+interface BrollKitListResponse {
+  brand: string;
+  items: BrollKitListItem[];
+  logo: boolean;
+  productPhotos: number;
+  error?: string;
+}
+
+async function runBrollAdd(files: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const parsed = parseBrollAdd(files, flags);
+  if (!parsed.ok) fail(`${parsed.error}`);
+  const { file, kind, what, permission } = parsed;
+
+  let size: number;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    fail(`can't read ${file} (does the path exist?)`);
+  }
+  if (size > BROLL_KIT_MAX_BYTES.video) {
+    fail(`${path.basename(file)} is too large (${(size / 1024 / 1024).toFixed(1)}MB > 200MB)`);
+  }
+  const buf = fs.readFileSync(file);
+  const sniffed = sniffBrollType(buf);
+  if (!sniffed) fail(`${path.basename(file)} is not an mp4/mov/webm video or png/jpg/webp picture`);
+  if (buf.length > BROLL_KIT_MAX_BYTES[sniffed.media]) {
+    fail(`${path.basename(file)} is too large (a ${sniffed.media} can be up to ${BROLL_KIT_MAX_BYTES[sniffed.media] / 1024 / 1024}MB)`);
+  }
+  const durationSec = sniffed.media === "video" ? probeDurationSec(file) : null;
+
+  const mint = await apiPostDashboard<{ url?: string; receiptId?: string; error?: string }>(
+    "/api/brands/broll/upload-url",
+    {},
+  );
+  if (!mint.ok || !mint.data.url || !mint.data.receiptId) fail(`${mint.data.error ?? `HTTP ${mint.status} getting an upload URL`}`);
+  const upload = await fetch(mint.data.url, {
+    method: "POST",
+    headers: { "Content-Type": sniffed.mime },
+    body: new Uint8Array(buf),
+  });
+  const uploaded = (await upload.json().catch(() => ({}))) as { storageId?: string };
+  if (!upload.ok || !uploaded.storageId) fail(`storage upload failed (HTTP ${upload.status})`);
+
+  const add = await apiPostDashboard<{ id?: string; error?: string }>("/api/brands/broll", {
+    storageId: uploaded.storageId,
+    receiptId: mint.data.receiptId,
+    kind,
+    description: what,
+    ...(permission ? { permission: true } : {}),
+    ...(durationSec !== null ? { durationSec } : {}),
+  });
+  if (!add.ok) fail(`${add.data.error ?? `HTTP ${add.status} adding to the kit`}`);
+  const length = durationSec !== null ? `, ${durationSec.toFixed(1)}s` : "";
+  console.log(`✓ added ${path.basename(file)} as ${kind} (${sniffed.media}${length}) — id ${add.data.id}`);
+}
+
+async function runBrollList(): Promise<void> {
+  const res = await apiGetDashboard<BrollKitListResponse>("/api/brands/broll");
+  if (!res.ok) fail(`${res.data.error ?? `HTTP ${res.status}`}`);
+  const { brand, items, logo, productPhotos } = res.data;
+  console.log(`brand: ${brand}`);
+  console.log(`B-roll kit: ${items.length} item${items.length === 1 ? "" : "s"}`);
+  for (const item of items) {
+    const length = item.durationSec !== undefined ? ` ${item.durationSec.toFixed(1)}s` : "";
+    console.log(`  ${item.id}  ${item.kind} (${item.media}${length})  ${item.description}`);
+  }
+  console.log(`also in the kit: ${logo ? "logo, " : ""}${productPhotos} product photo${productPhotos === 1 ? "" : "s"}`);
+}
+
+async function runBrollRemove(id: string | undefined): Promise<void> {
+  if (!id) fail("brand broll remove requires an item id (see brand broll list)");
+  const res = await apiDeleteDashboard<{ error?: string }>(`/api/brands/broll?id=${encodeURIComponent(id)}`);
+  if (!res.ok) fail(`${res.data.error ?? `HTTP ${res.status}`}`);
+  console.log(`✓ removed ${id}`);
+}
+
+async function runBroll(args: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const sub = args[0];
+  if (sub === "add") return runBrollAdd(args.slice(1), flags);
+  if (sub === "list" || sub === undefined) return runBrollList();
+  if (sub === "remove") return runBrollRemove(args[1]);
+  fail(`broll: unknown subcommand "${sub}" (use add | list | remove)`);
+}
+
 /**
  * True positionals after `exodus brand` — walks argv with the SAME pairing
  * rules as bin/exodus.ts parseArgs, so a value-taking flag's value (`--kind
@@ -619,6 +864,9 @@ export async function run(
     case "images":
       await runImages(imagesPositionals().slice(1), flags);
       return;
+    case "broll":
+      await runBroll(imagesPositionals().slice(1), flags);
+      return;
     case "list":
     case undefined:
       await runList();
@@ -639,6 +887,12 @@ export async function run(
       return;
     case "clear":
       runClear();
+      return;
+    case "show":
+      await runShow();
+      return;
+    case "set":
+      await runSet(flags);
       return;
     default:
       console.error(`exodus brand: unknown subcommand "${sub}"\n`);

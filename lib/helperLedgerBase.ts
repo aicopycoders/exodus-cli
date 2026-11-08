@@ -1,5 +1,5 @@
-// VENDORED mirror of convex/lib/workflow/helperLedgerBase.ts. The CLI package
-// builds standalone (rootDir ".") and cannot import convex/lib, so this is a copy.
+// VENDORED mirror of video/lib/helperLedgerBase.ts. The CLI package builds
+// standalone (rootDir ".") and cannot import video/lib, so this is a copy.
 // The helper band starts here: picture rows the run page must never show as a
 // scene card live at sceneIndex >= HELPER_LEDGER_BASE (#2147). Each producer
 // owns a sub-range so its rows can't collide with another producer's:

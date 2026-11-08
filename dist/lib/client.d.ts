@@ -28,3 +28,4 @@ export declare function apiPostDashboard<T>(path: string, body: unknown, opts?: 
     timeoutMs?: number;
     activeBrandOverride?: string;
 }): Promise<ApiResponse<T>>;
+export declare function apiDeleteDashboard<T>(path: string): Promise<ApiResponse<T>>;

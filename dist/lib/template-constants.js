@@ -100,6 +100,7 @@ export const AD_TYPES = [
     "vintage-reframe",
     "whiteboard",
     "zipper-reveal",
+    "curiosity-bait",
 ];
 export const AD_TYPE_NAMES = {
     "before-after": "Before / After",
@@ -203,6 +204,7 @@ export const AD_TYPE_NAMES = {
     "vintage-reframe": "Vintage Reframe",
     "whiteboard": "Whiteboard",
     "zipper-reveal": "Zipper Reveal",
+    "curiosity-bait": "Curiosity Bait",
 };
 export const REPTILE_TRIGGERS = [
     "ultra-real",

@@ -112,6 +112,7 @@ export const AD_TYPES = [
   "whiteboard",
   "zipper-reveal",
   // /gen:new-bots:AD_TYPES
+  "curiosity-bait",
 ] as const;
 
 export type AdType = (typeof AD_TYPES)[number];
@@ -220,6 +221,7 @@ export const AD_TYPE_NAMES: Record<AdType, string> = {
   "whiteboard": "Whiteboard",
   "zipper-reveal": "Zipper Reveal",
   // /gen:new-bots:AD_TYPE_NAMES
+  "curiosity-bait": "Curiosity Bait",
 };
 
 export const REPTILE_TRIGGERS = [

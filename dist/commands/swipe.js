@@ -9,7 +9,7 @@ creative inspired by your watchlist's top competitor ads.
 
 Usage:
   exodus swipe run                                       Trigger a run for the active brand
-  exodus swipe mine [--batch N]                          Scrape watchlist competitors (default batch=50)
+  exodus swipe mine [--batch N]                          Mine your brand's competitors on your own Scrape Creators key (default batch=50)
   exodus swipe status <runId>                            Poll a run by id
   exodus swipe latest                                    Show the latest run for the active brand
   exodus swipe history [--limit N]                       Show recent runs (default 20, max 100)
@@ -147,7 +147,7 @@ async function runMinePipeline(flags) {
     }
     console.log(`Mine started: triggerRunId=${res.data.triggerRunId}`);
     console.log(`  batchSize:  ${res.data.batchSize ?? batchSize}`);
-    console.log(`\nScrapes the active watchlist sequentially.`);
+    console.log(`\nMines your brand's active competitors, one at a time, on your own Scrape Creators key.`);
     console.log(`Check progress:  exodus swipe brands list`);
 }
 async function runStatus(positional, flags) {

@@ -128,8 +128,10 @@ CLI words it the way the run page does. On their own brands they can:
 
 Admin-only, answered "video isn't enabled for this key" (or, for retry-clip and
 revoice, a sentence saying they are for admins): `director`,
-`status --rejected-draft`, `retry-clip`, `revoice`, and the start flags
+`status --rejected-draft`, `retry-clip`, `revoice`, `broll`, and the start flags
 `--video-model`, `--voice`, `--voice-path` and `--director`.
+`--broll` works for whoever B-roll is switched on for, beta testers included,
+but nothing open to them changes the shots the app plans (see "B-roll").
 - Other failures: `npx @aicopycoders/exodus doctor` first, then follow what it prints.
 - `ffprobe` on the PATH lets `upload` read the cut's length by itself. Without
   it, `upload` falls back to parsing an MP4's own header, and for anything else
@@ -158,13 +160,18 @@ exodus workflow run <workflowId|name> --input <field>=@script.txt --voices @voic
 exodus workflow run <workflowId|name> --input <field>=@script.txt --voice-treatment @voice-treatment.json --wait
                                                           same, with the video model speaking voices you WROTE
 exodus video status <runId>                               where it is, per scene
-exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--one-shot] [--director] [--stop-at-script] [--rewrite-to-fit] [--wait]
+exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--broll] [--one-shot] [--director] [--stop-at-script] [--rewrite-to-fit] [--wait]
                                                           start from a script and the kinds the server offers.
                                                           The file can be a plain transcript, a draft or a
                                                           description: the server tidies it (see "The script
                                                           file"). --stop-at-script prints the tidied or
                                                           written script and starts nothing.
                                                           No music bed unless you pass --music.
+                                                          --broll cuts away to B-roll shots, for
+                                                          accounts with B-roll switched on. At the
+                                                          storyboard, `video broll` adds, moves or
+                                                          removes a shot (see "Reading the storyboard
+                                                          gate").
                                                           --frame pov (conversation conceits) and --pacing
                                                           (presenter conceits) change the shots; a conceit
                                                           that can't follow one refuses it.
@@ -190,9 +197,20 @@ exodus video director <runId> on|off|follow               the trial director for
 exodus video storyboard <runId>                           read the scene cards
 exodus video voices <runId>                               who speaks and with whose voice
 exodus video voices <runId> --set <character>=<voiceId>   give a character a voice
+exodus video quote <runId>                                a quoting format: the exact prepared requests and prices
+                                                          before any clip; approve them with --request-quote <reviewSha256>
 exodus video approve <runId>                              keep going
+exodus video song <runId>                                 a song-first run: the Song master to listen to
+exodus video song approve <runId> --master <sha256>       approve the master you listened to
+exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "…" [--from <s> --to <s>]
+                                                          use the member's own recording as the Song
 exodus video retry-frame <runId> --node <nodeId> --scene <n>  redo one still at the pixel gate
                                                           (a beta tester leaves --node off)
+exodus video broll <runId>                                B-roll run: the shots, and the script lines by id
+exodus video broll add <runId> --line <id> [--note "…"]   plan a new B-roll shot on that line
+exodus video broll move <runId> --scene <n> --line <id> [--note "…"]
+                                                          move B-roll scene n to another line
+exodus video broll remove <runId> --scene <n>             take B-roll scene n out
 exodus video status <runId>                               where it is, per scene
 exodus video pull <runId> --out ./ad-<runId>              every piece + manifest.json
 exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "…"] [--voice-first]
@@ -200,6 +218,8 @@ exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "…"] [--
 exodus video revoice <runId> --all | --scene <n>          redo only the voice; no new video
                                                           … make the cut (your choice of tool)
 exodus video upload <runId> --file ./ad-<runId>/cut.mp4   attach it
+exodus video review <runId> --file ./ad-<runId>/cut.mp4 --accept | --reject
+                                                          a final-review format: YOUR review of that exact final cut
 exodus video approve <runId>                              make it the ad
 ```
 
@@ -225,7 +245,11 @@ under it:
 
 - storyboard gate: needs `approve`. When the stop block prints a `Redo one
   frame:` line with a node id, one still can be redone first with `retry-frame`;
-  a gate parked before the stills are drawn has nothing to redraw.
+  a gate parked before the stills are drawn has nothing to redraw. When the run
+  has B-roll (`storyboard` ends with a `change the B-roll shots:` line), offer
+  to add a shot on a line with a note, move one, or remove one with `video
+  broll`. Each change redraws only the pictures it changes, so wait for it to
+  finish before you approve.
 - final watch: every piece is made; needs `pull`, a cut, and `upload`. Once a
   cut is uploaded the stop block leads with `approve` instead, and `status
   --json` says which state it is in (`stop.cutAttached`, plus the same next-step
@@ -580,8 +604,64 @@ changing the workflow. Approving is what releases the voices and the clips — t
 expensive part — so do not approve a storyboard you have just told the user is
 wrong.
 
+**When the run has B-roll.** The storyboard ends with `change the B-roll shots:
+exodus video broll <runId>`. Run that: it lists each B-roll shot (its scene
+number, the line it sits on, the words it covers and its seconds) and every
+script line with its id. Tell the user which lines have a shot, then offer three
+changes:
+
+- add a shot on a line, with a note on what it should show:
+  `exodus video broll add <runId> --line <id> --note "what it shows"`
+- move a shot to another line:
+  `exodus video broll move <runId> --scene <n> --line <id>`, with an optional
+  `--note`
+- remove a shot: `exodus video broll remove <runId> --scene <n>`
+
+An add or a move plans the shot on a worker, and then the storyboard pictures it
+changes are redrawn. A remove saves at once, and the pictures it changes are
+redrawn too. Every other picture comes back as it was. While a shot is being
+planned, `video broll` says so and the server refuses another change. Run `video broll <runId>` again until it no longer says
+it is planning, then read the storyboard again before you ask about approving.
+If it says the last change didn't work, pass its sentence to the user as it
+came. Do not approve while a shot is still being planned.
+
 Do not approve on the user's behalf unless they told you to run the whole loop
 unattended.
+
+## B-roll
+
+B-roll is a short shot the picture cuts away to while the speaker's voice keeps
+going: the product, how it works inside the body, a result, a proof. Most top
+ads use it. A run makes none unless it was started with `--broll`, and only an
+account with B-roll switched on can pass it. The choice is fixed when the run
+starts; it cannot be turned on afterwards.
+
+**When to start with `--broll`.** Offer it whenever the script talks about
+something a picture could show: the product, the mechanism, a before and after,
+a number or a result. Leave it off when the user wants nothing but the person
+talking. The app plans the shots and decides how many; it may plan few or none.
+To direct the shots, start Guided (the default). `--one-shot` approves its own
+storyboard, so nobody gets to change the B-roll.
+
+**Reviewing and directing it.** At the storyboard gate, `video broll` lists the
+shots and the lines, and adds, moves or removes one (see "Reading the
+storyboard gate"). That is admin-only: a beta tester sees the shots in the
+storyboard and can approve it, or stop the run on the video's page, but cannot
+change them. A note on an add or a move says what the
+shot should show, in one or two plain sentences ("close on the jar lid
+twisting off", "the cream sinking into the skin, seen from inside"). Keep it
+under 500 characters.
+
+**The look.** A stylized ad (claymation, Pixar, anime, any animated style)
+keeps its own look in every B-roll shot and goes closer or inside the body
+instead. It changes look only when a note asks for a different one. A realistic, live-action ad may use any look a shot needs: a clean 3D
+medical render, an animated diagram, a stock-footage look. Pass the user's
+wish in the note; the app keeps or drops it by this rule.
+
+**A shot that fails.** The app first tries a new idea for the shot, then a still
+picture with a slow zoom. If both fail it leaves the shot out and the speaker
+stays on screen. An admin's `pull` names those scenes and lists them under `dropped` in the
+manifest. They have no clip, so cut with `--skip <those numbers>`.
 
 ## Giving the characters voices
 
@@ -834,6 +914,10 @@ pendingRedo[]                        scene numbers the app is redoing right
                                      because the file on the run is the take
                                      being replaced: run `exodus video wait`,
                                      then pull again
+dropped[]                            B-roll scene numbers the app left out
+                                     after a new idea and a still both failed.
+                                     They have no clip on purpose: cut with
+                                     `--skip` and stay on the speaker
 narration                            { file, timing }, or null on a per-scene run
 cast[]                               one per identity still
   characterId, name                  from the run's cast lock; null for an
@@ -1160,7 +1244,13 @@ Read these out of `storyboard.json` before you build anything, in any tool:
   at the moment that script line is spoken, taking no audio and no place in the
   running order. To find the moment, locate the A-roll scene whose `lineIds`
   contain the cue line, then read the start time of the first word of that line
-  out of that scene's `words.json`.
+  out of that scene's `words.json`. A B-roll cutaway (one with `broll`) starts
+  0.5 s before the first word of `broll.covers` instead (even if that reaches
+  back into the scene before, but never into a reaction or before 0 s), and
+  holds through its last word or for `broll.plannedSec`, whichever is longer,
+  0.8 s to 4 s; a shot planned longer than 4 s (a talking character) holds at
+  least `broll.plannedSec`. The next cutaway, a reaction or the ad's end cuts
+  it short.
 - **Reactions.** A cutaway with `cutawayType: "reaction"` is the exception. Do
   not lay it over the speech. Put it into the running order as its own beat
   right after its cue line ends, play its own sound (the audience laughing),
@@ -1214,7 +1304,10 @@ the pieces:
   carry, fades out over its last 0.4 s instead.
 - **It ignores the continuous master.** It reads only `scene-NN.voice` files;
   it never opens `narration.mp3` or `manifest.narration`. A tool that lays the
-  master down whole and cuts the pictures to it keeps the read intact.
+  master down whole and cuts the pictures to it keeps the read intact. The one
+  exception is a manifest with `wholeVoice: true`, which the automatic cut adds
+  for a kind whose voice is a song: then `narration.mp3` is laid whole and each
+  narrated scene lasts its stretch of it, from `narration.json`'s cuts.
 - Otherwise: A-roll in manifest order as the spine, each reaction put in as its
   own beat of at most 1.5 s right after its cue line with its own sound, each
   other cutaway laid over the spine at its cued word (falling back to a

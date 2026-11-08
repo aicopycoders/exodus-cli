@@ -197,7 +197,13 @@ exodus video director <runId> on|off|follow               the trial director for
 exodus video storyboard <runId>                           read the scene cards
 exodus video voices <runId>                               who speaks and with whose voice
 exodus video voices <runId> --set <character>=<voiceId>   give a character a voice
+exodus video quote <runId>                                a quoting format: the exact prepared requests and prices
+                                                          before any clip; approve them with --request-quote <reviewSha256>
 exodus video approve <runId>                              keep going
+exodus video song <runId>                                 a song-first run: the Song master to listen to
+exodus video song approve <runId> --master <sha256>       approve the master you listened to
+exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "…" [--from <s> --to <s>]
+                                                          use the member's own recording as the Song
 exodus video retry-frame <runId> --node <nodeId> --scene <n>  redo one still at the pixel gate
                                                           (a beta tester leaves --node off)
 exodus video broll <runId>                                B-roll run: the shots, and the script lines by id
@@ -212,6 +218,8 @@ exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "…"] [--
 exodus video revoice <runId> --all | --scene <n>          redo only the voice; no new video
                                                           … make the cut (your choice of tool)
 exodus video upload <runId> --file ./ad-<runId>/cut.mp4   attach it
+exodus video review <runId> --file ./ad-<runId>/cut.mp4 --accept | --reject
+                                                          a final-review format: YOUR review of that exact final cut
 exodus video approve <runId>                              make it the ad
 ```
 

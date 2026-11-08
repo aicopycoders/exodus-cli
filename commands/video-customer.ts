@@ -31,6 +31,7 @@ export type CustomerStopReason =
   | { kind: "out-of-credits" }
   | { kind: "openrouter-out-of-credits" }
   | { kind: "plan-too-big" }
+  | { kind: "plan-rejected" }
   | { kind: "keys-missing"; keys: string[] };
 
 export interface CustomerRun {
@@ -172,6 +173,12 @@ function stoppedLines(run: CustomerRun, page: string): string[] {
     return [
       "This video's plan came out too big to make in one go.",
       `Try again from the video's page and it will be planned fresh: ${page} If it stops here again, try a shorter script.`,
+    ];
+  }
+  if (reason?.kind === "plan-rejected") {
+    return [
+      "This video's plan didn't pass our checks.",
+      `Try again from the video's page: ${page} If it stops here again, try a shorter script or another kind of ad.`,
     ];
   }
   if (reason?.kind === "keys-missing") {

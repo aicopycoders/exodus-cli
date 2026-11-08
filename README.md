@@ -40,6 +40,22 @@ npx -y @aicopycoders/exodus@beta doctor
 `doctor` diagnoses local and dashboard-side issues in one shot — keys, workspace
 health, CLI currency — and tells you exactly what to fix.
 
+### Listen to and approve a run's Song
+
+A run that sings its ad holds one Song master. Listen before motion starts:
+
+- `video song <runId>` prints the Song's sha256s, its lyric, which lyric lines
+  were heard, and whether it can be approved. It never downloads the audio.
+- `video song approve <runId> --master <masterSha256>` approves exactly the
+  master you listened to. If the run now holds a different one, nothing is
+  approved.
+- `video song import <runId> --file song.mp3 --lyric @lyric.txt --rights "<who
+  owns it and consents>" [--from <s> --to <s>]` uses your own recording as the
+  Song. The rights statement is kept as written, and the server records you,
+  the signed-in member, as the person who confirmed it. Write the lyric one
+  line per scene. A line nobody can hear on the recording keeps the Song from
+  being approved.
+
 ## Where to go next
 
 - `npx -y @aicopycoders/exodus@beta --help` — the full command surface.

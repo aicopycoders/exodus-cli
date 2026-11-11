@@ -20,6 +20,7 @@ import {
   customerAnswer,
   customerRunPage,
   customerStageIsWorking,
+  customerCutHeld,
   customerStageLines,
   customerStatusLines,
   customerStoryboardLines,
@@ -947,6 +948,11 @@ export interface VideoRun {
   storyboardAutoApproval?: { outcome: "approved" | "held"; at: number; reason?: string };
   /** The saved workflow this run executed (`projectRun`, convex/workflows.ts). */
   workflowId?: string;
+  /**
+   * #4257: the scenes the app's final cut is held for at the final watch, each
+   * waiting on a keep or a remake. Absent otherwise, and from older backends.
+   */
+  cutHeldScenes?: number[];
   /** #1851: set only when the run's workflow row is module-owned, which is what
    *  a Show ad run is. The CLI is never told the `showId`, so this is the only
    *  thing here that tells a Show ad apart from a member's own workflow run. */
@@ -1136,7 +1142,7 @@ export type RunStop =
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string }
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[] }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
@@ -1370,6 +1376,7 @@ export function classifyRun(run: VideoRun): RunStop {
         at: "final-watch",
         ...(missingScenes.length > 0 ? { missingScenes } : {}),
         ...(missingScenes.length > 0 && framesNodeId ? { framesNodeId } : {}),
+        ...(run.cutHeldScenes?.length ? { heldScenes: run.cutHeldScenes } : {}),
       };
     }
     return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -1553,6 +1560,23 @@ function missingSceneLines(
 }
 
 /**
+ * #4257: the app's cut is held for scenes whose drawing fault outlived its
+ * redo. Keeping a clip as it is happens on the video's page only.
+ */
+function heldSceneLines(scenes: number[], runId: string, videoPage: string): string[] {
+  const one = scenes.length === 1;
+  return [
+    `Held: ${scenesPhrase(scenes)} still ${one ? "has" : "have"} a drawing fault after ${one ? "it was" : "they were"} made again, so the final video wasn't made.`,
+    ...scenes.map((scene) =>
+      one
+        ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
+        : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`,
+    ),
+    `${one ? "Keep it as it is" : "Keep them as they are"}: on the video's page, ${videoPage}`,
+  ];
+}
+
+/**
  * Stop 4: the pilot's lines, in section-3 order: what was made, where to watch, what each check found, the two
  * commands. A failed pilot says so and names its scene in the redo. Every failed or skipped check prints, so nothing
  * about the clip is approved unseen.
@@ -1593,7 +1617,8 @@ function pilotLines(stop: Extract<RunStop, { at: "pilot" }>, runId: string, runU
   return lines;
 }
 
-export function stopLines(stop: ResolvedStop, runId: string, runUrl: string): string[] {
+/** `videoPage` is the run's page under Video (customerRunPage), where a held clip is kept as it is. */
+export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, videoPage: string): string[] {
   if (stop.at === "picks") {
     return [
       "Parked: the run is waiting for your picks. Nothing is planned or filmed until every slot has one.",
@@ -1632,6 +1657,7 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string): st
     if (stop.missingScenes?.length) {
       return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
     }
+    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage);
     // #1704: the ledger read failed, so every command below would be a guess —
     // "upload a cut" to someone who already has one, or "approve" to someone
     // who has nothing to approve. Say what IS known, and name the one command
@@ -4803,7 +4829,7 @@ export async function waitFlow(
         continue;
       }
       return {
-        code: customer.stage === "failed" ? 1 : 0,
+        code: customer.stage === "failed" && !customerCutHeld(customer) ? 1 : 0,
         lines: opts.json
           ? [JSON.stringify(customer)]
           : [...lines, ...customerStageLines(customer, page), `Watch it on the dashboard: ${page}`],
@@ -4848,7 +4874,10 @@ export async function waitFlow(
     }
     return {
       code: stop.at === "failed" ? 1 : 0,
-      lines: [...lines, ...stopLines(resolved, runId, reviewUrl(deps.dashboardUrl, run))],
+      lines: [
+        ...lines,
+        ...stopLines(resolved, runId, reviewUrl(deps.dashboardUrl, run), customerRunPage(deps.dashboardUrl, runId)),
+      ],
     };
   }
 
@@ -4936,6 +4965,7 @@ export async function statusFlow(
       : stop,
     runId,
     reviewUrl(deps.dashboardUrl, run),
+    customerRunPage(deps.dashboardUrl, runId),
   );
 
   const warnings = run.nodes

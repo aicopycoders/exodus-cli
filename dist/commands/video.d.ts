@@ -210,6 +210,7 @@ export interface VideoRun {
         reason?: string;
     };
     workflowId?: string;
+    cutHeldScenes?: number[];
     moduleOwned?: boolean;
     director?: RunDirector;
 }
@@ -311,6 +312,7 @@ export type RunStop = {
     at: "final-watch";
     missingScenes?: MissingScene[];
     framesNodeId?: string;
+    heldScenes?: number[];
 } | {
     at: "pilot";
     nodeId?: string;
@@ -362,7 +364,7 @@ export declare function stageWord(stage: string): string;
 export declare function stepName(kind: string | undefined): string;
 export declare function isShowAd(run: Pick<VideoRun, "moduleOwned">): boolean;
 export declare function reviewUrl(dashboardUrl: string, run: Pick<VideoRun, "_id" | "workflowId">): string;
-export declare function stopLines(stop: ResolvedStop, runId: string, runUrl: string): string[];
+export declare function stopLines(stop: ResolvedStop, runId: string, runUrl: string, videoPage: string): string[];
 export declare function failedStoryboardNode(run: VideoRun): VideoRunNode | undefined;
 export declare function errorEchoesReasons(error: string | undefined, record: PlanFailureRecord | undefined): boolean;
 export declare function planFailureLines(node: VideoRunNode | undefined, runId: string): string[];

@@ -53,6 +53,26 @@ export interface CustomerRun {
   canRetry: boolean;
   stopReason: CustomerStopReason | null;
   detailsPath: string | null;
+  /**
+   * #4257: the scenes the final cut waits on, one sentence each. The server
+   * sends such a run as "failed", since an older CLI waits through "editing".
+   * Absent from older servers.
+   */
+  cutHolds?: string[];
+}
+
+/** #4257: the final cut waits for the customer to keep or remake a scene. */
+export function customerCutHeld(run: CustomerRun): boolean {
+  return (run.cutHolds?.length ?? 0) > 0;
+}
+
+function heldLines(holds: string[], page: string): string[] {
+  const one = holds.length === 1;
+  return [
+    `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`,
+    ...holds.map((hold) => `  ${hold}`),
+    `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+  ];
 }
 
 /**
@@ -233,7 +253,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
       ];
     case "failed":
-      return stoppedLines(run, page);
+      return run.cutHolds?.length ? heldLines(run.cutHolds, page) : stoppedLines(run, page);
     case "cancelled":
       return ["This video was stopped."];
   }

@@ -9,7 +9,7 @@ import { probeDurationSec } from "../lib/preflight.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
@@ -810,6 +810,7 @@ export function classifyRun(run) {
                 at: "final-watch",
                 ...(missingScenes.length > 0 ? { missingScenes } : {}),
                 ...(missingScenes.length > 0 && framesNodeId ? { framesNodeId } : {}),
+                ...(run.cutHeldScenes?.length ? { heldScenes: run.cutHeldScenes } : {}),
             };
         }
         return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -910,6 +911,16 @@ function missingSceneLines(missing, framesNodeId, runId, runUrl) {
     lines.push("The ad can't be approved until every scene has a clip.", `Watch it here:   ${runUrl}`);
     return lines;
 }
+function heldSceneLines(scenes, runId, videoPage) {
+    const one = scenes.length === 1;
+    return [
+        `Held: ${scenesPhrase(scenes)} still ${one ? "has" : "have"} a drawing fault after ${one ? "it was" : "they were"} made again, so the final video wasn't made.`,
+        ...scenes.map((scene) => one
+            ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
+            : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`),
+        `${one ? "Keep it as it is" : "Keep them as they are"}: on the video's page, ${videoPage}`,
+    ];
+}
 function pilotLines(stop, runId, runUrl) {
     const scenes = stop.sceneIndexes;
     const checks = stop.checks ?? [];
@@ -943,7 +954,7 @@ function pilotLines(stop, runId, runUrl) {
     lines.push(`Redo it:              exodus video retry-clip ${runId} --scene ${redoScene ?? "<n>"} --note "<what is wrong>"`, `Make the other clips: exodus video approve ${runId}`);
     return lines;
 }
-export function stopLines(stop, runId, runUrl) {
+export function stopLines(stop, runId, runUrl, videoPage) {
     if (stop.at === "picks") {
         return [
             "Parked: the run is waiting for your picks. Nothing is planned or filmed until every slot has one.",
@@ -981,6 +992,8 @@ export function stopLines(stop, runId, runUrl) {
         if (stop.missingScenes?.length) {
             return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
         }
+        if (stop.heldScenes?.length)
+            return heldSceneLines(stop.heldScenes, runId, videoPage);
         if (stop.cutAttached === null) {
             return [
                 "Parked: every piece is made.",
@@ -3549,7 +3562,7 @@ export async function waitFlow(runId, opts, deps) {
                 continue;
             }
             return {
-                code: customer.stage === "failed" ? 1 : 0,
+                code: customer.stage === "failed" && !customerCutHeld(customer) ? 1 : 0,
                 lines: opts.json
                     ? [JSON.stringify(customer)]
                     : [...lines, ...customerStageLines(customer, page), `Watch it on the dashboard: ${page}`],
@@ -3589,7 +3602,10 @@ export async function waitFlow(runId, opts, deps) {
         }
         return {
             code: stop.at === "failed" ? 1 : 0,
-            lines: [...lines, ...stopLines(resolved, runId, reviewUrl(deps.dashboardUrl, run))],
+            lines: [
+                ...lines,
+                ...stopLines(resolved, runId, reviewUrl(deps.dashboardUrl, run), customerRunPage(deps.dashboardUrl, runId)),
+            ],
         };
     }
     const timeoutLine = `Still running after ${Math.round((maxPolls * interval) / 60000)} minutes. Check in with: exodus video status ${runId}`;
@@ -3641,7 +3657,7 @@ export async function statusFlow(runId, json, deps) {
     const failedStoryboard = failedStoryboardNode(run);
     const guidance = stopLines(stop.at === "failed" && errorEchoesReasons(stop.error, failedStoryboard?.planFailure)
         ? { ...stop, error: undefined }
-        : stop, runId, reviewUrl(deps.dashboardUrl, run));
+        : stop, runId, reviewUrl(deps.dashboardUrl, run), customerRunPage(deps.dashboardUrl, runId));
     const warnings = run.nodes
         .filter((n) => n.warning)
         .map((n) => ({ nodeId: n.nodeId, step: n.kind, warning: n.warning }));

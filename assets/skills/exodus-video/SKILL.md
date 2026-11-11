@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, written for the brand and started, a yes before each paid step. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
+description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, read first, then one sheet of choices and one yes for the write and the whole video (or, when the member asks, step by step with a yes before each paid step). The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -320,7 +320,7 @@ What Swipe a video does on the dashboard, from the terminal. Exodus breaks the
 competitor's ad down, matches it to the closest kind of ad and look it makes
 (the template), writes the brand's version, and starts the video on the kind
 the swipe wrote. The run is the same one Swipe a video starts on the
-dashboard, Guided unless the member asks for `--one-shot`.
+dashboard.
 
 These steps need Video switched on for the member's account. Without it every
 swipe command answers "Not found on this brand. The id is wrong or is another
@@ -331,13 +331,250 @@ them, and stop.
 
 This path has no picks stop and no pilot clip. The run goes from the start
 straight to the storyboard (stop 3), and approving the storyboard makes every
-clip. Making the video from one of our formats (`--adapt`, "From one sentence
-to a film") keeps the picks stop and the pilot clip.
+clip. A run started with `--one-shot` approves its own storyboard when its
+checks pass. Making the video from one of our formats (`--adapt`, "From one
+sentence to a film") keeps the picks stop and the pilot clip.
 
-Four steps cost money, and the CLI prints no price for any of them. Run each
-one first without `--yes`: it sends nothing and prints what the step buys and
-who pays. Tell the member both, say the CLI prints no price, never guess one,
-and run the same line with `--yes` only after their yes.
+By default a swipe is one round: you read the ad, send the member one sheet,
+and on their one yes write the brand's version and make each video they
+picked. A member who asks to say yes before each paid step gets "Step by
+step" below.
+
+**Long waits.** The CLI waits up to 25 minutes for a breakdown, 10 for a
+template, 15 for a write (the write always waits; it has no `--wait`), and 60
+for `swipe start --wait`. Run these in the background, or leave `--wait` off
+and check in, so the shell's own time limit does not cut them off. A wait that
+was cut off or timed out is not a failure: the work goes on. Follow it by the
+id it printed, with the command the CLI names, and never by running the paid
+line again: a second run buys it a second time.
+
+### 1. Read the ad
+
+First, free: `exodus video swipe products`. When it answers "This brand has
+no products yet. Add one in the dashboard first.", tell the member and stop
+before any read.
+
+**Reading the ad, without asking.** Read each ad the member named before the
+sheet, and only those. Say so in one line, in words like: "I read the ad
+first; that costs a little, on the team's keys and on your model key." Then:
+`exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId> --yes --wait`
+(the breakdown, on the team's keys), `exodus video swipe status <breakdownId>
+--full` (what it read: each shot, the script with who says each line, the
+cast; free), and `exodus video swipe template <breakdownId> --yes` (the kind
+of ad and look it matched; one model call on the member's own Anthropic or
+OpenRouter key). The CLI's next lines say "ask first": here the one line
+above covers the read, and the sheet's yes covers the writes and the starts.
+When the breakdown prints "Still reading after 25 minutes", it is not done:
+wait once more with `exodus video swipe status <breakdownId> --wait`, and if
+it is still reading, stop and tell the member.
+
+**The limit: $0.50 for the read.** The CLI prints no price before a read, so
+keep to the limit with what it prints after. Count each breakdown once, from
+the lines it ends with: those of the `exodus video swipe --file | --url |
+--ad … --wait` command, or, when that wait was cut off, those of `exodus
+video swipe status <breakdownId>` once it says the breakdown is done:
+
+- "It cost $…, on the team's keys." is that breakdown's cost. Part of it may
+  be an estimate: "It cost $… (partly an estimate), on the team's keys."
+- A first line "This ad already has a breakdown: <id>. It cost nothing." is
+  zero, even when a later line repeats what it cost the first time. "It
+  reused answers bought before, so it cost nothing." is zero too.
+- No cost line at all is unknown.
+
+Every later `exodus video swipe status <breakdownId>` repeats the cost: count
+it once only. The template is the member's own money in the read, and its cost is
+never printed: "This template was already made, so it cost nothing." is
+zero, and a new template is unknown.
+
+Read one ad at a time: its breakdown, then its template. Before each read
+after the first (a template, or the next ad's breakdown), stop and ask the
+member once when the costs counted have reached $0.50, or when any read so
+far is unknown: an unknown cost counts as reaching the limit. Say what is
+left to read. A new template is always
+unknown, so with several ads you read the first and ask before the rest. The
+check comes before each read, so the total can pass $0.50 by one read.
+
+A breakdown or a template that fails prints why. With one ad, tell the
+member and stop. With several, leave that ad out, say so in the sheet's first
+line, and go on with the others. Reading again is paid too, and needs their
+yes.
+
+### 2. Read the choices
+
+Free, and no yes: `exodus segment personas` (the saved personas; leave out
+the ones marked `[archived]`) and `exodus primer show` (its MECHANISM
+section; with no primer saved, say so once and offer only the member's own
+words or none). The products came in step 1.
+
+### 3. The sheet, once
+
+Send this in one message, in this order, then stop and wait:
+
+> I read your ad as <kind of ad>, <look>, <n> lines, about <s> s. The swipe
+> makes that kind of ad. Say "show me" for the shot list and the script.
+> One sheet, answer once (my picks are marked):
+> 0. **Let it run** (I pick every row) or **I choose**.
+> 1. **Persona** (noted; the video writer does not read it yet): <your three best fits, each with a short reason>, show all <N>, or none. Pick several for one video each.
+> 2. **Mechanism** (noted; the video writer does not read it yet): <the primer's mechanisms>, your own words, or none.
+> 3. **How close:** 1 Mirror, 2 Close, 3 Same beats, 4 Same arc, 5 Pattern only.
+> 4. **Characters:** the tool picks them (your saved characters: not yet).
+> 5. **Run:** one shot, or stop at the storyboard.
+> 6. **Finish:** music on or off (captions, speed, cuts: not yet).
+> **How many:** <n> videos = <a> ads × <p> personas:
+> - Video 1: <ad> × <persona>
+> - Video 2: <ad> × <persona>
+> **Cost:** the CLI prints no price for a swipe.
+> **My picks:** <one line, with the reason>. **It buys:** <n> scripts and <n>
+> whole videos, on your keys. Say go, or change a row. (Above 6 videos, end
+> with "Say yes to <n> videos, or change a row." instead.)
+
+**The yes covers only the list the member last saw.** Before any write or
+start, the member has seen the list and the count, and said yes to them.
+This holds also when their first message says "just do it" or "let it run":
+"Let it run" fills the rows with your picks, and the yes still comes from
+the member.
+
+- A reply that makes the buy bigger is not the yes, even with "go" in it:
+  more videos, another ad, music on where the sheet said off, or "one shot"
+  where the sheet said "stop at the storyboard". Send the new list and count,
+  and wait.
+- A reply that changes a row without making the buy bigger, together with
+  "go", is the yes: how close, music off, or leaving out videos it names
+  ("drop video 3, go"). Say the change in one line and start. "Fewer" with
+  no say in which ones is not the yes: send the shorter list and wait.
+- Anything else is not the yes: a question, "show me", "maybe", "looks
+  good?", or a reply you are not sure of. Answer it and wait. Above 6 videos,
+  only a yes that names the count is the yes ("yes to 8 videos", "8, go"); a
+  bare "go" or "yes" gets the count asked again.
+- On a sheet of 1 video, "1: Anna, Ben and Cara. Go." is 3 videos: send the
+  list of 3 and wait.
+
+The rows:
+
+- **The kind of ad.** The swipe writes the kind the template read and no
+  other. When the member asks for another kind ("make it UGC instead"),
+  leave this path for "From one sentence to a film", with the ad's words
+  from `status --full`.
+- **Persona.** Offer the three saved personas that fit the ad best, each with
+  a short reason, then "show all <N>" (every persona not marked
+  `[archived]`). Several may be picked: one video for each.
+- **Persona and mechanism are noted, not read.** The video writer reads
+  neither yet. In **My picks**, a persona or a mechanism always carries
+  "(noted, not used yet)", the primer's lead mechanism included. Videos for
+  two personas differ only as two writes of the same request differ. When
+  more than one persona is picked, say this in your reply before the yes, so
+  the member does not pay for several videos expecting a script for each
+  persona. Two ways make a persona real today. The member writes their own
+  script for that persona, and the write takes it with `--mode their-format
+  --script <file>`, made the way their ad is made. Or the member swipes the
+  words with the `swipe` skill and makes the film from one of our formats
+  (its "Make it a video"). That path asks a yes before each paid step, and it
+  makes the film in the format they pick, not in the ad's own kind and look.
+- **Characters.** A swiped run takes no saved characters and draws no new
+  faces yet, so the row offers only "the tool picks".
+- **Run.** With "stop at the storyboard", the line reads **It buys:** <n>
+  scripts, and <n> storyboards with their pictures; the voices and clips
+  wait for your yes at each storyboard.
+- **Finish.** `swipe start` takes `--music` and nothing else for the finish.
+  Music is made on the member's own ElevenLabs key. Caption style, speed,
+  jump cuts and the end card come with a later update.
+- **How many.** Ads × personas, with none counting as one persona and the
+  characters counting as one today. Show the multiplication, as in "4 videos
+  = 2 ads × 2 personas". Above 6 videos, say the count and ask for the yes on
+  that count in so many words: "That is 8 videos. Say yes to 8 videos."
+- **Cost.** The CLI prints no price for a swipe, so the sheet says exactly
+  that: no number, no range, no guess. The Director block of `exodus video
+  status` prints "Spent: $… of $12.00": the $12.00 is the Director's limit
+  for its redos on that video, not a price and not a ceiling for the first
+  pass. Never quote it as the cost.
+- **Product.** Add a row **Product:** only when `swipe products` lists more
+  than one. With one, write for that one.
+- **Anything else.** Add a row only when the member's ask carried a note. A
+  note that names what to swipe (hook only, their format with their own
+  script, a new look) sets `--mode` (step 4), and **My picks** says the mode
+  back. Say back any other note as noted, not used yet.
+- **Several ads.** One sheet covers every ad the member named: list what you
+  read from each in the first line. The count and the warning above 6 hold.
+
+**The videos, in a fixed order.** List them one per line: the ads in the
+order the member gave them, and for each ad the personas in the order the
+sheet shows them. The same picks give the same list.
+
+**A bare number.** Read a reply of only a number ("3") as the count of
+videos, and say so in the list's first line: "I read 3 as 3 videos." Pick
+one video for each ad, in the order given, before a second persona for any
+ad; then the next persona in the order shown for each ad, and so on, until
+the count is reached. List the videos in the fixed order and wait for the
+yes. When the picks cannot make that many, say how many they can make.
+
+When the member says "just do it": no persona, the primer's lead mechanism
+(noted, not used yet), closeness 2, the tool picks the characters, one shot,
+no music. With more than one product and none named, ask that one row first.
+
+### 4. On the yes
+
+The yes covers the writes and the starts, nothing else. The breakdown and the
+template are once per ad, and are done already. For each video, in the
+listed order, run steps 1 and 2; step 3 comes once every video has
+started:
+
+1. `exodus video swipe write <breakdownId> --product <id> --mode whole-ad
+   --closeness <n> --yes`. A mode set from a note changes the line:
+   `hook-only` takes `--closeness` as `whole-ad` does. `their-format` takes
+   the member's own script: save it to a file and pass `--script <file>`,
+   with no `--closeness` (the CLI refuses one). `new-look` takes `--look
+   <slug>`; no command lists the looks a swipe can take, so ask the member
+   for the exact look name and never invent one (the writer refuses a look
+   it does not make). The write takes four to nine minutes. Show the member
+   the script, the direction, Kept and Changed, and what it cost. When a
+   persona or a mechanism was picked, add one line: "The persona and the
+   mechanism are noted, not used: the video writer does not read them yet."
+   The write's last line says "Start the video (paid; ask first)": the
+   sheet's yes was that ask, so start now, with the line below, not the
+   write's own, which leaves out `--one-shot`. Note the swipe id it printed
+   for that video.
+2. `exodus video swipe start <swipeId> --one-shot --yes`, without
+   `--one-shot` when the member chose to stop at the storyboard, and with
+   `--music` when they chose music. Give the member the `Watch it:` link at
+   once. Then go on to the next video.
+3. When every video has started, follow each run with `exodus video status
+   <runId>` and do what it prints. A one-shot run that waits for a cut goes
+   to "End: watch and approve" (pull, cut, upload, the run page). A run that
+   stopped at the storyboard goes to stop 3, then the end.
+
+**Never start the same swipe twice.** Each start is a second, paid video.
+Before any second start of a swipe, run `exodus video swipe show <swipeId>`:
+when it prints "It started run <runId>", the run started, so follow it with
+`exodus video status <runId>`. Before writing again after a write whose wait
+was cut off, run `exodus video swipe list`. It lists the newest first, and
+the writes run one at a time, so a row for that ad above the last swipe id
+you noted (any row for it, when you noted none), with no run and not marked
+refused, is that write. Show it with `exodus video swipe show <swipeId>` and
+start it instead of writing again. A row marked refused is that write's
+refusal: report it as a refused write. When no such row is there yet, the write may
+still finish: check again later.
+
+At the end, report each video on one line: its ad and persona, its run id
+and its `Watch it:` link, or why it stopped.
+
+**The final approve** is asked for each video as at "End: watch and
+approve". It is one way. A redo of a clip there needs its own yes.
+
+**A refusal or a failed check stops that video only.** The others go on, and
+every video is in the report at the end. A refused write prints the writer's
+sentence, its swipe id, what it cost, and "Nothing was started.": report all
+of it for that video. Writing again is paid again and needs the member's
+word. A refused start prints its sentence: report it for that video. A
+one-shot run whose checks find a problem stops for the member: show what
+`status` prints and ask.
+
+### Step by step: a yes before each paid step
+
+For a member who asks for stops. Four steps cost money, and the CLI prints no
+price for any of them. Run each one first without `--yes`: it sends nothing
+and prints what the step buys and who pays. Tell the member both, say the CLI
+prints no price, never guess one, and run the same line with `--yes` only
+after their yes.
 
 1. **Get the ad.** One of a video file, a link (Meta Ad Library, TikTok,
    Instagram or YouTube), or an ad in the brand's swipe library by the `id:`
@@ -381,6 +618,8 @@ and run the same line with `--yes` only after their yes.
    it buys the whole video with no stop: ask before passing it. `--wait` waits until the run needs the
    member.
 6. **Then** stop 3 (the storyboard) and the end, as above.
+
+### Every swipe command
 
 ```operator-guide
 exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId> [--yes] [--wait]
@@ -431,7 +670,9 @@ CLI words it the way the run page does. On their own brands they can:
   file"). `--stop-at-script` prints that script and starts nothing.
 - `video status <runId>`: where the video is, in plain words (waiting in line,
   planning, drawing, storyboard ready for review, filming, ready with its link,
-  or stopped and why). `--json` prints the server's answer as it came.
+  held for a scene they must make again or keep as it is on the video's page,
+  or stopped and why). `--json` prints the server's answer as it came; a held
+  video says `"stage": "failed"` with the held scenes in `cutHolds`.
 - `video storyboard <runId>`: each scene's line and picture, while the
   storyboard waits for review.
 - `video approve <runId>`: approves the storyboard. Nothing else.
@@ -668,7 +909,12 @@ under it:
   it instead (`stop.missingScenes` in `--json`) and approval is refused until
   it has one. A scene whose picture the video service refused needs
   `retry-frame --note` before `retry-clip`; the clip redo alone resends the
-  refused picture.
+  refused picture. On a video started from the dashboard, the app makes the
+  cut itself; when a scene's clip still has a drawing fault after it was made
+  again, the stop block says `Held:` and names the scene
+  (`stop.heldScenes` in `--json`). No cut is made until each held scene is
+  made again with `retry-clip`, or kept as it is on the video's page (the
+  link it prints). Keeping the last one starts the cut.
 - paused: a builder checkpoint neither video verb resolves —
   `exodus workflow checkpoint <runId>` is the verb for that one.
 - failed: `status` shows how far it got, and a `--wait` that was running exits

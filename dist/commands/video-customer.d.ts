@@ -42,7 +42,9 @@ export interface CustomerRun {
     canRetry: boolean;
     stopReason: CustomerStopReason | null;
     detailsPath: string | null;
+    cutHolds?: string[];
 }
+export declare function customerCutHeld(run: CustomerRun): boolean;
 export interface ScriptTidied {
     setAside: string[];
     added: {

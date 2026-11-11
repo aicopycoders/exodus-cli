@@ -43,6 +43,7 @@ import {
   type RunStop,
   type VoiceMap,
 } from "./video.js";
+import { customerRunPage } from "./video-customer.js";
 
 export const helpText = `
 exodus workflow — List, describe, run, inspect, import, and export saved workflows
@@ -4240,7 +4241,7 @@ async function waitForRun(
       // pause to act on. Say what is coming instead of the cost-gate banner.
       const autoRedo = parked ? classifyRun(asVideoRun(raw)) : undefined;
       if (autoRedo?.at === "running" && autoRedo.autoRedoScenes) {
-        const line = `  ${stopLines(autoRedo, runId, "")[0]}`;
+        const line = `  ${stopLines(autoRedo, runId, "", "")[0]}`;
         if (line !== autoRedoNotified) {
           autoRedoNotified = line;
           opts.onProgressLine(line);
@@ -4372,11 +4373,9 @@ async function waitForRun(
   if (videoStop) {
     // #1851: the link belongs to this run, so it is composed from the run the
     // poll just read rather than from the dashboard root alone.
-    const review = reviewUrl(
-      deps.dashboardUrl ?? getDashboardUrl(),
-      asVideoRun(pollResult.data),
-    );
-    lines.push("", ...stopLines(videoStop, runId, review));
+    const dashboard = deps.dashboardUrl ?? getDashboardUrl();
+    const review = reviewUrl(dashboard, asVideoRun(pollResult.data));
+    lines.push("", ...stopLines(videoStop, runId, review, customerRunPage(dashboard, runId)));
   }
 
   return { code: pollResult.ok ? 0 : 1, lines };

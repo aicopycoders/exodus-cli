@@ -11,6 +11,7 @@ import { workflowToYaml, parseWorkflowText } from "../lib/workflowText.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { getChannel } from "../lib/channel.js";
 import { asVideoRun, classifyRun, resolveStopAtPark, reviewUrl, scenePrefix, stopLines, } from "./video.js";
+import { customerRunPage } from "./video-customer.js";
 export const helpText = `
 exodus workflow — List, describe, run, inspect, import, and export saved workflows
 
@@ -2133,7 +2134,7 @@ async function waitForRun(runId, opts, deps) {
             const isLanding = isLandingPark(raw);
             const autoRedo = parked ? classifyRun(asVideoRun(raw)) : undefined;
             if (autoRedo?.at === "running" && autoRedo.autoRedoScenes) {
-                const line = `  ${stopLines(autoRedo, runId, "")[0]}`;
+                const line = `  ${stopLines(autoRedo, runId, "", "")[0]}`;
                 if (line !== autoRedoNotified) {
                     autoRedoNotified = line;
                     opts.onProgressLine(line);
@@ -2216,8 +2217,9 @@ async function waitForRun(runId, opts, deps) {
         lines.push("", landOnPark.headline, ...formatPauseNotice(landOnPark.pauseReason, runId, dashboardUrl).slice(1));
     }
     if (videoStop) {
-        const review = reviewUrl(deps.dashboardUrl ?? getDashboardUrl(), asVideoRun(pollResult.data));
-        lines.push("", ...stopLines(videoStop, runId, review));
+        const dashboard = deps.dashboardUrl ?? getDashboardUrl();
+        const review = reviewUrl(dashboard, asVideoRun(pollResult.data));
+        lines.push("", ...stopLines(videoStop, runId, review, customerRunPage(dashboard, runId)));
     }
     return { code: pollResult.ok ? 0 : 1, lines };
 }

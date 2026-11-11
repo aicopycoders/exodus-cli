@@ -1,3 +1,14 @@
+export function customerCutHeld(run) {
+    return (run.cutHolds?.length ?? 0) > 0;
+}
+function heldLines(holds, page) {
+    const one = holds.length === 1;
+    return [
+        `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`,
+        ...holds.map((hold) => `  ${hold}`),
+        `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+    ];
+}
 export function customerAnswer(data) {
     return typeof data === "object" && data !== null && data.view === "customer"
         ? data
@@ -98,7 +109,7 @@ export function customerStageLines(run, page) {
                 `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
             ];
         case "failed":
-            return stoppedLines(run, page);
+            return run.cutHolds?.length ? heldLines(run.cutHolds, page) : stoppedLines(run, page);
         case "cancelled":
             return ["This video was stopped."];
     }

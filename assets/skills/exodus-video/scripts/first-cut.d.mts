@@ -433,4 +433,12 @@ export function sentenceGapCuts(
   words: Array<{ w: string; s: number; e: number }>,
   lines: Array<{ text: string; asksPause: boolean; cuesBeat: boolean }>,
   levels?: { windowSec: number; db: number[] } | null,
-): Array<{ s: number; e: number; after: string; gap: number; kept: number; sound: boolean }>;
+  lineGap?: { max: number; keep: number } | null,
+  jump?: JumpCut | null,
+): Array<{ s: number; e: number; after: string; gap: number; kept: number; sound: boolean; atLine?: number }>;
+
+/** jumpCut: a pause over maxGap between two heard words keeps keepAfter after the earlier word and keepBefore before the later. */
+export interface JumpCut { maxGap: number; keepAfter: number; keepBefore: number }
+export const JUMP_CUT: JumpCut;
+/** jumpCut on one pause: the span it takes out, or null when it keeps the pause whole. */
+export function jumpCutSpan(endSec: number, startSec: number, jump?: JumpCut): { s: number; e: number } | null;

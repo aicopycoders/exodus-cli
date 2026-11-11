@@ -72,6 +72,14 @@ export const PUNCH_IN_SCALE = 1.15;
 const even = (n) => 2 * Math.round(n / 2);
 const PUNCH_IN =
   `scale=${even(WIDTH * PUNCH_IN_SCALE)}:${even(HEIGHT * PUNCH_IN_SCALE)},crop=${WIDTH}:${HEIGHT},setsar=1`;
+/**
+ * pacePass: the finished cut plays at `speed`, picture and sound, and every
+ * second piece of the spine is a centre crop scaled up by `zoom`, a small zoom
+ * step at each cut.
+ */
+export const PACE_PASS = { speed: 1.12, zoom: 1.07 };
+const PACE_ZOOM =
+  `scale=${even(WIDTH * PACE_PASS.zoom)}:${even(HEIGHT * PACE_PASS.zoom)},crop=${WIDTH}:${HEIGHT},setsar=1`;
 const floorFrame = (t) => Math.floor(t * FPS + 1e-6) / FPS;
 const ceilFrame = (t) => Math.ceil(t * FPS - 1e-6) / FPS;
 const stereo = "aresample=48000,aformat=channel_layouts=stereo";
@@ -97,6 +105,11 @@ export const NARRATION_JOIN_AIR_SEC = 0.25;
  * it lands. A dialogue clip's own tail ran ~1.1 s of dead air (#3423).
  */
 export const END_AIR_SEC = 0.5;
+/**
+ * talkTrim: the most air a talking clip keeps after its last word, the ad's
+ * last line included. A join keeps JOIN_TAIL_SEC already, which is less.
+ */
+export const TALK_TRIM_SEC = 0.3;
 /** A continuous low bed under the whole ad, so the joins between clips do not read as dead air. */
 const ROOM_TONE =
   "anoisesrc=color=brown:amplitude=0.0035:r=48000,highpass=f=60,lowpass=f=900,aformat=channel_layouts=stereo";
@@ -169,6 +182,22 @@ export const TRUE_PEAK_MAX_DB = -1;
  * resample is pinned to stereo, as every one after loudnorm is (loudnessApplyArgs).
  */
 export const PEAK_LIMITER = "aresample=192000,aformat=channel_layouts=stereo,alimiter=limit=0.8:level=false:attack=2:release=60";
+/**
+ * jumpCut: inside a talking clip, a pause over maxGap between two heard words
+ * is cut down, keeping keepAfter after the earlier word and keepBefore before
+ * the later one. It rides
+ * the sentence-gap cut, so a pause the script writes in, one a direction asks
+ * for and a reaction's beat stay whole there too.
+ */
+export const JUMP_CUT = { maxGap: 0.8, keepAfter: 0.18, keepBefore: 0.12 };
+
+/** jumpCut on one pause, from `endSec` to `startSec`: the span it takes out, or null when it keeps the pause whole. */
+export function jumpCutSpan(endSec, startSec, jump = JUMP_CUT) {
+  if (!(startSec - endSec > jump.maxGap + 1e-6)) return null;
+  const s = endSec + jump.keepAfter;
+  const e = startSec - jump.keepBefore;
+  return e > s ? { s, e } : null;
+}
 
 /** Plan 14's on/off cut checks, each read only with cutChecks; paceCheck also carries its numbers. */
 const PLAN_14_CHECKS = ["floorCheck", "flashCheck", "levelStepCheck", "voFitCheck", "dashGapCheck", "nameCheck"];
@@ -210,6 +239,10 @@ export function finishingOf(manifest) {
     // Plan 14: the end card from the pack photo, and the record of whether the brand reached the ad (brandOf).
     ...(f.endCardLayers === true ? { endCardLayers: true } : {}),
     ...(f.brandCheck === true ? { brandCheck: true } : {}),
+    ...(f.jumpCut === true ? { jumpCut: true } : {}),
+    ...(f.talkTrim === true ? { talkTrim: true } : {}),
+    ...(on.captions && f.captionsByLine === true && f.captionColours === true ? { captionColours: true } : {}),
+    ...(f.pacePass === true ? { pacePass: true } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -409,6 +442,17 @@ const SAME_WORD_SPELLINGS = new Map([
 ]);
 
 /**
+ * A word as people say it, read as its written long form, as in scout
+ * scribe.ts SPOKEN_FORMS: "go get 'em" is "go get them", "gonna" is "going to".
+ */
+const SPOKEN_FORMS = new Map([
+  ["em", ["them"]], ["gonna", ["going", "to"]], ["wanna", ["want", "to"]], ["gotta", ["got", "to"]],
+  ["kinda", ["kind", "of"]], ["sorta", ["sort", "of"]], ["lemme", ["let", "me"]], ["gimme", ["give", "me"]],
+  ["cause", ["because"]], ["cuz", ["because"]], ["til", ["until"]], ["till", ["until"]], ["ya", ["you"]],
+  ["yeah", ["yes"]], ["yep", ["yes"]],
+]);
+
+/**
  * #3433: the number reading of scout spokenNumbers.ts, so a script's "$29" and a
  * scribe's "twenty nine dollars" line up here as they do in the server's cut.
  * Mirrors numericWords and its tables.
@@ -532,7 +576,7 @@ function spokenForms(word) {
 
 /** The spoken tokens of one written word; empty for pure punctuation. */
 function spokenWords(word) {
-  return spokenForms(word).map((t) => SAME_WORD_SPELLINGS.get(t) ?? t);
+  return spokenForms(word).flatMap((t) => SPOKEN_FORMS.get(t) ?? [t]).map((t) => SAME_WORD_SPELLINGS.get(t) ?? t);
 }
 
 /** { tokens, sourceIndex }: tokens[i] came from written word sourceIndex[i]. */
@@ -747,8 +791,13 @@ export function asksPause(line) {
  * lineGap ({ max, keep }, cutPace): where one line ends and the next begins,
  * a silence over `max` is cut to `keep` instead, and that break's last span
  * carries `atLine`, the index of the line after it, where the take is split.
+ *
+ * jump (JUMP_CUT, the jumpCut setting): any pause over jump.maxGap between two
+ * script words, inside a sentence too, keeps jump.keepAfter after the earlier
+ * word and jump.keepBefore before the later one instead (jumpCutSpan), on
+ * whole frames. The pauses kept above stay kept.
  */
-export function sentenceGapCuts(words, lines, levels = null, lineGap = null) {
+export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jump = null) {
   const written = [];
   const pieces = [];
   let between = "";
@@ -779,7 +828,9 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null) {
     const newLine = a.li !== b.li;
     // A name heard split in two (#2300) ends on its last heard word.
     const [earlier, later] = [words[spoken.findLast((w) => w < to)], words[to]];
-    if (!newLine && !SENTENCE_END.test(b.before) && !heardSentenceEnd(earlier.w)) continue;
+    const sentenceBreak = newLine || SENTENCE_END.test(b.before) || heardSentenceEnd(earlier.w);
+    // Inside a sentence only jumpCut acts, and only on a pause over its longest.
+    if (!sentenceBreak && !(jump && jumpCutSpan(earlier.e, later.s, jump))) continue;
     if (WRITTEN_PAUSE.test(b.before) || lines[a.li].asksPause || lines[b.li].asksPause) continue;
     if (newLine && lines[a.li].cuesBeat) continue;
     const gap = later.s - earlier.e;
@@ -790,14 +841,17 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null) {
     const spans = sound ? [sound] : [];
     const [gapMax, gapKeep] =
       lineGap && newLine ? [lineGap.max, lineGap.keep] : [SENTENCE_GAP_MAX_SEC, SENTENCE_GAP_KEEP_SEC];
-    const paused = gap - removed > gapMax + 1e-6;
+    // jumpCut: a pause over its longest keeps its two edges, with a sound in it taken out whole.
+    const jumped = Boolean(jump) && gap - removed > jump.maxGap + 1e-6;
+    const paused = jumped || (sentenceBreak && gap - removed > gapMax + 1e-6);
     if (paused) {
       // Placed on the gap with the sound already out, then moved back past it.
       // Frame edges only ever widen what is kept, so the silence left stays
       // between the kept length and the longest allowed.
       const back = (t) => (sound && t > sound.s ? t + removed : t);
-      const s = back(ceilFrame(earlier.e + gapKeep / 2));
-      const e = back(floorFrame(later.s - removed - gapKeep / 2));
+      const [keepAfter, keepBefore] = jumped ? [jump.keepAfter, jump.keepBefore] : [gapKeep / 2, gapKeep / 2];
+      const s = back(ceilFrame(earlier.e + keepAfter));
+      const e = back(floorFrame(later.s - removed - keepBefore));
       if (e > s) spans.push({ s, e });
     }
     const merged = [];
@@ -893,7 +947,7 @@ function clipLevels(file, filter = null) {
 /** Decoded final-mix levels; callers must not attribute an event to these whole-mix windows. */
 export const measureCutAudio = (file) => clipLevels(file);
 
-function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap = null) {
+function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap = null, jump = null) {
   for (const seg of spine) {
     if (seg.source !== "clip" || seg.audio !== "clip" || !seg.words?.length || seg.fixedLength) continue;
     const lines = seg.lineIds.map((id) => ({
@@ -901,7 +955,7 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
       asksPause: asksPause(scriptLines.get(id)),
       cuesBeat: reactionCues.has(id),
     }));
-    const heardCuts = sentenceGapCuts(seg.words, lines, readLevels(seg.file), lineGap);
+    const heardCuts = sentenceGapCuts(seg.words, lines, readLevels(seg.file), lineGap, jump);
     // The measured map: on whole slots of the clip's own picture, so both lose the same frames.
     const cuts = seg.map?.picture ? cutsOnSlots(heardCuts, seg.map.deltaSec) : heardCuts;
     if (cuts.length === 0) continue;
@@ -1212,8 +1266,11 @@ export function brollWindow(seg, counts, cueLineId, texts, broll) {
  * word, so the action it ends on (her setting the mat down, #3199) is seen, and
  * one marked with actionLeadSec keeps that long before its first word, so the
  * action it opens on (the dog stepping onto the mat, #3272) is seen.
+ *
+ * talkTrim: no talking clip keeps more than TALK_TRIM_SEC of air after its last
+ * word, the ad's last one included; a scene's actionTailSec still holds.
  */
-function trimJoins(spine, reactionCues, scriptLines, gapMax = null) {
+function trimJoins(spine, reactionCues, scriptLines, gapMax = null, talkTrim = false) {
   // cutPace: the beat before someone new answers shrinks so the join holds at most gapMax of air.
   const newSpeakerLead = gapMax === null
     ? JOIN_LEAD_NEW_SPEAKER_SEC
@@ -1235,7 +1292,8 @@ function trimJoins(spine, reactionCues, scriptLines, gapMax = null) {
       inSec = Math.max(inSec, Math.min(clear, floorFrame(firstWord)));
     }
     const endsAd = k === spine.length - 1 && !reactionCues.has(seg.lineIds.at(-1));
-    const tailSec = Math.max(endsAd ? END_AIR_SEC : JOIN_TAIL_SEC, seg.actionTailSec ?? 0);
+    const airSec = endsAd ? END_AIR_SEC : JOIN_TAIL_SEC;
+    const tailSec = Math.max(talkTrim ? Math.min(airSec, TALK_TRIM_SEC) : airSec, seg.actionTailSec ?? 0);
     let outSec = ceilFrame(lastWord + tailSec);
     if (after.length > 0) {
       const clear = floorFrame(Math.min(...after.map((w) => w.s)) - EXTRA_CLEARANCE_SEC);
@@ -1379,6 +1437,17 @@ function markPunchIns(spine, sameShot) {
 }
 
 const sameSpeaker = (prev, seg) => Boolean(prev.lastSpeaker && seg.firstSpeaker === prev.lastSpeaker);
+
+/** pacePass: every second piece of the spine zooms, where no punch-in does already. Answers the cut's note. */
+export function paceZooms(spine) {
+  let zoomed = 0;
+  spine.forEach((seg, k) => {
+    if (k % 2 === 0 || seg.punchIn) return;
+    seg.paceZoom = true;
+    zoomed += 1;
+  });
+  return `pacePass: the cut plays at ${PACE_PASS.speed}x and ${zoomed} piece${zoomed === 1 ? "" : "s"} zoom ${PACE_PASS.zoom}x`;
+}
 
 /** cutPace: two pieces of one take, back to back. */
 const samePiece = (prev, seg) =>
@@ -2611,8 +2680,10 @@ export function buildTimeline({
   }
   const pace = finish?.cutPace === true;
   const lineGap = pace ? { max: PACE_SPLIT_PAUSE_SEC, keep: PACE_GAP_MAX_SEC } : null;
-  tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap);
-  trimJoins(spine, reactionCues, scriptLines, pace ? PACE_GAP_MAX_SEC : null);
+  // jumpCut stays off a template launch's cut, whose selected clocks and windows hold their real time.
+  const jump = finish?.jumpCut && manifest?.templateMotion?.enabled !== true ? JUMP_CUT : null;
+  tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap, jump);
+  trimJoins(spine, reactionCues, scriptLines, pace ? PACE_GAP_MAX_SEC : null, finish?.talkTrim === true);
   if (pace) {
     // The pieces of one take alternate between the plain frame and the
     // punch-in, and a jump-cut run's alternation carries on across them.
@@ -3161,6 +3232,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     }
     if (seg.holdSec > 0.01) fit.push(`tpad=stop_mode=clone:stop_duration=${sec(seg.holdSec)}`);
     if (seg.punchIn) fit.push(PUNCH_IN);
+    if (seg.paceZoom) fit.push(PACE_ZOOM);
     filters.push(`${norm(`${i}:v`)}${fit.length ? `,${fit.join(",")}` : ""}[v${i}]`);
     // A segment split around a reaction beat starts partway into its sound too.
     const skipIn = inSec > 0.001 ? `atrim=start=${sec(inSec)},asetpts=PTS-STARTPTS,` : "";
@@ -3730,6 +3802,29 @@ export const CAPTION_CLEAR_SEC = 0.02;
 export const CAPTION_MIN_SEC = 0.35;
 /** captionsByLine: the caption font is at most this share of the frame's height (69 px of 1920). */
 export const CAPTION_MAX_SHARE = 0.036;
+/** captionColours: the speakers' caption colours in the order they first speak (ASS, &HBBGGRR&): white, yellow, cyan. */
+export const CAPTION_COLOURS = ["&HFFFFFF&", "&H00FFFF&", "&HFFFF00&"];
+/** captionColours: a coloured screen's black edge, at least this thick, so yellow or cyan still reads on a light picture. */
+export const CAPTION_COLOUR_MIN_OUTLINE = 4;
+
+/**
+ * captionColours: each line caption screen (lineCaptionScreens) in its
+ * speaker's colour, so a viewer follows who talks when one of them is off
+ * screen. The speaker is the screen's script line's speakerId, a narrator's
+ * line (no speakerId) one speaker of its own; the colours go in the order the
+ * speakers first speak and start again after the last. A screen whose line
+ * the script does not hold stays as it is.
+ */
+export function colourScreens(screens, storyboard) {
+  const speakerOf = new Map((storyboard?.script ?? []).map((line) => [line?.lineId, line?.speakerId ?? null]));
+  const order = [];
+  return screens.map((c) => {
+    if (!speakerOf.has(c.line)) return c;
+    const who = speakerOf.get(c.line);
+    if (!order.includes(who)) order.push(who);
+    return { ...c, colour: CAPTION_COLOURS[order.indexOf(who) % CAPTION_COLOURS.length] };
+  });
+}
 
 export function lineCaptionScreens(words, cap = null) {
   const per = Math.max(1, Math.round(cap?.wordsPerLine?.median ?? 3));
@@ -3834,7 +3929,7 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
     `Style: End,Helvetica,${Math.round(H * 0.045)},&H00FFFFFF,&H00FFFFFF,&H20101010,&H00000000,-1,0,0,0,100,100,2,0,3,40,0,5,0,0,0,1`,
     ...(endLayers ? endCardStyles(endLayers.colors, H) : []), "",
     "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ...captions.map((c) => `Dialogue: 1,${assTime(c.s)},${assTime(c.e)},Cap,,0,0,0,,{\\pos(${W / 2},${y})}${c.text}`),
+    ...captions.map((c) => `Dialogue: 1,${assTime(c.s)},${assTime(c.e)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`),
     ...cards.filter((c) => c.label).map((c) => `Dialogue: 2,${assTime(c.in)},${assTime(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`),
     ...(hook?.text ? [`Dialogue: 3,${assTime(hook.in)},${assTime(hook.out)},Card,,0,0,0,,{${box(hook.box)}\\fs${Math.round(H * 0.026)}}${assText(hook.text)}`] : []),
     ...(endCard ? [`Dialogue: 4,${assTime(endCard.in)},${assTime(endCard.out)},End,,0,0,0,,{\\pos(${W / 2},${H / 2})\\fad(120,0)}${assText(endCard.text)}`] : []),
@@ -5526,10 +5621,18 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   // The finishing settings' part of the render: the speed, the burned
   // captions and cards, and where the mix goes before its loudness pass.
   const notes = [];
+  if (finish?.captionColours && stagedText) notes.push("captionColours: the text stage draws these captions, so they stay one colour");
   const pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
   // A song and selected semantic action clocks are never globally accelerated.
   const protectedMotion = [...timeline.spine, ...timeline.cutaways].some((s) => s.motionProtection);
-  const speed = finish?.cutPace && !timeline.wholeVoice && !protectedMotion ? speedFor(pictureSec, finish.targetSeconds) : 1;
+  // pacePass: its speed in place of cutPace's, on a cut no clock is held to (no song laid whole, no selected or mapped clock).
+  const paced = finish?.pacePass === true && !timeline.wholeVoice && !protectedMotion && !timeline.mapped &&
+    manifest.templateMotion?.enabled !== true;
+  if (finish?.pacePass && !paced) notes.push("this cut keeps a real-time clock, so pacePass did not speed it up or zoom it");
+  if (paced) notes.push(paceZooms(timeline.spine));
+  const speed = paced
+    ? PACE_PASS.speed
+    : finish?.cutPace && !timeline.wholeVoice && !protectedMotion ? speedFor(pictureSec, finish.targetSeconds) : 1;
   if (finish?.cutPace && protectedMotion) notes.push("selected action/listening/ending obligations keep their real-time clock; cutPace does not accelerate the whole cut");
   if (timeline.sourceMap) {
     // The exact bytes every measured clock was read from, for whoever binds an approval to them.
@@ -5611,7 +5714,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       if (finish.captions) burned = screens;
       burnedCards = finish.cards ? (copied ? copied.cards : storyboardCards(storyboard, timeline)) : [];
       writeFileSync(here(ass), editAss({
-        captions: screens,
+        captions: finish.captionColours ? colourScreens(screens, storyboard) : screens,
         cap,
         ...(finish.captionsByLine ? { capMaxShare: CAPTION_MAX_SHARE } : {}),
         cards: burnedCards,

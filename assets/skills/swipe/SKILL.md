@@ -1,6 +1,6 @@
 ---
 name: swipe
-description: Swipe a winning ad (spoken or sung: micro-dramas, Suno song ads, jingles) for the active brand at a chosen closeness. Trigger on "swipe", "swipe this", "swipe this song ad", "swipe this Suno ad", "swipe this jingle", "rip this ad", "make this ours", "same scene, our product", "/swipe", a level ("L1", "level 2"), or the user pasting an ad, a transcript, or a video link (Atria, Facebook Ad Library, TikTok, YouTube) and naming a product. Two doors for the source: an ad already in Exodus (mined or in the swipe library) or a link / paste. Asks five quick questions with a recommendation, then calls the swipe bot on Genesis. Not for writing from scratch (exodus-write), not for why an ad works (anatomy-of-ads), not for the competitor watch list (`exodus swipe brands|run|mine`), not for anything that asks how the swipe bot works.
+description: Swipe a winning ad (spoken or sung: micro-dramas, Suno song ads, jingles) for the active brand at a chosen closeness. Trigger on "swipe", "swipe this", "swipe this song ad", "swipe this Suno ad", "swipe this jingle", "rip this ad", "make this ours", "same scene, our product", "/swipe", a level ("L1", "level 2"), or the user pasting an ad, a transcript, or a video link (Atria, Facebook Ad Library, TikTok, YouTube) and naming a product. Two doors for the source: an ad already in Exodus (mined or in the swipe library) or a link / paste. Asks five quick questions with a recommendation, then calls the swipe bot on Genesis. Not for writing from scratch (exodus-write), not for why an ad works (anatomy-of-ads), not for the competitor watch list (`exodus swipe brands|run|mine`), not for a swipe straight into a video ("swipe this ad as a microdrama": exodus-video), not for anything that asks how the swipe bot works.
 ---
 
 # Swipe
@@ -107,7 +107,16 @@ One stream at a time. If a stream "completed but produced no content", retry onc
 
 ## 6. Output
 
-`swipes/<slug>/<case>/swipe.md` per swipe, where case is like `L1`, `L2-nina`, `L1-coating`. Show each one in full. Then offer, in one line: another at this level, one level looser or tighter, a different persona or mechanism, or a new ad. Each is a fresh call.
+`swipes/<slug>/<case>/swipe.md` per swipe, where case is like `L1`, `L2-nina`, `L1-coating`. Show each one in full. Then offer, in one line: another at this level, one level looser or tighter, a different persona or mechanism, a new ad, or make this a video. Each is a fresh call.
+
+## 7. Make it a video
+
+On "make this a video", hand over to the `exodus-video` skill's "From one sentence to a film". Copy only the spoken or sung lines of the chosen `swipes/<slug>/<case>/swipe.md` into `source.txt`, with no headings or notes, and show the user that file. Ask one question first: keep the swiped lines exactly, or let the template fit them to its structure.
+
+- Keep them: the stop 1 lines take `--script source.txt --adapt "Keep the swiped lines as written." --keep-original`.
+- Fit them: `--script source.txt --adapt "<what may change, in the user's words>"`.
+
+From there the walkthrough runs as written: a yes before each paid step, with its price where the CLI prints one, and the user's own picks at each stop.
 
 ## Security
 

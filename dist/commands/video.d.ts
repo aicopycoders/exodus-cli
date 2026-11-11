@@ -8,6 +8,10 @@ export type ScriptRunOptions = {
     conceits: {
         key: string;
         label: string;
+        style?: {
+            slug: string;
+            label: string;
+        };
     }[];
     styles: {
         slug: string;
@@ -26,6 +30,7 @@ export interface ClipWord {
     w: string;
     s: number;
     e: number;
+    lineId?: string;
 }
 export type ClipQcTakeNeighbours = {
     state: "not-applicable";
@@ -106,6 +111,7 @@ export type ArtifactSubset = {
     voicePitchHz?: number;
     voicePitchMethod?: string;
     replannedIdea?: ReplannedIdea;
+    voiceLock?: unknown;
 } | {
     type: "audio";
     sceneIndex?: number;
@@ -189,6 +195,7 @@ export interface VideoRun {
     provenance?: RunProvenance;
     musicBed?: boolean;
     videoChoice?: RunVideoChoice;
+    songAsVoice?: true;
     shots?: RunShots;
     storyboardAutoApproval?: {
         outcome: "approved" | "held";
@@ -358,6 +365,7 @@ export interface ManifestScene {
     voiceFirstBlockedBy: string[] | null;
     voicePitchHz: number | null;
     voicePitchMethod: string | null;
+    voiceLock?: unknown;
     clipStatus: string;
     error: string | null;
     flagged: boolean;
@@ -423,6 +431,7 @@ export interface VideoManifest {
         videoModel: string;
         voiceMode: string;
     };
+    clipAudio?: "keep" | "discard";
     shots?: RunShots;
     lineage?: {
         file: string | null;
@@ -476,6 +485,30 @@ export interface ScriptStartOptions {
     rewriteToFit?: true;
     sourceRecordFile?: string;
     adaptationPlanFile?: string;
+    resumeScriptFile?: string;
+    requestedSeconds?: number;
+    picturesPerScene?: 1 | 3;
+    productId?: string;
+    elementsInput?: string;
+    voicesInput?: string;
+    inputMode?: "automatic" | "manual" | "hybrid";
+    structure?: string;
+    reference?: string;
+    subject?: "product" | "service" | "non-product";
+    adaptationIntent?: string;
+    describe?: true;
+    keepOriginal?: true;
+    writerBrief?: {
+        product?: string;
+        audience?: string;
+        offer?: string;
+        mechanism?: string;
+    };
+    templateBriefInput?: string;
+    songControlsInput?: string;
+    mechanismPlanInput?: string;
+    quotePreparation?: true;
+    authorizePreparationFile?: string;
     wait: boolean;
     json: boolean;
     onProgressLine?: (line: string) => void;

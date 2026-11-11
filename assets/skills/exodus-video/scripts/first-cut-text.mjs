@@ -54,7 +54,7 @@ function fitText(text, { kind, fs: initialFs, box, xShare, yShare, style, W, H, 
   return { code: "text-overflow" };
 }
 
-export function planCaptionScreens(words, { cap = null, names = [], lyricLines = [], cuts = [], avoid = [], W, H, totalSec = null, measureText } = {}) {
+export function planCaptionScreens(words, { cap = null, names = [], lyricLines = [], cuts = [], avoid = [], W, H, totalSec = null, measureText, keepNumericLists = false } = {}) {
   const holds = [], notes = [];
   const fail = (code, reason) => ({ screens: [], holds: [hold(code, "captions", reason)], notes });
   if (!Array.isArray(words) || !words.length) return fail("word-times-missing", "captions require heard words on the cut clock");
@@ -69,6 +69,24 @@ export function planCaptionScreens(words, { cap = null, names = [], lyricLines =
   for (let i = 0; i < words.length - 1; i++) {
     const neg = (k) => NEGATOR.test(c[k]) || /n['’]t$/iu.test(raw[k]);
     glue[i] = (/\d/u.test(raw[i]) && UNIT.test(c[i + 1])) || neg(i) || (AUX.test(c[i]) && neg(i + 1)) || FUNC.test(c[i]) || /^[$€£]$/u.test(raw[i]) || (/^[-–,.]$/u.test(raw[i + 1]) && /\d/u.test(raw[i])) || (/^[-–,.]$/u.test(raw[i]) && i > 0 && /\d/u.test(raw[i - 1])) || (/^\p{Lu}/u.test(raw[i]) && /^\p{Lu}/u.test(raw[i + 1]) && c[i] !== "i");
+  }
+  // Only the selected narrated finish opts into this grouping. Ordinary
+  // caption callers retain their existing boundaries and chunk behavior.
+  if (keepNumericLists === true) {
+    // Preserve numeric enumerations without rewriting their punctuation.
+    // Actual sentence/pause/cut boundaries below still win.
+    const number = /^(?:\d+(?:[.,]\d+)*|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:[-–]figure)?[,;.!?]?$/iu;
+    for (let i = 0; i < raw.length - 1; i++) {
+      if (!number.test(raw[i]) || !/[,;]$/u.test(raw[i])) continue;
+      let last = i, count = 1;
+      for (let j = i + 1; j < raw.length; j++) {
+        if (/^(?:and|or)$/iu.test(raw[j]) && number.test(raw[j + 1] ?? "")) continue;
+        if (!number.test(raw[j])) break;
+        last = j; count++;
+        if (!/[,;]$/u.test(raw[j]) && !/^(?:and|or)$/iu.test(raw[j + 1] ?? "")) break;
+      }
+      if (count > 1) for (let j = i; j < last; j++) glue[j] = true;
+    }
   }
   for (const name of names) {
     const p = squash(name).split(" ").map(core);
@@ -238,7 +256,7 @@ export function planText({ treatment, words = [], captions = {}, items = [], avo
   directives.cards = cp.cards; directives.hook = cp.hook; directives.endCard = cp.endCard;
   if (captions.on === true) {
     const cardAvoid = [...cp.cards, ...(cp.hook ? [cp.hook] : []), ...(cp.endCard ? [cp.endCard] : []), ...cp.reservations];
-    const p = planCaptionScreens(words, { cap: captions.cap, names: captions.names, lyricLines: captions.lyricLines, cuts, avoid: [...avoid, ...cardAvoid], W, H, totalSec, measureText });
+    const p = planCaptionScreens(words, { cap: captions.cap, names: captions.names, lyricLines: captions.lyricLines, keepNumericLists: captions.keepNumericLists === true, cuts, avoid: [...avoid, ...cardAvoid], W, H, totalSec, measureText });
     holds.push(...p.holds); directives.captions = p.screens;
   }
   if (!libass && (captions.on === true || all.some((i) => !["physical-readout", "authentic-lettering"].includes(i.provenance)))) holds.push(hold("libass-missing", "burn", "actual subtitles filter is unavailable; text is not delivered"));

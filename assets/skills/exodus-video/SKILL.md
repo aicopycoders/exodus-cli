@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
+description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -69,10 +69,228 @@ not on the menu by name; Custom is the way to them. A narrator-only script fits
 Custom alone. If the refusal lists different keys from this table, the server
 is right and this table is stale.
 
+The template door is a second menu, `exodus video start --input-options`. The
+Golden Six formats start there. "From one sentence to a film" walks it.
+
 The Rig box on that workflow is where the run's Conceit and Style come from.
 Conceit is the family plus Wrapper, Narrator Person, and Delivery. Style is the
 look. Narrated Story is the voice-over family and Acted Story is the dialogue
 family (`familyTree.ts`). Those family names stay the code's names.
+
+## From one sentence to a film
+
+The member types one sentence, such as "swipe this ad as a microdrama for my
+brand". You drive the run through its stops and wait for the member at each
+one. The Golden Six formats start on the template door, which needs
+Templates switched on for the member's account. Without it the CLI answers
+"video isn't enabled for this key" or "Templates aren't available on your
+account. Ask an admin if you need it." Tell the member that and stop. A beta
+tester's key refuses the template flags and `retry-clip` with a sentence
+naming what it refused ("Beta testers"): tell the member and stop. Do not retry.
+
+Two rules hold at every stop:
+
+- **The run page link.** The start prints `Watch it: <link>`. Keep it and give
+  it to the member at every stop: the faces, rooms, pictures, voice samples
+  and clips open there. `status` leaves it out at the storyboard stop.
+- **A yes before every paid step.** Tell the member what the step buys
+  and its price, then wait for their yes. The price is the one the CLI
+  printed: `maximumUsd` and `estimatedUsd` under `preparationQuote` from
+  `--quote-preparation`, or the total from `video quote`. Where the CLI prints
+  no price, say that it prints none. A quote covers only its phase, never the
+  whole video: say so. A saved quote that has expired or no
+  longer matches is refused with nothing spent: quote again and ask again.
+  Reads cost nothing and need no yes.
+
+**The Golden Six.** `exodus video start --input-options` lists the templates
+this account may start, the Golden Six first, one line each:
+`<key> — <label> — <description> — <n> structures`. Use the key it prints.
+`--style` takes the template's own look, from this table.
+
+| The member asks for | `--conceit` | `--style` |
+|---|---|---|
+| UGC, a creator talking to camera | `ugc-template` | `raw-iphone-ugc-template` |
+| an authority yapper, an expert explaining | `authority-yapper-template` | `realistic-template` |
+| a microdrama, a short acted scene | `microdrama-template` | `realistic-template` |
+| a skeleton timeline | `skeleton-timeline-template` | `pixar-3d-template` |
+| a song ad, a Suno song, a jingle | `pixar-song-template` | `pixar-3d-template` |
+| personification, the product or a body part talking | `personification-template` | none of its own: ask the member to pick one of the looks the server offers |
+
+A `--style` the server does not offer is refused with the list of looks it
+does offer, and nothing is spent.
+
+### Start
+
+1. Find three things in the sentence, and ask one question for whatever is
+   missing:
+   - the source ad: pasted text or a file, as it is, or the words of an ad in
+     Exodus or behind a link (the `swipe` skill's section 1 gets them). Save
+     the words to `source.txt`.
+   - the format: the table above.
+   - the brand: `exodus brand current`.
+2. `exodus video start --input-options --conceit <key>` prints the template's
+   story structures, its reference ads, the saved references and the account
+   voices. It writes, quotes and starts nothing. Name the structures to the
+   member, one line each. A structure they pick goes on the stop 1 lines as
+   `--structure <key>`.
+3. A template run always stops at the storyboard. The CLI refuses `--one-shot`
+   on a template start before anything is sent ("Template preparation requires
+   storyboard review; do not combine it with --one-shot. Nothing has
+   started."), and the server never approves a template's storyboard by
+   itself. A member who asks for no stops still gets each paid step named, with
+   its price or the fact that the CLI prints none, and a yes asked before it
+   runs.
+
+### Stop 1: the script and the cast
+
+1. Quote the script:
+
+   ```
+   exodus video start --script source.txt --conceit <key> --style <look> \
+     --adapt "<what may change, in the member's words>" --stop-at-script \
+     --quote-preparation --json > script-quote.json
+   ```
+
+   Add `--product <brandProductId>` only when the member gives a saved
+   product's id; the CLI lists no products. Give the member the price.
+2. On their yes, run the same line with `--authorize-preparation
+   script-quote.json` in place of `--quote-preparation`, into `stop1.json`. It
+   writes the script and starts no run.
+3. Write the script out byte for byte:
+   `node -e 'process.stdout.write(require("./stop1.json").script)' > script.txt`.
+   Show the member the source and `script.txt` side by side, and the cast:
+   each name that speaks a line. Ask: go on, change a line, or stop.
+   - Go on: "The run starts" below.
+   - Change a line: copy `script.txt` to `edited.txt` and make their change.
+     An edited script is checked and approved again, at a price of its own.
+     The first line quotes; the second waits for their yes:
+
+     ```
+     exodus video start --resume-script stop1.json --script edited.txt \
+       --conceit <key> --style <look> --stop-at-script --quote-preparation --json > edit-quote.json
+     exodus video start --resume-script stop1.json --script edited.txt \
+       --conceit <key> --style <look> --stop-at-script --authorize-preparation edit-quote.json --json > stop1b.json
+     ```
+
+     From here `stop1b.json` is the stop file. Write its script over
+     `script.txt` the same way and show it again.
+   - Stop: nothing more is spent.
+
+### The run starts
+
+`<stop file>` is the latest one: `stop1.json`, or `stop1b.json` after an edit.
+Use it with `script.txt` written out from it, unchanged. A different script,
+product, voice or reference is refused, and nothing starts.
+
+```
+exodus video start --resume-script <stop file> --script script.txt \
+  --conceit <key> --style <look> --quote-preparation --json > board-quote.json
+```
+
+That quotes the storyboard. On the member's yes:
+
+```
+exodus video start --resume-script <stop file> --script script.txt \
+  --conceit <key> --style <look> --authorize-preparation board-quote.json --wait
+```
+
+It prints the run id and `Watch it: <link>`, then waits until the run needs
+the member.
+
+### Stop 2: the picks (arrives with the next server update)
+
+Today a run goes from the script straight to the storyboard. Run this stop
+only when `status` says the run is waiting for picks.
+
+1. `exodus video picks <runId>` lists, for each person, four faces and the
+   voices; for each place, four rooms; on a microdrama, the camera styles and
+   a map in metres. Each face, room and voice sample has its own link. Show it
+   all with the run page link.
+2. Ask for one face and one voice per person, one room per place, and on a
+   microdrama a style. Send the answers as:
+
+   ```
+   exodus video pick <runId> --face <who>=<n> --voice <who>=<n|voice name|voice id> \
+     --room <place>=<n> [--style <key>] [--move <who>=<x>,<y>] [--note "<text>"]
+   ```
+
+   `<who>` is the name the script uses. `--face`, `--voice` and `--room`
+   repeat once per person or place. `--style` (the camera style) and `--move`
+   are for the microdrama; `--move` takes metres on the printed map. The run goes on only
+   when every slot has a pick. A pick that leaves a slot open prints the open
+   slots: ask for those.
+3. "Show me other faces": `exodus video picks <runId> --redo face:<who> --note
+   "<what to change>"`, or `room:<place>` for rooms. It draws four new
+   pictures. The CLI prints no price for them: say so and wait for their yes.
+   The second redo of a slot needs the note.
+
+When `picks` answers that the server does not support it yet, the run has no
+picks stop: go to stop 3. When it answers `Unknown subcommand: "picks"`, this
+CLI is older than the server: run `npx @aicopycoders/exodus@latest update`,
+then `picks` again.
+
+### Stop 3: the storyboard
+
+`status` says "Parked: the storyboard is waiting for your yes."
+`exodus video storyboard <runId>` prints each scene's line and picture, and who
+speaks with which voice ("Reading the storyboard gate" has the detail). Show it
+with the run page link, then ask: approve, redo a picture, change a voice, or
+stop.
+
+- Approve: `exodus video approve <runId>`. It buys the voices and the clips
+  (with the pilot stop, the pilot first), the expensive part. The CLI prints
+  no price for them at this stop: say so, and approve on their yes. A storyboard the app's check stopped is
+  refused with the reason. Tell the member, and on their yes approve again
+  with `--accept-findings`.
+- Redo a picture: `exodus video retry-frame <runId> --node <nodeId> --scene <n>
+  --note "<what is wrong>"`, with the node id from the `Redo one frame:` line
+  `status` printed. It redraws one picture. The CLI prints no price for it:
+  say so and wait for their yes.
+- Change a voice: `exodus video voices <runId> --set <who>=<voice>` ("Giving
+  the characters voices").
+- Stop: `exodus workflow cancel <runId>`.
+
+**The song format** waits twice more. `exodus video song <runId>` prints the
+Song master, its listen link and its sha256 once one is ready. The member
+listens; on their yes,
+`exodus video song approve <runId> --master <masterSha256>`. Before its clips
+the run parks with "Parked: final provider requests are prepared".
+`exodus video quote <runId>` prints each request's price and the total; on
+their yes, `exodus video approve <runId> --request-quote <reviewSha256>`.
+
+### Stop 4: the pilot clip (arrives with the next server update)
+
+Today approving the storyboard makes every clip, and the next stop is the end.
+With the pilot stop, the run makes one clip after the storyboard, checks it and
+parks. `status` then says it "made its pilot clip (scene <n>)" and whether the
+words heard match. On UGC and the authority yapper the pilot is two clips, one
+talking and one listening in silence. Show the pilot on the run page and the
+words line, then ask: keep it, or redo it.
+
+- Keep it: `exodus video approve <runId>` makes the other clips, the expensive
+  part. The CLI prints no price for it: say so, and approve on their yes.
+- Redo it: `exodus video retry-clip <runId> --scene <n> --note "<what is
+  wrong>"`. One new clip. The CLI prints no price for it: say so and wait for
+  their yes. The note steers the motion,
+  never the words.
+
+### End: watch and approve
+
+At the final watch, follow the block `status` prints ("Where a run can
+stop"). When the cut is already uploaded, give the member the run page to
+watch it. When the run waits for a cut: `exodus video pull <runId> --out ./ad-<runId>`, make the
+cut ("Cutting the ad"), `exodus video upload <runId> --file <cut.mp4>`, and
+give the member the run page. Ask: approve, redo a clip, or stop here.
+
+- Approve: `exodus video approve <runId>` makes the cut the ad. It is one-way.
+- Redo a clip: `retry-clip` as at stop 4, after their yes. Then pull, cut
+  and upload again.
+
+**On the song format**, tell the member this before they approve: "The song
+made here is for review. Before this video runs as a paid ad, make the same
+lyrics and style again in the Suno app while on a Pro or Premier plan, download
+it there and use that file: Suno's terms allow commercial use only of songs made
+on those plans and downloaded from Suno."
 
 ## Before anything
 
@@ -191,6 +409,75 @@ exodus video director <runId> on|off|follow               the trial director for
                                                           what it is doing and its last three notes
 ```
 
+**Starting from a template.** The Golden Six start here; "From one sentence to
+a film" walks them. Each paid template phase, the script and then the
+storyboard, is quoted first: run the line with `--quote-preparation --json`,
+give the member `maximumUsd`, and run it again with `--authorize-preparation
+<saved-quote.json>` in its place only on their yes. A template line with
+neither is refused, and nothing is spent. The template flags, as `exodus video
+--help` prints them:
+
+```operator-guide
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+    Template starts also accept: [--requested-seconds <seconds>] [--pictures-per-scene <1|3>] [--product <brandProductId>] [--elements <json|@file>] [--voices <json|@file>] [--resume-script <saved-stop-response.json>]
+    With --describe: [--product-context <text>] [--audience <text>] [--offer <text>] [--mechanism <text>]
+  exodus video start --input-options [--conceit <template>] [--voice <native|voice-first>] [--voice-path <path>] [--video-model <id>] [--json]
+
+  --describe          Template: explicitly write from the brief in --script.
+                       Review the returned script before preparing a storyboard.
+                       Cannot be combined with --adapt or --resume-script
+  --adapt <intent>    Template: adapt the exact pasted text in --script to the
+                       selected structure. State what may change; no new claims,
+                       identities or consent are inferred. Review original and
+                       changed text before continuing. Not --adaptation-plan
+  --keep-original     With --adapt, intentionally review the exact original
+                       instead of generating changes. Guards and billable checks
+                       still require a quote; no adaptation is claimed
+  --quote-preparation  Request only the current script or storyboard phase quote.
+                       No writer/audio/image/video work. Save --json and review
+                       estimatedUsd (approximate), maximumUsd (phase bound), scope
+                       and expiry; this is not a whole-video price
+  --authorize-preparation <saved-quote.json>
+                       Explicitly accept that quote's maximumUsd for its exact
+                       phase/input. Never upgrades input Automatic to paid consent.
+                       Keep the same file for recovery; no silent new quote/retry
+  --stop-at-script     Print the script the run would start on, and start no
+                       storyboard/video run (start, with --conceit). Preparation
+                       may still be paid. For templates, use
+                       --json to save the approval, source and choices; edit only
+                       a separate script file, then continue with --resume-script
+  --resume-script <saved-stop-response.json>
+                       Continue a template's saved --stop-at-script --json
+                       response with --script <edited.txt>, --conceit and
+                       --style. Keep the server-issued approval, approved source,
+                       brief, product, selected video model, signed references and voice map.
+                       V2 also retains input intent/subject/structure/reference,
+                       direction, sound/story choices and declared source/adaptation
+                       records; material edits need a new quoted script review.
+                       Explicit length, picture, --voice, --voice-path and
+                       --video-model flags override their matching saved choices.
+                       Changed or cleared --elements and --voices require
+                       explicit --stop-at-script --json with
+                       --resume-script to check the edited script and issue a new
+                       approval; then resume that returned response to start.
+                       Keep your original description and edited script files.
+                       A different product still needs fresh writing and approval
+                       without --resume-script.
+                       Not for --show
+  --input-options     List your templates: Golden Six first, then more templates.
+                       Add --conceit <template> for structures, capabilities,
+                       identity locks, references and account voices.
+                       GET only: writes, quotes and starts nothing. Optional
+                       --voice, --voice-path and --video-model require --conceit.
+                       Reports unsupported, unavailable and empty separately;
+                       use the returned IDs with --elements and --voices
+```
+
+The other template flags (`--input-mode`, `--structure`, `--reference`,
+`--subject`, `--template-brief`, `--song-controls`, `--mechanism-plan`,
+`--requested-seconds`, `--pictures-per-scene`, `--product`, `--elements`,
+`--voices`) are in `exodus video --help`.
+
 **From the storyboard on.**
 
 ```operator-guide
@@ -304,6 +591,10 @@ started.
   `status` prints "the app checks the storyboard and approves it itself if the
   checks pass" on a run headed that way. `--review-storyboard` is the default
   and changes nothing.
+- A template run (the Golden Six, "From one sentence to a film") quotes the
+  script and the storyboard before it spends (`--quote-preparation`, then
+  `--authorize-preparation`), and always stops at the storyboard. `--one-shot`
+  is refused on a template start, and nothing is sent.
 - A Show run (`video start --show`) and a saved workflow run (`workflow run`)
   still pause at the storyboard for approval. Approving is what releases the
   voices and the clips. `status` prints "This run will pause for your approval
@@ -919,6 +1210,14 @@ dropped[]                            B-roll scene numbers the app left out
                                      They have no clip on purpose: cut with
                                      `--skip` and stay on the speaker
 narration                            { file, timing }, or null on a per-scene run
+clipAudio                            keep | discard, on template-video pulls.
+                                     Native talking keeps the clip's dialogue.
+                                     Voice-first narration and song discard ALL
+                                     embedded clip audio, including wordless
+                                     pictures and reactions; use only the approved
+                                     voice/song track. The bundled first-cut reads
+                                     this policy for hand-run and automatic cuts.
+                                     Absent on other models: existing cut rules apply.
 cast[]                               one per identity still
   characterId, name                  from the run's cast lock; null for an
                                      unclaimed ledger still

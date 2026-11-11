@@ -1,4 +1,5 @@
 // B32–B34 consumer contract. No source mutation, policy table or width estimate.
+/** Normalized [left, top, right, bottom] (XYXY), not storyboard XYWH. */
 export type Box = [number, number, number, number];
 export interface TextHold { code: string; id: string; reason: string; required: true; inherited?: true }
 export interface HeardWord { text: string; start: number; end: number; lineId?: string }
@@ -92,6 +93,8 @@ export interface Permissions {
 }
 export interface CaptionOptions {
   cap?: CaptionStyle | null; names?: string[]; lyricLines?: string[];
+  /** Internal selected narrated-finish grouping; ordinary callers default off. */
+  keepNumericLists?: boolean;
   /** Actual cut boundaries in the same heard clock. */
   cuts?: number[]; avoid?: Avoidance[]; W: number; H: number; totalSec?: number | null; measureText?: MeasureText;
 }
@@ -102,7 +105,7 @@ export interface CardOptions {
 }
 export interface PlanTextInput extends CardOptions {
   treatment: string; words?: HeardWord[];
-  captions?: { on?: boolean; cap?: CaptionStyle; lyricLines?: string[]; names?: string[] };
+  captions?: { on?: boolean; cap?: CaptionStyle; lyricLines?: string[]; names?: string[]; keepNumericLists?: boolean };
   items?: TextItem[]; selection?: Selection; libass: boolean; cuts?: number[];
   inheritedHolds?: Array<{ code: string; id: string; reason: string }>;
 }

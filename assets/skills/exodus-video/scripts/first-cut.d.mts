@@ -95,6 +95,15 @@ export interface SourceMapFinding {
   detail: string;
 }
 
+export interface NarrationFinishClock {
+  durationSec: number;
+  words: Array<{ w: string; s: number; e: number; lineId: string }>;
+  cuts: Array<{ sceneIndex: number; startSec: number; durationSec: number }>;
+}
+/** Existing pulled master, actual scene-cut starts and canonical tagged words.
+ * Refuses missing/invalid clocks before the worker can order finishing sound. */
+export function narrationFinishClock(input: { dir: string; manifest: unknown; storyboard: unknown }): NarrationFinishClock;
+
 /**
  * Only with manifest.sourceMap === true, which auto-cut sets when the run's
  * frozen payload turns sourceEditMap on.
@@ -232,6 +241,17 @@ export interface CutPace {
     brollMinSec?: number;
     speedUpSlowBroll?: true;
     cutChecks?: true;
+    /** Present only with cutChecks. */
+    blipCheck?: true;
+    freezeCheck?: true;
+    floorCheck?: true;
+    flashCheck?: true;
+    levelStepCheck?: true;
+    voFitCheck?: true;
+    dashGapCheck?: true;
+    /** The numbers the pace was checked at: PACE_BARS, or the format's own. */
+    paceCheck?: { minWps: number; maxWps: number; minGapSec: number; maxGapSec: number; beatMaxSec: number; hookMaxGapSec: number };
+    nameCheck?: true;
   };
   /** `limited`: limitPeaks' limiter ran after the loudness pass. */
   loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true };
@@ -252,6 +272,32 @@ export interface CutChecks {
   shortShots: Array<{ n: number; role: string; at: number; sec: number }>;
   /** null when ffmpeg could not read the cut's motion. */
   slowShots: Array<{ n: number; role: string; at: number; sec: number; motion: number; median: number }> | null;
+  /** blipCheck: shots under a second whose source shot ran a second or longer (srcSec null: no source shot to compare). Present only with it on. */
+  blips?: Array<{ n: number; role: string; at: number; sec: number; srcSec: number | null }>;
+  /** freezeCheck: stretches of a second or more where the picture does not move. Present only with it on. */
+  freezes?: Array<{ at: number; sec: number }>;
+  /** floorCheck: cards outside 2.5 to 3 s, shots after a card under 1 s before their first word, dialogue takes under 8 s with no reaction after, takes over 25% short of plan. */
+  floors?: {
+    cards: Array<{ n: number; label: string; at: number; sec: number }>;
+    leads: Array<{ card: number; n: number; at: number; leadSec: number }>;
+    dialogue: Array<{ n: number; at: number; sec: number }>;
+    shortTakes: Array<{ n: number; sec: number; planSec: number }>;
+  };
+  /** flashCheck: shots under 0.2 s (`shot`) and one-frame flashes the motion read shows (`frame`, n null). */
+  flashes?: Array<{ n: number | null; at: number; sec: number; from: "shot" | "frame" }>;
+  /** levelStepCheck: cuts where the sound between words steps over 3 dB; null when the cut's sound could not be read. */
+  levelSteps?: Array<{ n: number; at: number; stepDb: number; beforeDb: number; afterDb: number }> | null;
+  /** voFitCheck: a voice-over take starting under 0.3 s after the word before it (`early`), or its last word past its take (`late`). */
+  voFits?: Array<{ n: number; at: number; early?: number; late?: number }>;
+  /** dashGapCheck: gaps over 0.15 s after a line ending on a dash; `rolled` a gap over 0.3 s inside one take. */
+  dashGaps?: Array<{ line: string; next: string; at: number; gapSec: number; sameTake: boolean; rolled?: true }>;
+  /** paceCheck: lines outside the words-a-second band, and gaps between lines outside theirs. */
+  paceBreaks?: {
+    lines: Array<{ line: string; at: number; wps: number }>;
+    gaps: Array<{ line: string; next: string; at: number; gapSec: number; hook?: true; beat?: true }>;
+  };
+  /** nameCheck: how many script names were looked for in their takes, and the ones the scribe did not hear. */
+  names?: { checked: number; missing: Array<{ n: number; line: string; name: string }> };
   lufs: number | null;
   truePeak: number | null;
   verdict: { pass: boolean; fails: string[] };
@@ -288,8 +334,23 @@ export interface FirstCutOptions {
   music?: boolean;
   /** #3365: hold a scene's keyframe where it has no clip, instead of refusing. Defaults to off. */
   stillFill?: boolean;
-  /** With the measured map only: render immutable pre-text pixels, then complete with completeFirstCutText. */
+  /** Render immutable pre-text pixels for mapped cuts or trusted Template authored text, then complete with completeFirstCutText. */
   prepareText?: boolean;
+}
+
+/** Semantic preservation and visible final-clock windows, not generated-quality proof.
+ * Only trusted template runs carry this; ordinary cuts retain their old shape. */
+export interface CutMotion {
+  shots: Array<{
+    sceneIndex: number; startSec: number; seconds: number; file: string | null; speed: number;
+    /** Actual selected board/plan obligations, never prompt-keyword inference. */
+    protection?: Record<string, unknown>;
+  }>;
+  holds: Array<{
+    sceneIndex: number; startSec: number; seconds: number; basis: string;
+    /** The actual underlying spine has no audible voice or whole-song track. */
+    silent: boolean;
+  }>;
 }
 
 export interface FirstCut {
@@ -297,7 +358,11 @@ export interface FirstCut {
   durationSec: number;
   /** The music file the cut used, or null. */
   music: string | null;
-  timeline: { spine: Array<{ sceneIndex: number }>; left: string[] };
+  timeline: {
+    spine: Array<{ sceneIndex: number; audio?: "clip" | "narration" | "silence"; startSec?: number }>;
+    left: string[];
+  };
+  motion?: CutMotion;
   /** Budget-only decoded receipt; also supported when sourceEditMap is absent. */
   planningTiming?: FinalPlanningTiming;
   /** Present only when the manifest turned a finishing setting on. */
@@ -313,7 +378,7 @@ export interface FirstCut {
    * final heard word, with visible living-tail observation, never silent fill. */
   sourceMap?: SourceEditMap;
   /** Internal prepared artifact; cannot be attached as a completed text finish. */
-  textStage?: { dir: string; board: unknown; policy: unknown };
+  textStage?: { dir: string; board: unknown; policy: unknown; speed?: number; frames?: number };
   text?: TextPlan;
 }
 
@@ -321,6 +386,12 @@ export interface FirstCut {
 export function sourceMapPath(outPath: string): string;
 
 export function firstCut(options: FirstCutOptions): FirstCut;
+/** Resolve approved authored phases against visible source/word windows.
+ * Flexible template phases bind actual planPicture slots, never unused capacity. */
+export function resolveTemporalRequirements(cut: FirstCut, board: unknown): Pick<TemporalFinishEvidence, "requirements" | "owners" | "holds">;
+/** Consume exact-source temporal evidence and retained media. Unknown inputs are
+ * serialized board/policy/receipt shapes; this does not manufacture observations. */
+export function finishFulfillment(cut: FirstCut, board: unknown, policy: unknown, temporal?: unknown): FinishFulfillment;
 /** Measures the actual final file without constructing a source map or changing media. */
 export function measureCutPlanningTiming(file: string, planningBudget: PlanningBudget): {
   planningTiming: FinalPlanningTiming;
@@ -333,7 +404,12 @@ export interface TextRenderer {
   assertFont?: () => boolean;
 }
 
-/** Observes the exact prepared pixels, measures/renders literal text, stream-copies sound and re-probes the final target. */
+/** Observes the exact prepared pixels, measures/renders literal text, stream-copies sound and re-probes the final target.
+ * Trusted Template authored text also supports native/song cuts without adding
+ * a source map or changing their audio finishing. Captions follow audible
+ * joins/removals, not muted picture inserts; selected captionsByLine adds
+ * approved line boundaries without changing word intervals. Ordinary routes
+ * retain their grouping. Missing libass/font measurement still holds. */
 export function completeFirstCutText(cut: FirstCut, options?: {
   out?: string;
   prepareReadoutVerifier?: ReadoutPreparer;

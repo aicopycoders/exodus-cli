@@ -17,6 +17,8 @@ In Claude Code you don't click buttons. You say **"exodus"** plus what you want 
 | exodus-workflow | Run/build saved multi-node workflows, resolve inbox gate/repair parks, continue sessions, fire triggers, read banks + promote winners |
 | exodus-hooks | Read the Scout library of hook cards — composable filters, one-card detail, pattern matches, CSV export (read-only) |
 | exodus-video | Make a video ad from a script by running a saved video workflow — storyboard gate, pull every piece + manifest, cut it in whatever editor you use, upload, approve (admin-only) |
+| ugc-ads | UGC talking-to-camera ad scripts, no video ("write me a UGC script", "swipe this UGC ad") — the front door to ugc-swipe, ugc-template and ugc-write; calls the UGC bots on Genesis with your own GENESIS_API_KEY plus a provider key. A UGC video is exodus-video; ugc-preproduction runs the separate UGC video kit's sheet |
+| timeline-ad-factory | Animated timeline video ads ("Day 1... Week 2...") made on your own Kie.ai key, not on Exodus ("make me a timeline ad", "turn this winning ad into timeline ads"); a yes before each stage and a price before the video, but re-rendering a failed clip and the music spend without another yes. "exodus, make a skeleton timeline video" is exodus-video |
 | exodus-browse | View History and Surface the Right Run |
 | exodus-drive | Google Drive, Docs, Sheets via the Dashboard's OAuth |
 | exodus-winners | Mine your own Meta ad account for winners (needs the Meta Ads MCP) and import them into Exodus |

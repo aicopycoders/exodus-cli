@@ -1,0 +1,38 @@
+{
+  "name": "example-joint-softgel",
+  "aspect_ratio": "9:16",
+  "elements": {
+    "product": "",
+    "offer": "",
+    "segment": "",
+    "situation": "",
+    "pain_points": "",
+    "objections": "",
+    "wrong_suspect": "",
+    "real_villain": "",
+    "failed_fixes": "",
+    "desired_outcome": "",
+    "witness": "",
+    "identity_payoff": "",
+    "mechanism_picture": ""
+  },
+  "angle": {"opener": "", "why": "", "hook": ""},
+  "voice": {"provider": "kie", "name": "", "backup": "", "stability": 0.38, "similarity_boost": 0.8, "style": 0.4, "speed": 1.0},
+  "style": "Pixar-style 3D animation, cinematic lighting, big cartoon expressions",
+  "character": {
+    "name": "hero",
+    "lock": "the ONE cartoon skeleton from the reference sheet: ivory cartoon bones, big skull with glossy amber eyes, backwards mustard-yellow baseball cap, open teal bowling shirt over the visible ribcage, silver chain",
+    "sheet_prompt": ""
+  },
+  "extra_cast": [
+    {"name": "wife", "lock": "", "sheet_prompt": ""}
+  ],
+  "set": "a warm suburban kitchen with unbranded appliances, morning window light, screens and papers show only colorful abstract pictures",
+  "shots": [
+    {"id": 1, "label": "HOOK", "lines": [], "panels": [], "beats": [], "cast": ["hero"]}
+  ],
+  "stamps": [{"say": "Day one", "label": "DAY 1"}],
+  "end_card": ["", "", "Tap the link below"],
+  "pronounce": {"softgels": "soft jells", "CoQ10": "co Q ten"},
+  "acronyms": ["AI", "DNA"]
+}

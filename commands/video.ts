@@ -214,6 +214,8 @@ Usage:
   exodus video picks <runId> [--redo face:<who>|room:<place>] [--note "..."] [--json]
   exodus video pick <runId> [--face <who>=<n>] [--voice <who>=<n|name|id>] [--room <place>=<n>] [--style <key>] [--move <who>=<x>,<y>] [--note "..."] [--json]
   exodus video storyboard <runId> [--json]
+  exodus video map <runId> [--place <place>] [--json]
+  exodus video move <runId> --move <who>=<x>,<y> [--move ...] [--place <place>] [--note "..."] [--json]
   exodus video approve <runId> [--approve-stale-cut] [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
   exodus video broll <runId> [--json]
@@ -276,9 +278,12 @@ Options:
   --room <place>=<n>   The room to keep for a place (pick). Repeatable
   --style <key>        The director style (pick), when the run offers one
   --move <who>=<x>,<y> Where a person stands on the blocking map, in metres
-                       (pick). Refused until a format has a blocking map
+                       (move). Repeatable. At the picks stop (pick) it is
+                       refused: the map comes with the storyboard
   --redo <slot>        Four new paid pictures for face:<who> or room:<place>
                        (picks). The second redo of the same slot needs --note
+  --place <place>      One room of the blocking map, as the map names it (map,
+                       move)
   --catalog            List the voices you can pick by name (voices). No run
                        needed. With a run, also the best few for each
                        character who speaks
@@ -458,7 +463,7 @@ status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (r
 picture while the storyboard waits), pull (the finished video, each scene's
 clip and voice, and the music) and upload. These stay admin-only:
 start --video-model / --voice / --voice-path / --director, director,
-status --rejected-draft, retry-clip, revoice and broll. start --broll works
+status --rejected-draft, retry-clip, revoice, broll, map and move. start --broll works
 for whoever B-roll is switched on for.
 If a command answers "video isn't enabled for this key", the run id is wrong,
 the command is admin-only, or video isn't switched on for your dashboard user.
@@ -531,6 +536,7 @@ export const FINAL_PATH = "/api/v2/video/final";
 export const VOICES_PATH = "/api/v2/video/voices";
 // Stop 2: the picks a run drew before its storyboard (GET), a pick or a redo (POST).
 export const PICKS_PATH = "/api/v2/video/picks";
+export const MAP_PATH = "/api/v2/video/map";
 export const ASSET_UPLOAD_URL_PATH = "/api/v2/workflows/asset-upload-url";
 export const ASSETS_PATH = "/api/v2/workflows/assets";
 
@@ -840,6 +846,8 @@ export interface VideoRun {
   requestQuotePending?: boolean;
   /** The run's frozen sourceEditMap setting: its first cut keeps a measured map, and its pull reads the lineage. */
   sourceEditMap?: true;
+  /** The run's frozen blockingMap setting: its storyboard stop shows the floor plan as a map (exodus video map). */
+  blockingMap?: true;
   nodes: VideoRunNode[];
   /** #1883: the approval stop a still-running run is headed for. Server-decided. */
   pauseAhead?: WorkflowRun["pauseAhead"];
@@ -1056,6 +1064,8 @@ export type RunStop =
       /** #2587: why the app would not approve its own storyboard, as the
        *  server wrote it for the member. */
       heldReason?: string;
+      /** The run's format shows the floor plan as a map at this stop. */
+      blockingMap?: true;
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -1270,6 +1280,7 @@ export function classifyRun(run: VideoRun): RunStop {
           : {}),
         ...(isShowAd(run) ? { showAd: true } : {}),
         ...(held ? { heldReason: held } : {}),
+        ...(run.blockingMap === true ? { blockingMap: true as const } : {}),
       };
     }
     if (parkedAtFinalWatch(run)) {
@@ -1545,6 +1556,7 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string): st
         `Redo one frame: exodus video retry-frame ${runId} --node ${stop.framesNodeId} --scene <n>`,
       );
     }
+    if (stop.blockingMap) lines.push(`See the rooms: exodus video map ${runId}`);
     return lines;
   }
   if (stop.at === "final-watch") {
@@ -5285,6 +5297,7 @@ export async function storyboardFlow(
     .get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`)
     .catch(() => null);
   const showAd = runRes?.ok === true && isShowAd(asVideoRun(runRes.data));
+  const blockingMap = runRes?.ok === true && asVideoRun(runRes.data).blockingMap === true;
 
   const logic = cards.logicFindings;
   if (logic) {
@@ -5313,6 +5326,7 @@ export async function storyboardFlow(
   if (cards.broll === true) {
     lines.push(`change the B-roll shots: exodus video broll ${runId}`);
   }
+  if (blockingMap) lines.push(`see each room and where everyone stands: exodus video map ${runId}`);
   return { code: 0, lines };
 }
 
@@ -5686,7 +5700,7 @@ export function parsePickFlags(occurrences: FlagOccurrence[]): { ok: true; reque
       continue;
     }
     if (flag === "move") {
-      const [x, y, ...extra] = picked.split(",").map((part) => Number(part.trim()));
+      const [x, y, ...extra] = picked.split(",").map((part) => (part.trim() ? Number(part.trim()) : NaN));
       if (extra.length > 0 || !Number.isFinite(x) || !Number.isFinite(y)) {
         return { ok: false, line: `--move ${name} needs metres as <x>,<y>, for example --move ${shellWord(name)}=1.25,2 (got "${picked}").` };
       }
@@ -5754,6 +5768,158 @@ export async function redoPicksFlow(
       `See them when they are ready: exodus video picks ${runId}`,
     ],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Stop 3: the blocking map (a format with blockingMap shows the storyboard's floor plan)
+// ---------------------------------------------------------------------------
+
+/** One place of the map. MIRROR of PlaceMapView in convex/videoMap.ts (PlaceMap in video/lib/blockingMap.ts). */
+export interface MapPlaceView {
+  place: string;
+  timeOfDay: string;
+  bounds: { x0: number; y0: number; x1: number; y1: number };
+  people: Array<{ who: string; name: string; x: number; y: number; side: string; faces: string | null }>;
+  things: Array<{ what: string; x: number; y: number; far?: true }>;
+  setups: Array<{ setup: string; scenes: number[]; people: string[] }>;
+  redraw: Array<{ sceneIndex: number; setup?: string; shares: number[] }>;
+  pictures: number;
+  usd: { low: number; high: number } | null;
+}
+
+/** What `exodus video map` reads. MIRROR of MapView in convex/videoMap.ts. */
+export interface MapView {
+  runId: string;
+  movable: boolean;
+  places: MapPlaceView[];
+}
+
+/** Metres as the map prints them: to the centimetre, no trailing zeros. */
+const metres = (n: number): string => String(Number(n.toFixed(2)));
+
+/** "REP", "STRATEGIST and REP", "A, B and C". */
+function andList(words: readonly string[]): string {
+  return words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** `exodus video map`: one block per place, each person on their mark, the window and the setups that film it. */
+export function mapLines(view: MapView, runId: string, runUrl: string): string[] {
+  const lines = [
+    `Run ${runId}'s blocking map, in metres, seen from above: x runs left to right as each room's wide shot sees it, y away from its camera.`,
+    `See the pictures:  ${runUrl}`,
+  ];
+  for (const place of view.places) {
+    const b = place.bounds;
+    lines.push(
+      "",
+      `${place.place.toUpperCase()}  (${place.timeOfDay})  x ${metres(b.x0)} to ${metres(b.x1)}, y ${metres(b.y0)} to ${metres(b.y1)}: ${metres(b.x1 - b.x0)} m across, ${metres(b.y1 - b.y0)} m deep`,
+    );
+    const width = Math.max(6, ...place.people.map((p) => p.name.length));
+    for (const p of place.people) {
+      const at = `x ${metres(p.x)}`.padEnd(8) + `y ${metres(p.y)}`.padEnd(8);
+      lines.push(`  ${p.name.padEnd(width)}  ${at}${p.side.padEnd(13)}faces ${p.faces ?? "the camera"}`);
+    }
+    for (const t of place.things) {
+      lines.push(`  ${t.what.padEnd(width)}  ${`x ${metres(t.x)}`.padEnd(8)}y ${metres(t.y)}${t.far ? "  (off the map, more than 3 m from everyone)" : ""}`);
+    }
+    for (const s of place.setups) {
+      lines.push(`  setup ${s.setup}  ${scenesPhrase(s.scenes)}  ${s.people.length ? andList(s.people) : "nobody named"}`);
+    }
+    if (place.pictures > 0) {
+      lines.push(
+        `  A move here that changes anyone's side of the wide shot redraws ${picturesPhrase(place.pictures)} (${redrawPhrase(place.redraw)})${priceRange(place.usd)}. A move that keeps everyone's side redraws nothing.`,
+      );
+    }
+  }
+  lines.push(
+    "",
+    view.movable
+      ? `Move someone:  exodus video move ${runId} --move <who>=<x>,<y> [--place <place>] [--note "<what to change>"]`
+      : "People can be moved only while the storyboard waits for you with its pictures drawn.",
+  );
+  return lines;
+}
+
+const picturesPhrase = (n: number): string => `${n} ${n === 1 ? "picture" : "pictures"}`;
+
+/** "scenes 1, 2 and 3; scene 4 shares scene 1's still": the pictures drawn, one a camera setup, and who shares them. */
+function redrawPhrase(redraw: ReadonlyArray<{ sceneIndex: number; shares: number[] }>): string {
+  const shared = redraw
+    .filter((r) => r.shares.length > 0)
+    .map((r) => `${scenesPhrase(r.shares)} ${r.shares.length === 1 ? "shares" : "share"} scene ${r.sceneIndex}'s still`);
+  return [scenesPhrase(redraw.map((r) => r.sceneIndex)), ...shared].join("; ");
+}
+
+/** " · $0.27 to $0.54", as the run page prices a picture redo, or " · price unknown" when the server could not price it. */
+function priceRange(usd: { low: number; high: number } | null | undefined): string {
+  if (!usd) return " · price unknown";
+  return usd.high > usd.low ? ` · $${usd.low.toFixed(2)} to $${usd.high.toFixed(2)}` : ` · about $${usd.low.toFixed(2)}`;
+}
+
+/** What `exodus video move` sends. */
+export interface MoveRequest {
+  moves: Array<{ who: string; x: number; y: number }>;
+  place?: string;
+  note?: string;
+}
+
+/** What a move answers. MIRROR of MoveReceipt in convex/videoMap.ts. */
+export interface MoveReceipt {
+  place: string;
+  moved: Array<{ name: string; from: { x: number; y: number }; to: { x: number; y: number } }>;
+  unchanged?: true;
+  redrawing: Array<{ sceneIndex: number; setup?: string; shares: number[] }>;
+  notStarted: Array<{ sceneIndex: number; why: string }>;
+  usd: { low: number; high: number } | null;
+}
+
+/** Read `--move` (repeatable), `--place` and `--note`, as `pick` reads its `--move`. */
+export function parseMoveFlags(occurrences: FlagOccurrence[]): { ok: true; request: MoveRequest } | { ok: false; line: string } {
+  const moves = occurrences.filter((o) => o.flag === "move");
+  if (moves.length === 0) return { ok: false, line: "video move needs at least one --move <who>=<x>,<y>, in metres on the map." };
+  const picked = parsePickFlags(moves);
+  if (!picked.ok) return picked;
+  const request: MoveRequest = { moves: picked.request.moves };
+  for (const { flag, value } of occurrences) {
+    if (flag !== "place" && flag !== "note") continue;
+    if (value === undefined || !value.trim()) return { ok: false, line: `--${flag} needs a value.` };
+    if (flag === "place") request.place = value.trim();
+    else request.note = value.trim();
+  }
+  return { ok: true, request };
+}
+
+export async function moveFlow(runId: string, request: MoveRequest, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(MAP_PATH, { runId, ...request });
+  if (!res.ok) return errorResult(res, json);
+  const receipt = res.data as MoveReceipt;
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, ...receipt })] };
+  const where = (p: { x: number; y: number }) => `x ${metres(p.x)}, y ${metres(p.y)}`;
+  const lines = receipt.moved.map((m) => `Moved ${m.name} from ${where(m.from)} to ${where(m.to)} in ${receipt.place}.`);
+  if (receipt.unchanged) {
+    lines.push(
+      "Nobody changed side of the wide shot, and the pictures only know who stands on which side, so they would come out the same. Nothing is redrawn and nothing is spent.",
+      `See the map: exodus video map ${runId}`,
+    );
+    return { code: 0, lines };
+  }
+  const drawn = receipt.redrawing;
+  if (drawn.length > 0) {
+    lines.push(
+      `Redrawing ${picturesPhrase(drawn.length)} of ${receipt.place} (${redrawPhrase(drawn)})${priceRange(receipt.usd)}. Every other picture stays as it is.`,
+    );
+  }
+  for (const n of receipt.notStarted) lines.push(`Scene ${n.sceneIndex}'s picture was not redrawn: ${n.why}`);
+  lines.push(`See them when they are done: exodus video storyboard ${runId}`);
+  return { code: drawn.length > 0 || receipt.notStarted.length === 0 ? 0 : 1, lines };
+}
+
+export async function mapFlow(runId: string, place: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.get(`${MAP_PATH}?runId=${encodeURIComponent(runId)}${place ? `&place=${encodeURIComponent(place)}` : ""}`);
+  if (!res.ok) return errorResult(res, json);
+  const view = res.data as MapView;
+  if (json) return { code: 0, lines: [JSON.stringify(view, null, 2)] };
+  return { code: 0, lines: mapLines(view, runId, reviewUrl(deps.dashboardUrl, { _id: runId })) };
 }
 
 export async function flagFlow(
@@ -7838,6 +8004,7 @@ const VALUE_FLAGS = new Set([
   "room",
   "move",
   "redo",
+  "place",
 ]);
 
 export function parsePositional(args = process.argv.slice(3)): string[] {
@@ -7928,6 +8095,8 @@ export async function run(
     "quote",
     "picks",
     "pick",
+    "map",
+    "move",
   ];
   // Not `=== true`: `--catalog` typed before the run id takes the id as its
   // value in `flags`, though the id still reaches `rest` as a positional.
@@ -7984,6 +8153,17 @@ export async function run(
     if (flags["redo"] !== undefined && !redo?.trim()) usage("video picks --redo needs face:<who> or room:<place>.");
     if (redo) return printResult(await redoPicksFlow(runId, redo.trim(), flagString(flags, "note"), json, defaultDeps));
     return printResult(await picksFlow(runId, json, defaultDeps));
+  }
+  if (sub === "map") {
+    // Not `=== true`: --place always carries its place as a value.
+    const place = flagString(flags, "place");
+    if (flags["place"] !== undefined && !place?.trim()) usage("video map --place needs a place, as the map names it.");
+    return printResult(await mapFlow(runId, place?.trim(), json, defaultDeps));
+  }
+  if (sub === "move") {
+    const plan = parseMoveFlags(occurrences);
+    if (!plan.ok) usage(plan.line);
+    return printResult(await moveFlow(runId, plan.request, json, defaultDeps));
   }
   if (sub === "pick") {
     const plan = parsePickFlags(occurrences);

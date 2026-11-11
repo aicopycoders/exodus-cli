@@ -234,8 +234,8 @@ then `picks` again.
 `status` says "Parked: the storyboard is waiting for your yes."
 `exodus video storyboard <runId>` prints each scene's line and picture, and who
 speaks with which voice ("Reading the storyboard gate" has the detail). Show it
-with the run page link, then ask: approve, redo a picture, change a voice, or
-stop.
+with the run page link, then ask: approve, redo a picture, change a voice,
+move someone (Micro-drama template only), or stop.
 
 - Approve: `exodus video approve <runId>`. It buys the voices and the clips
   (with the pilot stop, the pilot first), the expensive part. The CLI prints
@@ -248,6 +248,21 @@ stop.
   say so and wait for their yes.
 - Change a voice: `exodus video voices <runId> --set <who>=<voice>` ("Giving
   the characters voices").
+- Move someone (only the Micro-drama template has the blocking map, and it is
+  admin-only today; its storyboard prints `see each room and where everyone
+  stands`): `exodus video map <runId>` prints each room in metres seen from
+  above, each person's mark, their side of the wide shot, the setups that film
+  the room, and what a move there redraws and its price. Show it. Then
+  `exodus video move <runId> --move <who>=<x>,<y> [--place <place>] [--note
+  "<what to change>"]`, with `<who>` as the script names them. Before it, tell
+  the member how many pictures the move redraws and the price `map` printed;
+  when `map` says `price unknown`, say the price is unknown. Either way, run it
+  only after their yes. A move that keeps everyone on the same side of the
+  wide shot redraws nothing and costs nothing, and `move` says so. A move off
+  the room, onto another person or across the 180-degree line of a setup is
+  refused in one sentence: tell the member and ask again. After a move, wait
+  for the redrawn pictures (`exodus video storyboard <runId>` shows them)
+  before you approve; approve and another move are refused until they land.
 - Stop: `exodus workflow cancel <runId>`.
 
 **The song format** waits twice more. `exodus video song <runId>` prints the
@@ -491,6 +506,12 @@ exodus video picks <runId> --redo face:<who>|room:<place> --note "…"
                                                           four new paid pictures for one face or room;
                                                           only after the member's yes
 exodus video storyboard <runId>                           read the scene cards
+exodus video map <runId> [--place <place>]                Micro-drama template (admin-only): each room in metres,
+                                                          each person's mark and the setups that film it
+exodus video move <runId> --move <who>=<x>,<y> [--place <place>] [--note "…"]
+                                                          move people in one room; redraws that room's pictures,
+                                                          one a camera setup; only after the member's yes;
+                                                          approve only once they are redrawn
 exodus video voices <runId>                               who speaks and with whose voice
 exodus video voices <runId> --set <character>=<voiceId>   give a character a voice
 exodus video quote <runId>                                a quoting format: the exact prepared requests and prices

@@ -25,6 +25,7 @@ export declare const ITEMS_PATH = "/api/v2/workflow/items";
 export declare const FINAL_PATH = "/api/v2/video/final";
 export declare const VOICES_PATH = "/api/v2/video/voices";
 export declare const PICKS_PATH = "/api/v2/video/picks";
+export declare const MAP_PATH = "/api/v2/video/map";
 export declare const ASSET_UPLOAD_URL_PATH = "/api/v2/workflows/asset-upload-url";
 export declare const ASSETS_PATH = "/api/v2/workflows/assets";
 export interface ClipWord {
@@ -194,6 +195,7 @@ export interface VideoRun {
     };
     requestQuotePending?: boolean;
     sourceEditMap?: true;
+    blockingMap?: true;
     nodes: VideoRunNode[];
     pauseAhead?: WorkflowRun["pauseAhead"];
     castLock?: PullCastLock | null;
@@ -304,6 +306,7 @@ export type RunStop = {
     framesNodeId?: string;
     showAd?: true;
     heldReason?: string;
+    blockingMap?: true;
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];
@@ -682,6 +685,97 @@ export declare function parsePickFlags(occurrences: FlagOccurrence[]): {
 };
 export declare function pickFlow(runId: string, request: PickRequest, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function redoPicksFlow(runId: string, slot: string, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export interface MapPlaceView {
+    place: string;
+    timeOfDay: string;
+    bounds: {
+        x0: number;
+        y0: number;
+        x1: number;
+        y1: number;
+    };
+    people: Array<{
+        who: string;
+        name: string;
+        x: number;
+        y: number;
+        side: string;
+        faces: string | null;
+    }>;
+    things: Array<{
+        what: string;
+        x: number;
+        y: number;
+        far?: true;
+    }>;
+    setups: Array<{
+        setup: string;
+        scenes: number[];
+        people: string[];
+    }>;
+    redraw: Array<{
+        sceneIndex: number;
+        setup?: string;
+        shares: number[];
+    }>;
+    pictures: number;
+    usd: {
+        low: number;
+        high: number;
+    } | null;
+}
+export interface MapView {
+    runId: string;
+    movable: boolean;
+    places: MapPlaceView[];
+}
+export declare function mapLines(view: MapView, runId: string, runUrl: string): string[];
+export interface MoveRequest {
+    moves: Array<{
+        who: string;
+        x: number;
+        y: number;
+    }>;
+    place?: string;
+    note?: string;
+}
+export interface MoveReceipt {
+    place: string;
+    moved: Array<{
+        name: string;
+        from: {
+            x: number;
+            y: number;
+        };
+        to: {
+            x: number;
+            y: number;
+        };
+    }>;
+    unchanged?: true;
+    redrawing: Array<{
+        sceneIndex: number;
+        setup?: string;
+        shares: number[];
+    }>;
+    notStarted: Array<{
+        sceneIndex: number;
+        why: string;
+    }>;
+    usd: {
+        low: number;
+        high: number;
+    } | null;
+}
+export declare function parseMoveFlags(occurrences: FlagOccurrence[]): {
+    ok: true;
+    request: MoveRequest;
+} | {
+    ok: false;
+    line: string;
+};
+export declare function moveFlow(runId: string, request: MoveRequest, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function mapFlow(runId: string, place: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function flagFlow(runId: string, note: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function retryFrameFlow(runId: string, nodeId: string | undefined, sceneIndex: number, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare const BROLL_EDIT_STALE_MS: number;

@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
+description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, written for the brand and started, a yes before each paid step. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -81,7 +81,9 @@ family (`familyTree.ts`). Those family names stay the code's names.
 
 The member types one sentence, such as "swipe this ad as a microdrama for my
 brand". You drive the run through its stops and wait for the member at each
-one. The Golden Six formats start on the template door, which needs
+one. When the sentence names a video ad to swipe as it is made (a video file,
+a link to the ad, or an ad in Exodus) and the member asks for no format of
+their own, go to "Swiping a video ad" below instead. The Golden Six formats start on the template door, which needs
 Templates switched on for the member's account. Without it the CLI answers
 "video isn't enabled for this key" or "Templates aren't available on your
 account. Ask an admin if you need it." Tell the member that and stop. A beta
@@ -125,7 +127,10 @@ does offer, and nothing is spent.
    missing:
    - the source ad: pasted text or a file, as it is, or the words of an ad in
      Exodus or behind a link (the `swipe` skill's section 1 gets them). Save
-     the words to `source.txt`.
+     the words to `source.txt`. A video ad the member wants swiped whole, its
+     kind and look and shots as well as its words, goes to "Swiping a video
+     ad" below. That path picks the kind itself, so a member set on one of the
+     Golden Six stays here.
    - the format: the table above.
    - the brand: `exodus brand current`.
 2. `exodus video start --input-options --conceit <key>` prints the template's
@@ -309,6 +314,89 @@ lyrics and style again in the Suno app while on a Pro or Premier plan, download
 it there and use that file: Suno's terms allow commercial use only of songs made
 on those plans and downloaded from Suno."
 
+## Swiping a video ad
+
+What Swipe a video does on the dashboard, from the terminal. Exodus breaks the
+competitor's ad down, matches it to the closest kind of ad and look it makes
+(the template), writes the brand's version, and starts the video on the kind
+the swipe wrote. The run is the same one Swipe a video starts on the
+dashboard, Guided unless the member asks for `--one-shot`.
+
+These steps need Video switched on for the member's account. Without it every
+swipe command answers "Not found on this brand. The id is wrong or is another
+brand's, video isn't switched on for your dashboard user, or this is not the
+brand you meant (exodus brand current). Check the id first." Check the id and
+the brand. If both are right, tell the member Video isn't switched on for
+them, and stop.
+
+This path has no picks stop and no pilot clip. The run goes from the start
+straight to the storyboard (stop 3), and approving the storyboard makes every
+clip. Making the video from one of our formats (`--adapt`, "From one sentence
+to a film") keeps the picks stop and the pilot clip.
+
+Four steps cost money, and the CLI prints no price for any of them. Run each
+one first without `--yes`: it sends nothing and prints what the step buys and
+who pays. Tell the member both, say the CLI prints no price, never guess one,
+and run the same line with `--yes` only after their yes.
+
+1. **Get the ad.** One of a video file, a link (Meta Ad Library, TikTok,
+   Instagram or YouTube), or an ad in the brand's swipe library by the `id:`
+   that `exodus genesis --list-swipes` prints:
+   `exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId>`.
+   The breakdown is paid on the team's keys, not the member's. A link or an
+   ad this brand broke down before comes back at once and costs nothing.
+   With `--wait` it prints each step as it starts, and takes a few minutes.
+   Once it is done, `exodus video swipe status <breakdownId> --full` prints
+   what Exodus read from the ad: each shot with its cut times, a-roll or
+   cutaway, framing, camera and description, then the script with who says
+   each line, then the cast. It is free. Show the member the shot list and
+   the script before the template, so they can say whether Exodus read their
+   ad right.
+2. **The template.** `exodus video swipe template <breakdownId>`, paid on the
+   member's own Anthropic or OpenRouter key. It prints the kind of ad and the
+   look the ad matched, and why. A template made before costs nothing. Show
+   the member the kind and the look. The swipe writes that kind and no other.
+   If the member wants another kind, stop here and make the video from that
+   format with the ad's words instead ("From one sentence to a film").
+3. **The choices.** `exodus video swipe products` lists the brand's
+   products. Ask which product, what to swipe and how close. What to swipe
+   (`--mode`, `whole-ad` if left off): Whole ad, Hook only, Their format, my
+   script (`--script <file>`, the member's own words), or Their script, a new
+   look (`--look <slug>`). How close (`--closeness`, 2 if left off): 1 Mirror,
+   2 Close, 3 Same beats, 4 Same arc, 5 Pattern only. `exodus video --help`
+   has each one's line.
+4. **The write.** `exodus video swipe write <breakdownId> --product <id>
+   [--mode …] [--closeness …]`, paid on the member's own key. It takes four
+   to nine minutes and waits by itself. Show the member the script, the
+   direction, Kept and Changed, and what it cost. A refusal prints the
+   writer's sentence and "Nothing was started.": tell the member, and offer to
+   write again, which is paid too. If the wait gives up, the write may still
+   finish: run `exodus video swipe list` before writing again. It shows the
+   brand's newest swipes, and a refused one is marked with what it cost.
+5. **The start.** `exodus video swipe start <swipeId>`. It buys the
+   storyboard and its pictures; the voices and clips wait for the storyboard's
+   yes. `--style <look>` changes the look, `--music` adds a music bed.
+   `--title "<name>"` names the ad, for admins only: a beta tester leaves it
+   off, or the CLI refuses it with one sentence naming it. With `--one-shot`
+   it buys the whole video with no stop: ask before passing it. `--wait` waits until the run needs the
+   member.
+6. **Then** stop 3 (the storyboard) and the end, as above.
+
+```operator-guide
+exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId> [--yes] [--wait]
+                                                          break the ad down (team's keys); one read before costs nothing
+exodus video swipe status <breakdownId> [--wait] [--full] where the breakdown stands, step by step;
+                                                          --full adds what it read: shots, script, cast
+exodus video swipe template <breakdownId> [--yes]         the kind of ad and look it matched (member's key)
+exodus video swipe products                               the brand's products and their ids
+exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closeness <step>] [--look <slug>] [--script <file>] [--yes]
+                                                          the brand's version (member's key); waits for it
+exodus video swipe show <swipeId>                         one swipe again
+exodus video swipe list                                   the brand's newest swipes; a refused one shows what it cost
+exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait]
+                                                          start the run on the kind the swipe wrote
+```
+
 ## Before anything
 
 - `npx @aicopycoders/exodus video --help` and `workflow --help` are the
@@ -360,6 +448,9 @@ CLI words it the way the run page does. On their own brands they can:
   handover" below applies to them.
 - `video upload <runId> --file <cut>`: attaches their cut and prints the page
   to watch it on.
+- `video swipe`: all of "Swiping a video ad" except `swipe start --title`,
+  which is refused with one sentence naming it. The run it starts answers the
+  way start's does.
 
 Admin-only, answered "video isn't enabled for this key" (or, for retry-clip and
 revoice, a sentence saying they are for admins): `director`,

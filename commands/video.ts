@@ -34,6 +34,7 @@ import {
   type CustomerVoices,
   type ScriptTidied,
 } from "./video-customer.js";
+import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 
 const VOICE_MODES = ["native", "voice-first"] as const;
 type VoiceMode = (typeof VOICE_MODES)[number];
@@ -233,6 +234,14 @@ Usage:
     With --describe: [--product-context <text>] [--audience <text>] [--offer <text>] [--mechanism <text>]
   exodus video start --input-options [--conceit <template>] [--voice <native|voice-first>] [--voice-path <path>] [--video-model <id>] [--json]
   exodus video director <runId> <on|off|follow> [--json]
+  exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId> [--yes] [--wait] [--json]
+  exodus video swipe status <breakdownId> [--wait] [--full] [--json]
+  exodus video swipe template <breakdownId> [--yes] [--json]
+  exodus video swipe products [--json]
+  exodus video swipe write <breakdownId> --product <id> [--mode whole-ad|hook-only|their-format|new-look] [--closeness <1-5|mirror|close|same-beats|same-arc|pattern-only>] [--look <slug>] [--script <file>] [--yes] [--json]
+  exodus video swipe show <swipeId> [--json]
+  exodus video swipe list [--json]
+  exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait] [--json]
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull)
@@ -455,16 +464,70 @@ Options:
   --json               Machine-readable output
   --help, -h           Print this help
 
+Swiping a competitor's video ad (swipe), as the dashboard's Swipe a video does:
+break the ad down, match it to a kind of ad and a look (the template), write
+the brand's version, then start the video on the kind the swipe wrote. Four
+steps cost money: swipe (the breakdown, on the team's keys), swipe template
+and swipe write (on your own Anthropic or OpenRouter key) and swipe start (the
+run's storyboard and pictures). Without --yes each one sends nothing and says
+what it buys and who pays. The CLI prints no price for any of them.
+  --file <ad.mp4>      The ad as a video file: MP4, MOV, M4V or WebM, up to
+                       300 MB (swipe)
+  --url <link>         A link to the ad: Meta Ad Library, TikTok, Instagram or
+                       YouTube (swipe). A link this brand broke down before is
+                       used again, and costs nothing
+  --ad <swipeAdId>     An ad in the brand's swipe library (swipe). An ad
+                       broken down before costs nothing
+  --yes                The member said yes to this paid step (swipe, swipe
+                       template, swipe write, swipe start)
+  --product <id>       The product the swipe is for (swipe write). exodus
+                       video swipe products lists them
+  --mode <mode>        What to swipe (swipe write). whole-ad if left off:
+                         whole-ad      Whole ad
+                                       Every part of their ad, rewritten for your brand.
+                         hook-only     Hook only
+                                       Their opening hook. The rest is new, written for your product.
+                         their-format  Their format, my script
+                                       Your own words, made the way their ad is made.
+                         new-look      Their script, a new look
+                                       Their ad rewritten for your brand, in a look you pick.
+  --closeness <step>   How close the brand's script stays to theirs (swipe
+                       write), 1 to 5 or the step's name. 2 if left off.
+                       their-format takes none:
+                         1 mirror        Mirror
+                                         Same lines in the same order. Only your brand, product and claims change.
+                         2 close         Close
+                                         Same parts in the same order, each line said in new words.
+                         3 same-beats    Same beats
+                                         Same job for each part, in the same order. New words and new examples.
+                         4 same-arc      Same arc
+                                         Same kind of hook and the same story arc. Parts can join, split or move to suit your product.
+                         5 pattern-only  Pattern only
+                                         Same format and structure, with a new story.
+  --full               What the breakdown read from the ad (swipe status): each
+                       shot with its cut times, a-roll or cutaway, framing,
+                       camera and description; the script with who says each
+                       line; and the cast. No pictures
+  --look <slug>        The new look (swipe write --mode new-look)
+  --script <file>      Your own script (swipe write --mode their-format)
+  --style <look>       A look other than the swipe's own (swipe start)
+  --title "<name>"     The ad's name (swipe start). Admin-only
+The template picks the kind of ad: swipe template prints it and its look, so
+ask the member before the write. A swipe run has no picks stop and no pilot
+clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
+status waits for the breakdown; on swipe start, for the run.
+
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
 --style, --direction, --frame, --pacing, --music, --source-record, --one-shot,
---review-storyboard, --stop-at-script, --rewrite-to-fit),
-status, storyboard, approve (the storyboard), voices, retry-frame --scene <n> (redo one scene's
-picture while the storyboard waits), pull (the finished video, each scene's
-clip and voice, and the music) and upload. These stay admin-only:
-start --video-model / --voice / --voice-path / --director, director,
-status --rejected-draft, retry-clip, revoice, broll, map and move. start --broll works
-for whoever B-roll is switched on for.
+--review-storyboard, --stop-at-script, --rewrite-to-fit), swipe (all of it
+but swipe start --title), status, storyboard, approve (the storyboard), voices,
+retry-frame --scene <n> (redo one scene's picture while the storyboard waits),
+pull (the finished video, each scene's clip and voice, and the music) and
+upload. These stay admin-only: start --video-model / --voice / --voice-path /
+--director, swipe start --title, director,
+status --rejected-draft, retry-clip, revoice, broll, map and move. start --broll
+works for whoever B-roll is switched on for.
 If a command answers "video isn't enabled for this key", the run id is wrong,
 the command is admin-only, or video isn't switched on for your dashboard user.
 
@@ -491,6 +554,10 @@ Examples:
   exodus video pull run_123 --out ./ad-run_123
   exodus video upload run_123 --file ./cut.mp4
   exodus video director run_123 on
+  exodus video swipe --url "https://www.tiktok.com/@brand/video/123" --yes --wait
+  exodus video swipe template bd_123 --yes
+  exodus video swipe write bd_123 --product prod_1 --mode hook-only --closeness close --yes
+  exodus video swipe start sw_123 --yes --wait
 `.trim();
 
 const SHOWS_PATH = "/api/v2/shows";
@@ -2797,7 +2864,7 @@ export async function startFlow(opts: StartOptions, deps: VideoDeps): Promise<Fl
 }
 
 /** #3237: a human --wait prints the start lines and each stage change as they happen. */
-async function startedThenWait(
+export async function startedThenWait(
   runId: string,
   head: string[],
   opts: { json: boolean; url: string; onProgressLine?: (line: string) => void },
@@ -8005,6 +8072,12 @@ const VALUE_FLAGS = new Set([
   "move",
   "redo",
   "place",
+  "url",
+  "ad",
+  "mode",
+  "closeness",
+  "look",
+  "title",
 ]);
 
 export function parsePositional(args = process.argv.slice(3)): string[] {
@@ -8068,6 +8141,12 @@ export async function run(
     const started = await startScriptFlow({ ...plan.opts, onProgressLine }, defaultDeps);
     if (started.usage) usage(started.lines[0] ?? "");
     return printResult(started);
+  }
+
+  if (sub === "swipe") {
+    const plan = planSwipeCommand(rest, occurrences);
+    if (plan.kind === "usage") usage(plan.line);
+    return printResult(await runSwipePlan(plan, defaultDeps, (line) => console.log(line)));
   }
 
   if (sub === "broll") {

@@ -550,6 +550,11 @@ export type VideoStartPlan = {
     opts: ScriptStartOptions;
 };
 export declare function startFlow(opts: StartOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare function startedThenWait(runId: string, head: string[], opts: {
+    json: boolean;
+    url: string;
+    onProgressLine?: (line: string) => void;
+}, deps: VideoDeps): Promise<FlowResult>;
 export type MusicChoice = {
     ok: true;
     music: boolean | undefined;

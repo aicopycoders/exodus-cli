@@ -1,3 +1,4 @@
+import { AUDITION_RESTART_REASON, auditionPending } from "../lib/template-audition.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,9 +8,10 @@ import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { probeDurationSec } from "../lib/preflight.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
+import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
@@ -95,6 +97,11 @@ The whole loop, in order:
        A format that quotes its video requests stops before a prepared paid
        request, even on a One-shot run. Review its exact requests and prices here,
        then approve those same requests with --request-quote <reviewSha256>.
+     exodus video approve <runId> --audition <digest>
+       Native templates may hold the batch after filming planned audition takes.
+       Watch those clips on the member page, then accept the digest printed by
+       status. If the audition failed, plain approve authorizes another paid
+       attempt only for unfinished audition takes; completed takes are kept.
 
      A format with a pilot clip makes one clip after this approval and stops
      again before the others. status prints the pilot's scene, whether its
@@ -336,6 +343,14 @@ Options:
                        A different product still needs fresh writing and approval
                        without --resume-script.
                        Not for --show
+  --renew-script-approval
+                       Optional. Every --resume-script --stop-at-script review
+                       already re-checks the --script edits against the saved
+                       source and issues a new 24-hour approval, also when the
+                       saved one expired; it never writes a fresh script. This
+                       flag sends nothing extra: it only refuses the line
+                       without --resume-script --stop-at-script, or with
+                       --rewrite-to-fit or --show
   --input-options     List your templates: Golden Six first, then more templates.
                        Add --conceit <template> for structures, capabilities,
                        identity locks, references and account voices.
@@ -793,6 +808,8 @@ export function classifyRun(run) {
         }
         if (run.requestQuotePending === true)
             return { at: "request-quote" };
+        if (auditionPending(run.templateAudition))
+            return { at: "audition", audition: run.templateAudition };
         const pausedNode = run.nodes.find((n) => n.nodeId === run.pausedNodeId);
         if (pausedNode?.kind === "picks" && !parkedByBuilderCheckpoint(run)) {
             return { at: "picks", nodeId: pausedNode.nodeId };
@@ -990,6 +1007,14 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             "Parked: final provider requests are prepared; the unapproved paid operations have not been sent.",
             `Review the exact requests and prices: exodus video quote ${runId}`,
             `Approve the reviewed identities: exodus video approve ${runId} --request-quote <reviewSha256>`,
+        ];
+    if (stop.at === "audition")
+        return [
+            `Planned audition scenes: ${stop.audition.sceneIndexes.join(", ")}. Watch on ${runUrl}; the remaining batch is held.`,
+            stop.audition.invalidated ? "The inputs changed. Start a new run; the old audition cannot approve new inputs."
+                : stop.audition.retryBlocked ? AUDITION_RESTART_REASON
+                    : stop.audition.ready ? `Accept after watching: exodus video approve ${runId} --audition ${stop.audition.digest}`
+                        : `Approve another paid attempt for failed audition takes only: exodus video approve ${runId}. Completed takes are kept; the remaining batch stays held.`,
         ];
     if (stop.at === "storyboard-gate") {
         const lines = [
@@ -1535,6 +1560,10 @@ export function planPull(run, items, opts) {
         const voice = voiceByScene.get(sceneIndex);
         const item = clipItemByScene.get(sceneIndex);
         const frameItem = frameItemByScene.get(sceneIndex);
+        const reservation = run.videoChoice?.videoModel === "template-video" &&
+            run.videoChoice.voiceMode === "voice-first" && !run.songAsVoice && !run.heldSong
+            ? item?.findings?.find((finding) => finding.check === "technical" &&
+                finding.code === "template-audio-source-reservation" && finding.severity === "warn") : undefined;
         let source = null;
         let wordsFrom = null;
         if (clip?.words && clip.words.length > 0) {
@@ -1576,6 +1605,8 @@ export function planPull(run, items, opts) {
             error: item?.error ?? null,
             flagged: item?.flagged === true,
             findings: (item?.findings ?? []).map(withoutJudgeFields),
+            ...(reservation ? { templateAudioSourceReservation: withoutJudgeFields(reservation) } : {}),
+            ...(item?.speech ? { speech: item.speech } : {}),
             keyframeFindings: frameItem?.findings?.map(withoutJudgeFields) ?? null,
         };
     });
@@ -1606,6 +1637,7 @@ export function planPull(run, items, opts) {
             filledPlates: filledPlates.map((p) => ({ file: p.download.file, holds: p.holds, ...(p.lid ? { lid: p.lid } : {}) })),
             music: music?.file ?? null,
             musicBed: musicBedState(run),
+            ...(typeof run.roomTone === "boolean" ? { roomTone: run.roomTone } : {}),
             musicHeardScenes: scenes
                 .filter((scene) => scene.findings.some((f) => f.code === MUSIC_HEARD_CODE))
                 .map((scene) => scene.sceneIndex),
@@ -1632,6 +1664,8 @@ export function planPull(run, items, opts) {
                 }
                 : {}),
             ...(clipAudio ? { clipAudio } : {}),
+            ...(run.videoChoice?.videoModel === "template-video" && run.heldSong === true
+                ? { wholeVoice: true, templateMotion: { enabled: true } } : {}),
             ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
         },
     };
@@ -2098,6 +2132,11 @@ export function planVideoStart(flags, occurrences) {
         };
     }
     const rewriteToFit = refitFlags.length > 0;
+    const renewFlags = occurrences.filter(o => o.flag === "renew-script-approval");
+    if (renewFlags.length && (renewFlags.some(o => o.value !== undefined && !o.value.startsWith("--")) ||
+        resumeFlag.value === undefined || !stopAtScript || rewriteToFit || showId)) {
+        return { kind: "usage", line: "--renew-script-approval takes no value and requires --resume-script --stop-at-script, without --rewrite-to-fit or --show." };
+    }
     if (showId && rewriteToFit) {
         return {
             kind: "usage",
@@ -2206,6 +2245,8 @@ export function planVideoStart(flags, occurrences) {
         opts.adaptationPlanFile = planFlag.value;
     if (resumeFlag.value)
         opts.resumeScriptFile = resumeFlag.value;
+    if (renewFlags.length)
+        opts.renewScriptApproval = true;
     if (requestedSeconds !== undefined)
         opts.requestedSeconds = requestedSeconds;
     if (picturesFlag.value !== undefined)
@@ -2608,6 +2649,11 @@ function scriptStartRefused(res, json) {
             ],
     };
 }
+function scriptCopyNotes(data) {
+    return isRecord(data) && Array.isArray(data.copyNotes)
+        ? data.copyNotes.flatMap(note => isRecord(note) && typeof note.detail === "string" ? [`Copy note: ${note.detail}`] : [])
+        : [];
+}
 function stoppedAtScriptResult(data, json, templateStart, voices, selections, templateIntent, context, intentResolution) {
     const script = typeof data.script === "string" ? data.script : "";
     const tidied = data.tidied === undefined ? null : scriptTidiedOf(data.tidied);
@@ -2664,6 +2710,7 @@ function stoppedAtScriptResult(data, json, templateStart, voices, selections, te
                     ...(tidied ? { tidied } : {}),
                     ...(written !== null ? { written } : {}),
                     ...(rewritten !== null ? { rewritten } : {}),
+                    ...(Array.isArray(data.copyNotes) ? { copyNotes: data.copyNotes } : {}),
                 }),
             ],
         };
@@ -2672,6 +2719,7 @@ function stoppedAtScriptResult(data, json, templateStart, voices, selections, te
         code: 0,
         lines: [
             ...scriptTidiedHead(tidied),
+            ...scriptCopyNotes(data),
             ...(templateIntent ? [
                 `Input assistance: ${templateIntent.mode === "auto" ? "automatic" : templateIntent.mode}`,
                 ...(templateIntent.structureKey ? [`Structure: ${templateIntent.structureKey}`] : []),
@@ -3010,6 +3058,9 @@ async function preparationFlow(phase, input, opts, deps, intentResolution, revie
         return result("The preparation quote could not be read. Keep the same saved quote for recovery; no paid preparation was requested.");
     if (!response.ok && response.status === 404)
         return result("The preparation quote endpoint is unavailable for this key or server. No paid preparation was requested.");
+    if (!response.ok && scriptApprovalNeedsReview(videoApiError(response))) {
+        return result(`${videoApiError(response)} ${SCRIPT_APPROVAL_RENEWAL}`);
+    }
     if (!response.ok)
         return { kind: "result", result: errorResult(response, opts.json) };
     const quote = preparationQuoteOf(response.data);
@@ -3067,6 +3118,7 @@ function scriptJsonObjectInput(input, deps) {
         throw new Error("expected a JSON object");
     return value;
 }
+const SCRIPT_APPROVAL_RENEWAL = "Keep your edited --script file and original saved response. Re-run with the same --resume-script plus --stop-at-script --renew-script-approval --quote-preparation --json, review that quote, then replace --quote-preparation with --authorize-preparation <quote.json>. This checks your retained edits; it does not request a fresh write.";
 function scriptResumeOf(value) {
     if (!isRecord(value) || value.stoppedAtScript !== true
         || typeof value.script !== "string" || value.script.trim() === "")
@@ -3170,6 +3222,14 @@ export async function startScriptFlow(opts, deps) {
             };
         }
         resume = parsed;
+    }
+    if (opts.renewScriptApproval && (!resume || !opts.stopAtScript || opts.rewriteToFit)) {
+        return adminOnlyResult("--renew-script-approval requires --resume-script --stop-at-script, without --rewrite-to-fit.", opts.json);
+    }
+    const approvalExpiry = scriptApprovalExpiresAt(resume?.scriptApproval);
+    const deadApproval = approvalExpiry !== undefined && approvalExpiry <= deps.now();
+    if (resume && deadApproval && (!opts.stopAtScript || opts.rewriteToFit)) {
+        return adminOnlyResult(`This saved script approval is expired or predates member-bound receipts. ${SCRIPT_APPROVAL_RENEWAL} Nothing has started.`, opts.json);
     }
     if (resume && opts.productId !== undefined && opts.productId !== resume.productId) {
         return {
@@ -3456,8 +3516,11 @@ export async function startScriptFlow(opts, deps) {
             body.mechanismPlan = mechanismPlan;
     }
     const res = await deps.post(SCRIPT_RUNS_PATH, body);
-    if (!res.ok)
+    if (!res.ok) {
+        if (resume && scriptApprovalNeedsReview(videoApiError(res)))
+            return adminOnlyResult(`${videoApiError(res)} ${SCRIPT_APPROVAL_RENEWAL}`, opts.json);
         return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
+    }
     if (isRecord(res.data) && res.data.stoppedAtScript === true) {
         return stoppedAtScriptResult(res.data, opts.json, templateStart || scriptResumeOf(res.data) !== null, voices, selections, templateIntent, { templateBrief, productId, videoModel, direction, music, shots, songControls, mechanismPlan, sourceRecord, adaptationPlan }, intentResolution);
     }
@@ -3484,9 +3547,11 @@ export async function startScriptFlow(opts, deps) {
         ...(tidied ? { tidied } : {}),
         ...(written !== null ? { written } : {}),
         ...(rewritten !== null ? { rewritten } : {}),
+        ...(Array.isArray(started.copyNotes) ? { copyNotes: started.copyNotes } : {}),
     };
     const head = [
         ...scriptTidiedHead(tidied),
+        ...scriptCopyNotes(started),
         ...scriptWrittenHead(written, true),
         ...scriptRewrittenHead(rewritten, true),
     ];
@@ -3519,6 +3584,7 @@ async function customerStartedResult(started, opts, deps) {
     const rewritten = writtenOf(started.rewritten);
     const head = [
         ...scriptTidiedHead(tidied),
+        ...scriptCopyNotes(started),
         ...scriptWrittenHead(written, true),
         ...scriptRewrittenHead(rewritten, true),
         `Started video ${runId}`,
@@ -3530,8 +3596,9 @@ async function customerStartedResult(started, opts, deps) {
             ...(tidied ? { tidied } : {}),
             ...(written !== null ? { written } : {}),
             ...(rewritten !== null ? { rewritten } : {}),
+            ...(Array.isArray(started.copyNotes) ? { copyNotes: started.copyNotes } : {}),
         };
-        return opts.json && (tidied || written !== null || rewritten !== null) ? waitJsonWith(waited, facts) : waited;
+        return opts.json && (tidied || written !== null || rewritten !== null || Array.isArray(started.copyNotes)) ? waitJsonWith(waited, facts) : waited;
     }
     if (opts.json)
         return { code: 0, lines: [JSON.stringify(started)] };
@@ -3577,7 +3644,7 @@ export async function waitFlow(runId, opts, deps) {
         const customer = customerAnswer(res.data);
         if (customer) {
             const page = customerRunPage(deps.dashboardUrl, runId);
-            if (customerStageIsWorking(customer.stage)) {
+            if (customerStageIsWorking(customer.stage) && !customer.templateApproval?.audition) {
                 progress(customerStageLines(customer, page)[0]);
                 continue;
             }
@@ -3761,6 +3828,7 @@ export async function statusFlow(runId, json, deps) {
         for (const sceneIndex of [...byScene.keys()].sort((a, b) => a - b)) {
             const row = byScene.get(sceneIndex);
             lines.push(`${String(sceneIndex).padEnd(5)}  ${itemWord(row.clip).padEnd(8)}  ${itemWord(row.voiceover).padEnd(8)}  ${itemWord(row.frame)}`);
+            lines.push(...speechSummaryLines(row.clip?.speech).map(line => `       ${line}`));
             if (row.clip?.lastRedo) {
                 lines.push(`       clip: ${redoLine(row.clip.lastRedo)}`);
                 const blocked = row.clip.lastRedo.voiceFirstBlockedBy;
@@ -3823,6 +3891,12 @@ export async function statusFlow(runId, json, deps) {
         : hasFinal
             ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
             : "Final cut: not uploaded yet.");
+    let finalSpeech;
+    for (const item of items)
+        if (item.itemKind === "final" && item.status === "done")
+            finalSpeech = item.speech;
+    if (hasFinal && finalSpeech)
+        lines.push("Final speech:", ...speechSummaryLines(finalSpeech));
     return { code: 0, lines };
 }
 const DIRECTOR_STATUS_WORDS = {
@@ -4118,6 +4192,7 @@ export async function approveFlow(runId, opts, deps) {
         ...(opts.acceptFindings ? { acceptFindings: true } : {}),
         ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
         ...(requestQuote ? { requestQuote } : {}),
+        ...(opts.auditionDigest ? { auditionDigest: opts.auditionDigest } : {}),
     });
     if (!res.ok) {
         const refusal = errorResult(res, opts.json);
@@ -5843,6 +5918,7 @@ export async function songListenFlow(runId, json, deps) {
             `  master sha256: ${song.identity.masterSha256}`,
             `  lyric sha256: ${song.identity.lyricSha256} — ${heard}`,
             ...song.lyric.split("\n").map((line, i) => `    ${i + 1}. ${line}`),
+            ...(song.coverageFinding ? [`  ${song.coverageFinding}`] : []),
             ...(song.cannotApprove ? [`  cannot be approved: ${song.cannotApprove}`] : []),
             song.status === "approved"
                 ? `  approved at ${new Date(song.approvedAt ?? 0).toISOString()}`
@@ -5980,6 +6056,7 @@ const VALUE_FLAGS = new Set([
     "lyric",
     "rights",
     "request-quote",
+    "audition",
     "face",
     "room",
     "move",
@@ -6170,6 +6247,10 @@ export async function run(flags, occurrences) {
         return printResult(await quoteFlow(runId, json, defaultDeps, flags["private"] !== undefined && flags["private"] !== false));
     if (sub === "approve") {
         const requestQuoteHash = flagString(flags, "request-quote");
+        const auditionDigest = flagString(flags, "audition");
+        if (flags.audition !== undefined && !/^[0-9a-f]{64}$/.test(auditionDigest ?? "")) {
+            usage("--audition needs the digest printed by exodus video status after watching the planned audition clips.");
+        }
         if (flags["request-quote"] !== undefined && !/^[0-9a-f]{64}$/.test(requestQuoteHash ?? "")) {
             usage("--request-quote needs the reviewSha256 printed by exodus video quote.");
         }
@@ -6178,6 +6259,7 @@ export async function run(flags, occurrences) {
             approveStaleCut: flags["approve-stale-cut"] === true,
             acceptFindings: flags["accept-findings"] === true,
             ...(requestQuoteHash ? { requestQuoteHash } : {}),
+            ...(auditionDigest ? { auditionDigest } : {}),
         }, defaultDeps));
     }
     if (sub === "flag") {

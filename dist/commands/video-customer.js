@@ -1,3 +1,12 @@
+import { speechIssueText } from "../lib/speechIssueText.js";
+import { AUDITION_RESTART_REASON } from "../lib/template-audition.js";
+export function speechSummaryLines(speech) {
+    if (!speech)
+        return [];
+    const labels = { verbatim: "Verbatim", "accepted-with-speech-issue": "Accepted with speech issue",
+        "speech-issue": "Speech issue — review required", unverified: "Speech not verified" };
+    return [labels[speech.status], ...speech.issues.map(speechIssueText)];
+}
 export function customerCutHeld(run) {
     return (run.cutHolds?.length ?? 0) > 0;
 }
@@ -74,6 +83,15 @@ function stoppedLines(run, page) {
 }
 export function customerStageLines(run, page) {
     const id = run.runId;
+    const audition = run.templateApproval?.audition;
+    if (audition)
+        return [
+            `Audition held: planned scenes ${audition.sceneIndexes.join(", ")}. Watch their clips on ${page}`,
+            audition.invalidated ? "The bound inputs changed. Start a new run; the remaining batch was not ordered."
+                : audition.retryBlocked ? AUDITION_RESTART_REASON
+                    : audition.ready ? `Accept only after watching: exodus video approve ${id} --audition ${audition.digest}`
+                        : `Approve another paid attempt for failed audition takes only: exodus video approve ${id}. Completed takes are kept; the remaining batch stays held.`,
+        ];
     switch (run.stage) {
         case "waiting":
             return [waitingSentence(run.waiting)];
@@ -103,6 +121,7 @@ export function customerStageLines(run, page) {
                         `When you're happy with it, finish it:  exodus video approve ${id}`,
                     ]
                     : [`Your video is ready: ${run.video?.url ?? page}`]),
+                ...speechSummaryLines(run.video?.speech),
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),
@@ -122,6 +141,8 @@ export function customerStatusLines(run, dashboardUrl) {
         run.mode === "guided" ? "Storyboard first" : "In one go",
         "",
         ...customerStageLines(run, page),
+        ...(run.scenes ?? []).flatMap(scene => scene.clip?.speech
+            ? [`Scene ${scene.sceneIndex} speech:`, ...speechSummaryLines(scene.clip.speech).map(line => `  ${line}`)] : []),
         "",
         `Watch it on the dashboard: ${page}`,
     ];

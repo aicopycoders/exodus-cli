@@ -1,6 +1,6 @@
 // #2988: the types of the exports the Trigger worker calls. The script is
 // plain JS so the CLI can run it with `node` and no build.
-import type { SourceIdentity, TextItem, TextPlan, VerifyObservation, RasterMeasurement, MeasureText } from "./first-cut-text.mjs";
+import type { SourceIdentity, TextItem, TextPlan, PlanTextInput, VerifyObservation, RasterMeasurement, MeasureText } from "./first-cut-text.mjs";
 
 // The worker's shapes (scout cut-sounds.ts, temporal-action-evidence.ts), kept loose here: the root typecheck
 // runs without scout's packages, so the tool's types must not load the worker.
@@ -33,7 +33,12 @@ export interface FinishFulfillment {
   ok: boolean;
   lines: Array<{
     lineId: string; sourceSpan: { lineId: string; startChar: number; endChar: number; partId: string } | null;
+    /** Honest token comparison of the retained heard words; false never by itself holds an ASR route. */
     retained: string[]; exactCanonicalWords: boolean;
+    /** Template native/song ASR routes only: the line is proven by its measured
+     * source/master audio window surviving the actual edit; null when a retained
+     * scene has no heard word measuring the line (unknown, advisory). Aligned TTS omits these. */
+    audioRoute?: "native-asr" | "song-asr"; audioWindowRetained?: boolean | null;
   }>;
   beats: Array<{
     id: string; windows: Array<{ start: number; end: number }>; seconds: number; reservedSeconds: number | null;
@@ -49,6 +54,8 @@ export interface FinishFulfillment {
   };
   holds: FinishHold[];
   resolvedPlanningFindings: Array<{ scene: number; code: string; phaseId: string }>;
+  /** Advisory ASR wording disagreements on retained native/song audio. */
+  notes: string[];
 }
 export interface TemporalFinishEvidence {
   requirements: TemporalRequirement[];
@@ -93,6 +100,8 @@ export interface SourceMapFinding {
   code: string;
   scene: number | null;
   detail: string;
+  /** Ordered actionable choices for the current selected inputs; never an unchanged deterministic retry. */
+  nextActions?: Array<"choose-longer-target">;
 }
 
 export interface NarrationFinishClock {
@@ -176,6 +185,8 @@ export interface SourceEditMap {
     /** Each sung scene's stretch, in frames into the song. */
     intervals: Array<{ scene: number; fromFrame: number; toFrame: number }>;
     sampleRate?: number; primingSamples?: number; decodedSec?: number; samples?: number; endSample?: number; pictureEndSample?: number;
+    /** Original source decodedSec stays intact; only measured trailing silence is omitted from the retained sample span. */
+    trimmedSilenceSamples?: number;
   } | null;
   /** The bytes each measured clock was read from. */
   sources?: Array<{ file: string; bytes: number; sha256: string }>;
@@ -353,7 +364,35 @@ export interface CutMotion {
   }>;
 }
 
+/** Assembly provenance, not a new final-audio ASR or visual-quality observation.
+ * Template runs write <name>.finish.json, including a non-final receipt when a
+ * missing-scene pull is refused. Door 1 keeps its existing return shape. */
+export interface CutFinishEvidence {
+  version: "cut-finish-evidence.v1";
+  provenance: {
+    kind: "partial" | "pre-text" | "final";
+    isFinal: boolean;
+    complete: boolean;
+    expectedSceneIndexes: number[];
+    retainedSceneIndexes: number[];
+    missingSceneIndexes: number[];
+    skippedSceneIndexes: number[];
+    /** Available pulled scenes intentionally omitted by the editor; these do not make a cut partial. */
+    editorOmittedSceneIndexes: number[];
+  };
+  artifact: { file: string; sha256: string; bytes: number } | null;
+  loudness: { status: "measured" | "unknown"; integratedLufs: number | null; truePeakDbtp: number | null; rangeLu: number | null };
+  words: {
+    basis: "source-word-sidecars-through-audible-edit-clock";
+    finalAudioTranscribed: false;
+    expected: number; source: number; native: number; final: number;
+    coverage: "complete" | "incomplete" | "unknown";
+    missing: string[];
+  };
+}
+
 export interface FirstCut {
+  notes?: string[];
   out: string;
   durationSec: number;
   /** The music file the cut used, or null. */
@@ -363,6 +402,7 @@ export interface FirstCut {
     left: string[];
   };
   motion?: CutMotion;
+  finishEvidence?: CutFinishEvidence;
   /** Budget-only decoded receipt; also supported when sourceEditMap is absent. */
   planningTiming?: FinalPlanningTiming;
   /** Present only when the manifest turned a finishing setting on. */
@@ -385,13 +425,48 @@ export interface FirstCut {
 /** The map's file beside the cut: <name>.source-map.json. */
 export function sourceMapPath(outPath: string): string;
 
+/** A complete Template final rendered without prepareText owes the same exact
+ * approved-word proof as completeFirstCutText: any required-words-not-retained
+ * line writes <out>.text.json { fulfillment: { lines, holds } }, removes the
+ * unproven cut and throws TextFinishRefusal. Captions/cards off never weaken it.
+ * A word's explicit lineId (or a mapped cut's measured line part) owns it and
+ * is never corrected; one its scene does not claim holds that scene's lines.
+ * An untagged word on an unmapped cut, including a native Omni transcript,
+ * belongs to its scene's one uniquely owned line. A narration/song piece may
+ * also use the existing lineParts map only when that map measures every claimed
+ * line and covers every retained word in order. Anything unplaced or ambiguous
+ * holds; untagged multi-line native pieces cannot use a narration line map. */
 export function firstCut(options: FirstCutOptions): FirstCut;
+export interface FinalSetupEvidence {
+  setupSegments: Array<{
+    sceneIndex: number | null; file: string | null;
+    setId: string | null; anchorEditEpoch: string | null; baseShotId: string | null;
+    finalStartSec: number; finalEndSec: number;
+    sourceStartSec: number | null; sourceEndSec: number | null;
+    identity: "authored"; clock: "mapped" | "timeline";
+  }>;
+  setupJoins: Array<{
+    atSec: number; left: number; right: number;
+    kind: "different-setup" | "continuous-same-source" | "discontinuous-same-setup" | "unknown";
+  }>;
+}
+/** Authored identity plus actual timeline/source continuity, never watched-angle proof. */
+export function finalSetupAdjacency(timeline: unknown, board: unknown, graphics?: readonly unknown[]): FinalSetupEvidence;
+/** Actual decoded kept clips plus source-clock authored reservations; never action observations. */
+export function directorCutEvidence(cut: unknown, board: unknown): FinalSetupEvidence & {
+  segments?: Array<{ sceneIndex: number; sourceStartSec: number; sourceEndSec: number; finalStartSec: number; finalEndSec: number }>;
+  beatWindows: Array<{ sceneIndex: number; beatId: string; startSec: number; endSec: number }>;
+};
 /** Resolve approved authored phases against visible source/word windows.
  * Flexible template phases bind actual planPicture slots, never unused capacity. */
 export function resolveTemporalRequirements(cut: FirstCut, board: unknown): Pick<TemporalFinishEvidence, "requirements" | "owners" | "holds">;
 /** Consume exact-source temporal evidence and retained media. Unknown inputs are
  * serialized board/policy/receipt shapes; this does not manufacture observations. */
 export function finishFulfillment(cut: FirstCut, board: unknown, policy: unknown, temporal?: unknown): FinishFulfillment;
+/** Convert serialized board/policy inputs into the actual selected text layout. */
+export function textMaterial(cut: unknown, board: unknown, policy: unknown): Omit<PlanTextInput, "libass"> & {
+  items: TextItem[]; pictureHolds: FinishHold[]; skippedPictures: FinishHold[];
+};
 /** Measures the actual final file without constructing a source map or changing media. */
 export function measureCutPlanningTiming(file: string, planningBudget: PlanningBudget): {
   planningTiming: FinalPlanningTiming;

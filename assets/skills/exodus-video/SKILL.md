@@ -164,7 +164,12 @@ does offer, and nothing is spent.
 3. Write the script out byte for byte:
    `node -e 'process.stdout.write(require("./stop1.json").script)' > script.txt`.
    Show the member the source and `script.txt` side by side, and the cast:
-   each name that speaks a line. Ask: go on, change a line, or stop.
+   each name that speaks a line. The stop file can also carry the app's notes
+   on the copy, such as a claim it could not check against the source or a
+   line that may not fit:
+   `node -e 'for (const n of require("./stop1.json").copyNotes ?? []) console.log(n.detail)'`.
+   Show each note next to the script, word for word. A note stops nothing;
+   the member decides. Ask: go on, change a line, or stop.
    - Go on: "The run starts" below.
    - Change a line: copy `script.txt` to `edited.txt` and make their change.
      An edited script is checked and approved again, at a price of its own.
@@ -178,7 +183,7 @@ does offer, and nothing is spent.
      ```
 
      From here `stop1b.json` is the stop file. Write its script over
-     `script.txt` the same way and show it again.
+     `script.txt` the same way and show it again, with its copy notes.
    - Stop: nothing more is spent.
 
 ### The run starts
@@ -186,6 +191,15 @@ does offer, and nothing is spent.
 `<stop file>` is the latest one: `stop1.json`, or `stop1b.json` after an edit.
 Use it with `script.txt` written out from it, unchanged. A different script,
 product, voice or reference is refused, and nothing starts.
+
+The approval in a stop file lasts 24 hours, and only a key of the member who
+approved it can use it. After that the storyboard quote is refused and nothing
+is spent. Renew it with the two "Change a line" lines above, with
+`<stop file>` in place of `stop1.json`, `script.txt` as the script and
+`--renew-script-approval` added to both. That checks the
+same script again at a price of its own (give the member the price, and run
+the second line on their yes); it writes nothing new. Continue from the new
+stop file.
 
 ```
 exodus video start --resume-script <stop file> --script script.txt \
@@ -242,7 +256,8 @@ speaks with which voice ("Reading the storyboard gate" has the detail). Show it
 with the run page link, then ask: approve, redo a picture, change a voice,
 move someone (Micro-drama template only), or stop.
 
-- Approve: `exodus video approve <runId>`. It buys the voices and the clips
+- Approve: `exodus video approve <runId>`. It approves the storyboard and
+  buys the voices and the clips
   (with the pilot stop, the pilot first), the expensive part. The CLI prints
   no price for them at this stop: say so, and approve on their yes. A storyboard the app's check stopped is
   refused with the reason. Tell the member, and on their yes approve again
@@ -295,6 +310,23 @@ keep: offer the redo it prints, which names the scene.
   wrong>"`. One new clip. The CLI prints no price for it: say so and wait for
   their yes. The note steers the motion,
   never the words.
+
+### The audition stop
+
+A template run started from the dashboard can film a few planned scenes first
+and hold the rest. A run started here never asks for one. `status` then names
+the audition scenes and prints what to run next:
+
+- `exodus video approve <runId> --audition <digest>`: show the member those
+  clips on the run page first. On their yes, run it exactly as printed. The
+  run then goes on and makes the clips it held.
+- `exodus video approve <runId>` with "failed audition takes only": it pays
+  for another try of the audition takes that did not finish; the finished
+  ones are kept. The CLI prints no price for it: say so and wait for their
+  yes.
+- "inputs changed" or "refused for safety or their pictures": nothing can
+  be approved. Offer to stop the run (`exodus workflow cancel <runId>`) and
+  start a new video.
 
 ### End: watch and approve
 
@@ -835,7 +867,10 @@ CLI words it the way the run page does. On their own brands they can:
   video says `"stage": "failed"` with the held scenes in `cutHolds`.
 - `video storyboard <runId>`: each scene's line and picture, while the
   storyboard waits for review.
-- `video approve <runId>`: approves the storyboard. Nothing else.
+- `video approve <runId>`: approves the storyboard. At an audition stop,
+  `video approve <runId> --audition <digest>` accepts the audition clips, and
+  plain `video approve <runId>` pays for another try of the failed audition
+  takes ("The audition stop"). Nothing else.
 - `video voices <runId>`: who speaks, their current voice, and the voices on
   the tester's own ElevenLabs account. `--set <character>=<voiceId>` picks one,
   until the storyboard is approved.
@@ -973,6 +1008,14 @@ neither is refused, and nothing is spent. The template flags, as `exodus video
                        A different product still needs fresh writing and approval
                        without --resume-script.
                        Not for --show
+  --renew-script-approval
+                       Optional. Every --resume-script --stop-at-script review
+                       already re-checks the --script edits against the saved
+                       source and issues a new 24-hour approval, also when the
+                       saved one expired; it never writes a fresh script. This
+                       flag sends nothing extra: it only refuses the line
+                       without --resume-script --stop-at-script, or with
+                       --rewrite-to-fit or --show
   --input-options     List your templates: Golden Six first, then more templates.
                        Add --conceit <template> for structures, capabilities,
                        identity locks, references and account voices.
@@ -984,6 +1027,7 @@ neither is refused, and nothing is spent. The template flags, as `exodus video
 
 The other template flags (`--input-mode`, `--structure`, `--reference`,
 `--subject`, `--template-brief`, `--song-controls`, `--mechanism-plan`,
+`--source-record`, `--adaptation-plan`,
 `--requested-seconds`, `--pictures-per-scene`, `--product`, `--elements`,
 `--voices`) are in `exodus video --help`.
 

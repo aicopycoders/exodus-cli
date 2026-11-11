@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { LOWER_PANEL_TOP, READOUT_INSET_BOX } from "./first-cut-text.mjs";
 
 const literal = (lines) => {
   if (!Array.isArray(lines) || lines.some((line) => typeof line !== "string" || /[{}\\\r\n]/.test(line))) {
@@ -32,6 +33,20 @@ export function measuredTextAss(directives, { W = 1080, H = 1920, style = "" } =
   };
   for (const c of directives.captions ?? []) event(c.s, c.e, "Cap", Math.round(c.xShare * W), Math.round(c.yShare * H), c.fs, c.lines);
   for (const c of [...(directives.cards ?? []), directives.hook, directives.endCard].filter(Boolean)) {
+    // Only template-gated proof directives carry this field. The insert is an
+    // opaque editorial surface, not a claim to have tracked/generated a screen.
+    if (c.proof) {
+      const window = textFrameWindow(c.in, c.out);
+      if (c.proof.kind === "readout") {
+        // Readout proof is an editorial inset, never an opaque replacement for
+        // the filmed phone/action. Keep the ground bounded even for old boards.
+        const [left, top, right, bottom] = READOUT_INSET_BOX.map((v, i) => Math.round(v * (i % 2 ? H : W)));
+        events.push(`Dialogue: -1,${assTime(window.startCs)},${assTime(window.endCs)},Card,,0,0,0,,{\\an7\\pos(0,0)\\bord2\\3c&H665544&\\shad4\\1c&HFFFFFF&\\1a&H00&\\p1}m ${left} ${top} l ${right} ${top} ${right} ${bottom} ${left} ${bottom}{\\p0}`);
+      } else {
+        const top = c.proof.presentation === "lower-panel" ? Math.round(H * LOWER_PANEL_TOP) : 0;
+        events.push(`Dialogue: -1,${assTime(window.startCs)},${assTime(window.endCs)},Card,,0,0,0,,{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&H00&\\p1}m 0 ${top} l ${W} ${top} ${W} ${H} 0 ${H}{\\p0}`);
+      }
+    }
     const [x, y] = anchor(c.renderBox, W, H);
     event(c.in, c.out, c.kind === "end" ? "End" : "Card", x, y, c.fs, c.lines);
   }

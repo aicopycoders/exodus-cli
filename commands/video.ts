@@ -1,3 +1,4 @@
+import { AUDITION_RESTART_REASON, auditionPending, type TemplateAudition } from "../lib/template-audition.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { missingRouteLine } from "../lib/route-support.js";
 import { probeDurationSec } from "../lib/preflight.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
+import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
 import {
   ASSET_UPLOAD_POLICY,
   pauseAheadLine,
@@ -25,6 +27,8 @@ import {
   customerStatusLines,
   customerStoryboardLines,
   customerVoicesLines,
+  speechSummaryLines,
+  type SpeechSummary,
   type CustomerFinal,
   type CustomerItem,
   type CustomerItems,
@@ -140,6 +144,11 @@ The whole loop, in order:
        A format that quotes its video requests stops before a prepared paid
        request, even on a One-shot run. Review its exact requests and prices here,
        then approve those same requests with --request-quote <reviewSha256>.
+     exodus video approve <runId> --audition <digest>
+       Native templates may hold the batch after filming planned audition takes.
+       Watch those clips on the member page, then accept the digest printed by
+       status. If the audition failed, plain approve authorizes another paid
+       attempt only for unfinished audition takes; completed takes are kept.
 
      A format with a pilot clip makes one clip after this approval and stops
      again before the others. status prints the pilot's scene, whether its
@@ -381,6 +390,14 @@ Options:
                        A different product still needs fresh writing and approval
                        without --resume-script.
                        Not for --show
+  --renew-script-approval
+                       Optional. Every --resume-script --stop-at-script review
+                       already re-checks the --script edits against the saved
+                       source and issues a new 24-hour approval, also when the
+                       saved one expired; it never writes a fresh script. This
+                       flag sends nothing extra: it only refuses the line
+                       without --resume-script --stop-at-script, or with
+                       --rewrite-to-fit or --show
   --input-options     List your templates: Golden Six first, then more templates.
                        Add --conceit <template> for structures, capabilities,
                        identity locks, references and account voices.
@@ -685,6 +702,7 @@ export interface ClipFinding {
    *  into a pull manifest. */
   judgeDetail?: string;
   judgeSeverity?: "fail" | "warn";
+  speechIssue?: SpeechSummary["issues"][number];
 }
 
 /** A finding without the admin-only checker fields (#1784). */
@@ -922,6 +940,7 @@ export interface PullCastLock {
 
 export interface VideoRun {
   _id: string;
+  launchDoor?: "template";
   status: string;
   isTerminal: boolean;
   error?: string;
@@ -932,6 +951,7 @@ export interface VideoRun {
   pilot?: { sceneIndexes?: number[]; approvedAt?: number };
   /** A prepared paid operation is waiting for an exact-request approval, not a final-cut upload. */
   requestQuotePending?: boolean;
+  templateAudition?: TemplateAudition;
   /** The run's frozen sourceEditMap setting: its first cut keeps a measured map, and its pull reads the lineage. */
   sourceEditMap?: true;
   /** The run's frozen blockingMap setting: its storyboard stop shows the floor plan as a map (exodus video map). */
@@ -959,6 +979,10 @@ export interface VideoRun {
   videoChoice?: RunVideoChoice;
   /** Frozen song voice ownership, exposed without the server-only format payload. */
   songAsVoice?: true;
+  /** Actual selected/kept song master, not merely the format's song intent. */
+  heldSong?: true;
+  /** Explicit template ambience selection; absent on historical/non-template runs. */
+  roomTone?: boolean;
   /** #3304: the Frame and Pacing a paste-a-script run asked for. Absent means
    *  Single frame and Natural, and on backends older than #3304. */
   shots?: RunShots;
@@ -1011,6 +1035,7 @@ export interface NodeItem {
   attempt?: number;
   flagged?: boolean;
   findings?: ClipFinding[];
+  speech?: SpeechSummary;
   /** #1870: the server's own verdict that this row has been "running" so long
    *  its worker must be dead. The threshold lives there and only there, because
    *  this package ships on its own release schedule. Absent on older backends,
@@ -1168,6 +1193,7 @@ export type RunStop =
   // filled by resolveStop from the scene rows; absent when they were not read.
   | { at: "pilot"; nodeId?: string; sceneIndexes: number[]; silentScenes?: number[]; checks?: PilotCheck[] }
   | { at: "request-quote" }
+  | { at: "audition"; audition: NonNullable<VideoRun["templateAudition"]> }
   // Stop 2: parked at the picks box, waiting for the member's picks.
   | { at: "picks"; nodeId: string }
   | { at: "paused"; nodeId?: string; reason?: string }
@@ -1359,6 +1385,8 @@ export function classifyRun(run: VideoRun): RunStop {
       };
     }
     if (run.requestQuotePending === true) return { at: "request-quote" };
+    if (auditionPending(run.templateAudition))
+      return { at: "audition", audition: run.templateAudition };
     const pausedNode = run.nodes.find((n) => n.nodeId === run.pausedNodeId);
     if (pausedNode?.kind === "picks" && !parkedByBuilderCheckpoint(run)) {
       return { at: "picks", nodeId: pausedNode.nodeId };
@@ -1653,6 +1681,13 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     `Review the exact requests and prices: exodus video quote ${runId}`,
     `Approve the reviewed identities: exodus video approve ${runId} --request-quote <reviewSha256>`,
   ];
+  if (stop.at === "audition") return [
+    `Planned audition scenes: ${stop.audition.sceneIndexes.join(", ")}. Watch on ${runUrl}; the remaining batch is held.`,
+    stop.audition.invalidated ? "The inputs changed. Start a new run; the old audition cannot approve new inputs."
+      : stop.audition.retryBlocked ? AUDITION_RESTART_REASON
+      : stop.audition.ready ? `Accept after watching: exodus video approve ${runId} --audition ${stop.audition.digest}`
+      : `Approve another paid attempt for failed audition takes only: exodus video approve ${runId}. Completed takes are kept; the remaining batch stays held.`,
+  ];
   if (stop.at === "storyboard-gate") {
     const lines = [
       ...(stop.heldReason ? [stop.heldReason] : []),
@@ -1898,6 +1933,9 @@ export interface ManifestScene {
   error: string | null;
   flagged: boolean;
   findings: ClipFinding[];
+  /** Trusted worker note: fit already billed narration footage locally. */
+  templateAudioSourceReservation?: ClipFinding;
+  speech?: SpeechSummary;
   /** #1708: what the picture check found on the scene's keyframe (its frame row),
    *  null when the frame row carries no findings list at all, i.e. nobody checked. */
   keyframeFindings: ClipFinding[] | null;
@@ -2008,6 +2046,10 @@ export interface VideoManifest {
   videoChoice?: { videoModel: string; voiceMode: string };
   /** Template-video native dialogue is kept; approved narration/song replaces ALL clip audio. */
   clipAudio?: "keep" | "discard";
+  roomTone?: boolean;
+  /** A held template song is laid whole and owns the audio without a separate bed. */
+  wholeVoice?: true;
+  templateMotion?: { enabled: true };
   /** #3304: the run's Frame and Pacing, which the cut follows (a "jump-cuts"
    *  pacing is cut with punch-ins). Written only when the run asked for one. */
   shots?: RunShots;
@@ -2544,6 +2586,10 @@ export function planPull(
     const voice = voiceByScene.get(sceneIndex);
     const item = clipItemByScene.get(sceneIndex);
     const frameItem = frameItemByScene.get(sceneIndex);
+    const reservation = run.videoChoice?.videoModel === "template-video" &&
+      run.videoChoice.voiceMode === "voice-first" && !run.songAsVoice && !run.heldSong
+      ? item?.findings?.find((finding) => finding.check === "technical" &&
+        finding.code === "template-audio-source-reservation" && finding.severity === "warn") : undefined;
     // #1689: a narrated scene's timings ride on its voice track. The clip wins
     // when both exist, because a clip with its own dialogue is what plays; the
     // voice track only fills a silent clip.
@@ -2594,6 +2640,8 @@ export function planPull(
       error: item?.error ?? null,
       flagged: item?.flagged === true,
       findings: (item?.findings ?? []).map(withoutJudgeFields),
+      ...(reservation ? { templateAudioSourceReservation: withoutJudgeFields(reservation) } : {}),
+      ...(item?.speech ? { speech: item.speech } : {}),
       keyframeFindings: frameItem?.findings?.map(withoutJudgeFields) ?? null,
     };
   });
@@ -2631,6 +2679,7 @@ export function planPull(
       filledPlates: filledPlates.map((p) => ({ file: p.download.file, holds: p.holds, ...(p.lid ? { lid: p.lid } : {}) })),
       music: music?.file ?? null,
       musicBed: musicBedState(run),
+      ...(typeof run.roomTone === "boolean" ? { roomTone: run.roomTone } : {}),
       musicHeardScenes: scenes
         .filter((scene) => scene.findings.some((f) => f.code === MUSIC_HEARD_CODE))
         .map((scene) => scene.sceneIndex),
@@ -2657,6 +2706,8 @@ export function planPull(
           }
         : {}),
       ...(clipAudio ? { clipAudio } : {}),
+      ...(run.videoChoice?.videoModel === "template-video" && run.heldSong === true
+        ? { wholeVoice: true as const, templateMotion: { enabled: true as const } } : {}),
       ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
     },
   };
@@ -2829,6 +2880,7 @@ export interface ScriptStartOptions {
   adaptationPlanFile?: string;
   /** Saved template stop response; retain its server approval, source, brief and product. */
   resumeScriptFile?: string;
+  renewScriptApproval?: true;
   /** Template-only inputs, validated against the authenticated server's offer. */
   requestedSeconds?: number;
   picturesPerScene?: 1 | 3;
@@ -3218,6 +3270,11 @@ export function planVideoStart(
     };
   }
   const rewriteToFit = refitFlags.length > 0;
+  const renewFlags = occurrences.filter(o => o.flag === "renew-script-approval");
+  if (renewFlags.length && (renewFlags.some(o => o.value !== undefined && !o.value.startsWith("--")) ||
+    resumeFlag.value === undefined || !stopAtScript || rewriteToFit || showId)) {
+    return { kind: "usage", line: "--renew-script-approval takes no value and requires --resume-script --stop-at-script, without --rewrite-to-fit or --show." };
+  }
   if (showId && rewriteToFit) {
     return {
       kind: "usage",
@@ -3314,6 +3371,7 @@ export function planVideoStart(
   if (recordFlag.value) opts.sourceRecordFile = recordFlag.value;
   if (planFlag.value) opts.adaptationPlanFile = planFlag.value;
   if (resumeFlag.value) opts.resumeScriptFile = resumeFlag.value;
+  if (renewFlags.length) opts.renewScriptApproval = true;
   if (requestedSeconds !== undefined) opts.requestedSeconds = requestedSeconds;
   if (picturesFlag.value !== undefined) opts.picturesPerScene = picturesFlag.value === "3" ? 3 : 1;
   if (productFlag.value !== undefined) opts.productId = productFlag.value;
@@ -3747,6 +3805,12 @@ function scriptStartRefused(res: ApiResponse<unknown>, json: boolean): FlowResul
   };
 }
 
+function scriptCopyNotes(data: unknown): string[] {
+  return isRecord(data) && Array.isArray(data.copyNotes)
+    ? data.copyNotes.flatMap(note => isRecord(note) && typeof note.detail === "string" ? [`Copy note: ${note.detail}`] : [])
+    : [];
+}
+
 /** COP-47: --stop-at-script: the script the run would start on, and nothing started. */
 function stoppedAtScriptResult(
   data: Record<string, unknown>,
@@ -3829,6 +3893,7 @@ function stoppedAtScriptResult(
           ...(tidied ? { tidied } : {}),
           ...(written !== null ? { written } : {}),
           ...(rewritten !== null ? { rewritten } : {}),
+          ...(Array.isArray(data.copyNotes) ? { copyNotes: data.copyNotes } : {}),
         }),
       ],
     };
@@ -3837,6 +3902,7 @@ function stoppedAtScriptResult(
     code: 0,
     lines: [
       ...scriptTidiedHead(tidied),
+      ...scriptCopyNotes(data),
       ...(templateIntent ? [
         `Input assistance: ${templateIntent.mode === "auto" ? "automatic" : templateIntent.mode}`,
         ...(templateIntent.structureKey ? [`Structure: ${templateIntent.structureKey}`] : []),
@@ -4218,6 +4284,9 @@ async function preparationFlow(
   const response = await deps.post("/api/v2/video/template-preparation", { phase, requestId, input }).catch(() => null);
   if (!response) return result("The preparation quote could not be read. Keep the same saved quote for recovery; no paid preparation was requested.");
   if (!response.ok && response.status === 404) return result("The preparation quote endpoint is unavailable for this key or server. No paid preparation was requested.");
+  if (!response.ok && scriptApprovalNeedsReview(videoApiError(response))) {
+    return result(`${videoApiError(response)} ${SCRIPT_APPROVAL_RENEWAL}`);
+  }
   if (!response.ok) return { kind: "result", result: errorResult(response, opts.json) };
   const quote = preparationQuoteOf(response.data);
   if (!quote || quote.phase !== phase) return result("This server did not return a usable quote for the requested phase. No paid preparation was requested.");
@@ -4276,6 +4345,8 @@ function scriptJsonObjectInput(input: string, deps: Pick<VideoDeps, "readFile">)
   return value;
 }
 
+
+const SCRIPT_APPROVAL_RENEWAL = "Keep your edited --script file and original saved response. Re-run with the same --resume-script plus --stop-at-script --renew-script-approval --quote-preparation --json, review that quote, then replace --quote-preparation with --authorize-preparation <quote.json>. This checks your retained edits; it does not request a fresh write.";
 
 /** HTTP continuation fields; scriptApproval is opaque and only the server can verify it. */
 type ScriptResume = {
@@ -4390,6 +4461,14 @@ export async function startScriptFlow(
       };
     }
     resume = parsed;
+  }
+  if (opts.renewScriptApproval && (!resume || !opts.stopAtScript || opts.rewriteToFit)) {
+    return adminOnlyResult("--renew-script-approval requires --resume-script --stop-at-script, without --rewrite-to-fit.", opts.json);
+  }
+  const approvalExpiry = scriptApprovalExpiresAt(resume?.scriptApproval);
+  const deadApproval = approvalExpiry !== undefined && approvalExpiry <= deps.now();
+  if (resume && deadApproval && (!opts.stopAtScript || opts.rewriteToFit)) {
+    return adminOnlyResult(`This saved script approval is expired or predates member-bound receipts. ${SCRIPT_APPROVAL_RENEWAL} Nothing has started.`, opts.json);
   }
   if (resume && opts.productId !== undefined && opts.productId !== resume.productId) {
     return {
@@ -4690,7 +4769,10 @@ export async function startScriptFlow(
     else body.mechanismPlan = mechanismPlan;
   }
   const res = await deps.post(SCRIPT_RUNS_PATH, body);
-  if (!res.ok) return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
+  if (!res.ok) {
+    if (resume && scriptApprovalNeedsReview(videoApiError(res))) return adminOnlyResult(`${videoApiError(res)} ${SCRIPT_APPROVAL_RENEWAL}`, opts.json);
+    return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
+  }
   if (isRecord(res.data) && res.data.stoppedAtScript === true) {
     // A server-issued continuation survives even when optional menu discovery failed.
     return stoppedAtScriptResult(
@@ -4715,6 +4797,7 @@ export async function startScriptFlow(
     tidied?: unknown;
     written?: unknown;
     rewritten?: unknown;
+    copyNotes?: unknown;
   };
   if (!started.runId) {
     return { code: 1, lines: ["The server started the ad but did not say which run it is."] };
@@ -4732,9 +4815,11 @@ export async function startScriptFlow(
     ...(tidied ? { tidied } : {}),
     ...(written !== null ? { written } : {}),
     ...(rewritten !== null ? { rewritten } : {}),
+    ...(Array.isArray(started.copyNotes) ? { copyNotes: started.copyNotes } : {}),
   };
   const head = [
     ...scriptTidiedHead(tidied),
+    ...scriptCopyNotes(started),
     ...scriptWrittenHead(written, true),
     ...scriptRewrittenHead(rewritten, true),
   ];
@@ -4769,7 +4854,7 @@ export async function startScriptFlow(
 }
 
 async function customerStartedResult(
-  started: CustomerStart,
+  started: CustomerStart & { copyNotes?: unknown },
   opts: ScriptStartOptions,
   deps: VideoDeps,
 ): Promise<FlowResult> {
@@ -4779,6 +4864,7 @@ async function customerStartedResult(
   const rewritten = writtenOf(started.rewritten);
   const head = [
     ...scriptTidiedHead(tidied),
+    ...scriptCopyNotes(started),
     ...scriptWrittenHead(written, true),
     ...scriptRewrittenHead(rewritten, true),
     `Started video ${runId}`,
@@ -4790,8 +4876,9 @@ async function customerStartedResult(
       ...(tidied ? { tidied } : {}),
       ...(written !== null ? { written } : {}),
       ...(rewritten !== null ? { rewritten } : {}),
+      ...(Array.isArray(started.copyNotes) ? { copyNotes: started.copyNotes } : {}),
     };
-    return opts.json && (tidied || written !== null || rewritten !== null) ? waitJsonWith(waited, facts) : waited;
+    return opts.json && (tidied || written !== null || rewritten !== null || Array.isArray(started.copyNotes)) ? waitJsonWith(waited, facts) : waited;
   }
   if (opts.json) return { code: 0, lines: [JSON.stringify(started)] };
   return {
@@ -4844,7 +4931,7 @@ export async function waitFlow(
     const customer = customerAnswer<CustomerRun>(res.data);
     if (customer) {
       const page = customerRunPage(deps.dashboardUrl, runId);
-      if (customerStageIsWorking(customer.stage)) {
+      if (customerStageIsWorking(customer.stage) && !customer.templateApproval?.audition) {
         progress(customerStageLines(customer, page)[0]);
         continue;
       }
@@ -5100,6 +5187,7 @@ export async function statusFlow(
       lines.push(
         `${String(sceneIndex).padEnd(5)}  ${itemWord(row.clip).padEnd(8)}  ${itemWord(row.voiceover).padEnd(8)}  ${itemWord(row.frame)}`,
       );
+      lines.push(...speechSummaryLines(row.clip?.speech).map(line => `       ${line}`));
       // #1855: a redo that fails its checks keeps the original take and leaves
       // the row reading "done", so the grid word alone cannot say whether the
       // member got a new take. The outcome goes first, above the findings that
@@ -5173,6 +5261,9 @@ export async function statusFlow(
         ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
         : "Final cut: not uploaded yet.",
   );
+  let finalSpeech: SpeechSummary | undefined;
+  for (const item of items) if (item.itemKind === "final" && item.status === "done") finalSpeech = item.speech;
+  if (hasFinal && finalSpeech) lines.push("Final speech:", ...speechSummaryLines(finalSpeech));
   return { code: 0, lines };
 }
 
@@ -5534,7 +5625,7 @@ export async function quoteFlow(runId: string, json: boolean, deps: VideoDeps, p
 
 export async function approveFlow(
   runId: string,
-  opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string },
+  opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string; auditionDigest?: string },
   deps: VideoDeps,
 ): Promise<FlowResult> {
   let requestQuote: { quotes: PreparedQuoteView[] } | undefined;
@@ -5557,6 +5648,7 @@ export async function approveFlow(
     // typed the flag. It is never defaulted and never inferred from the run.
     ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
     ...(requestQuote ? { requestQuote } : {}),
+    ...(opts.auditionDigest ? { auditionDigest: opts.auditionDigest } : {}),
   });
   // #1845: a refused approve (a chosen voice ElevenLabs is certain is gone) comes
   // back 400 with one plain sentence — printed as-is, exit 1, nothing approved.
@@ -7939,6 +8031,7 @@ interface SongListenView {
   seconds: number;
   lyric: string;
   coverage: { status: string; unheardLines: number[] };
+  coverageFinding?: string;
   audioUrl: string;
   cannotApprove?: string;
   approvedAt?: number;
@@ -7986,6 +8079,7 @@ export async function songListenFlow(runId: string, json: boolean, deps: VideoDe
       `  master sha256: ${song.identity.masterSha256}`,
       `  lyric sha256: ${song.identity.lyricSha256} — ${heard}`,
       ...song.lyric.split("\n").map((line, i) => `    ${i + 1}. ${line}`),
+      ...(song.coverageFinding ? [`  ${song.coverageFinding}`] : []),
       ...(song.cannotApprove ? [`  cannot be approved: ${song.cannotApprove}`] : []),
       song.status === "approved"
         ? `  approved at ${new Date(song.approvedAt ?? 0).toISOString()}`
@@ -8117,6 +8211,7 @@ const VALUE_FLAGS = new Set([
   "lyric",
   "rights",
   "request-quote",
+  "audition",
   "face",
   "room",
   "move",
@@ -8309,6 +8404,10 @@ export async function run(
   if (sub === "quote") return printResult(await quoteFlow(runId, json, defaultDeps, flags["private"] !== undefined && flags["private"] !== false));
   if (sub === "approve") {
     const requestQuoteHash = flagString(flags, "request-quote");
+    const auditionDigest = flagString(flags, "audition");
+    if (flags.audition !== undefined && !/^[0-9a-f]{64}$/.test(auditionDigest ?? "")) {
+      usage("--audition needs the digest printed by exodus video status after watching the planned audition clips.");
+    }
     if (flags["request-quote"] !== undefined && !/^[0-9a-f]{64}$/.test(requestQuoteHash ?? "")) {
       usage("--request-quote needs the reviewSha256 printed by exodus video quote.");
     }
@@ -8320,6 +8419,7 @@ export async function run(
           approveStaleCut: flags["approve-stale-cut"] === true,
           acceptFindings: flags["accept-findings"] === true,
           ...(requestQuoteHash ? { requestQuoteHash } : {}),
+          ...(auditionDigest ? { auditionDigest } : {}),
         },
         defaultDeps,
       ),

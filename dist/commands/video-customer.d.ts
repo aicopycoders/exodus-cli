@@ -1,10 +1,36 @@
+import { type AuditionReview } from "../lib/template-audition.js";
 export type CustomerRunStage = "waiting" | "planning" | "picking" | "drawing" | "filming" | "editing" | "review" | "pilot" | "ready" | "failed" | "cancelled";
+export type SpeechSummary = {
+    status: "verbatim" | "accepted-with-speech-issue" | "speech-issue" | "unverified";
+    issues: {
+        sceneIndex?: number;
+        policy: "exact-script";
+        operation: "insert" | "delete";
+        expected: {
+            startWord: number;
+            endWord: number;
+            text: string;
+        };
+        heard: {
+            startWord: number;
+            endWord: number;
+            text: string;
+            startSec?: number;
+            endSec?: number;
+        };
+        repeated?: boolean;
+    }[];
+};
+export declare function speechSummaryLines(speech?: SpeechSummary): string[];
 export interface CustomerRunScene {
     sceneIndex: number;
     line: string | null;
     imageUrl: string | null;
     frameStatus: "pending" | "drawing" | "ready" | "failed";
     productNote?: string;
+    clip?: {
+        speech?: SpeechSummary;
+    } | null;
 }
 export type CustomerStopReason = {
     kind: "out-of-credits";
@@ -29,6 +55,9 @@ export interface CustomerRun {
     } | null;
     mode: "one-shot" | "guided";
     stage: CustomerRunStage;
+    templateApproval?: {
+        audition?: AuditionReview;
+    };
     awaitingSignOff?: boolean;
     waiting: {
         ahead: number;
@@ -38,6 +67,7 @@ export interface CustomerRun {
     video: {
         url: string;
         wordsOff: boolean;
+        speech?: SpeechSummary;
     } | null;
     canRetry: boolean;
     stopReason: CustomerStopReason | null;
@@ -74,6 +104,7 @@ export interface CustomerItem {
     kind: "clip" | "voice" | "music";
     status: "ready" | "working" | "failed";
     url: string | null;
+    speech?: SpeechSummary;
 }
 export interface CustomerItems {
     view: "customer";

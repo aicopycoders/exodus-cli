@@ -1,4 +1,6 @@
 // B32–B34 consumer contract. No source mutation, policy table or width estimate.
+export const LOWER_PANEL_TOP: number;
+export const READOUT_INSET_BOX: [number, number, number, number];
 /** Normalized [left, top, right, bottom] (XYXY), not storyboard XYWH. */
 export type Box = [number, number, number, number];
 export interface TextHold { code: string; id: string; reason: string; required: true; inherited?: true }
@@ -33,9 +35,17 @@ export interface CaptionScreen {
   s: number; e: number; xShare: number; yShare: number; box: Box;
   measurement: RasterMeasurement;
 }
+export interface ProofInsert {
+  kind: string; sourceQuote: string; assertion: "source-assertion";
+  requirementQuote?: string;
+  actionPhaseId?: string;
+  presentation: "full-frame" | "lower-panel";
+}
 export interface TextItem {
   id: string; kind?: string; text: string; required?: boolean; in?: number; out?: number;
   box?: Box; placement?: string; provenance?: "post" | "physical-readout" | "authentic-lettering";
+  /** Honored only with the template capability; never an observed physical readout. */
+  proof?: ProofInsert;
   /** Authored question boundary is not clamped to this explanatory heard line. */
   within?: { start: number; end: number };
   /** Supplied authored readability requirement; never computed from string length.
@@ -52,6 +62,7 @@ export interface TextCard {
   /** Authored geometry used for the raster and final burn. Do not recenter on ink. */
   renderBox: Box;
   in: number; out: number; moved: false; measurement: RasterMeasurement;
+  proof?: ProofInsert;
 }
 export interface Observation {
   source: SourceIdentity; text: string; box: Box;
@@ -102,6 +113,7 @@ export interface CardOptions {
   avoid?: Avoidance[]; captionRects?: Avoidance[]; W: number; H: number;
   totalSec?: number | null; endCardAllowed?: boolean; measureText?: MeasureText;
   source?: SourceIdentity; words?: HeardWord[]; verifyObservation?: VerifyObservation;
+  template?: boolean;
 }
 export interface PlanTextInput extends CardOptions {
   treatment: string; words?: HeardWord[];

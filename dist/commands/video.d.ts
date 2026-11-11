@@ -1,7 +1,8 @@
+import { type TemplateAudition } from "../lib/template-audition.js";
 import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
-import { type CustomerItem, type CustomerRun } from "./video-customer.js";
+import { type SpeechSummary, type CustomerItem, type CustomerRun } from "./video-customer.js";
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
 export type ScriptRunOptions = {
@@ -68,6 +69,7 @@ export interface ClipFinding {
     detail: string;
     judgeDetail?: string;
     judgeSeverity?: "fail" | "warn";
+    speechIssue?: SpeechSummary["issues"][number];
 }
 export declare function qcWithoutJudgeWording(qc: ClipQc): ClipQc;
 export declare const NO_TAKE_HISTORY_LINE = "no history recorded for this clip";
@@ -184,6 +186,7 @@ export interface PullCastLock {
 }
 export interface VideoRun {
     _id: string;
+    launchDoor?: "template";
     status: string;
     isTerminal: boolean;
     error?: string;
@@ -194,6 +197,7 @@ export interface VideoRun {
         approvedAt?: number;
     };
     requestQuotePending?: boolean;
+    templateAudition?: TemplateAudition;
     sourceEditMap?: true;
     blockingMap?: true;
     nodes: VideoRunNode[];
@@ -203,6 +207,8 @@ export interface VideoRun {
     musicBed?: boolean;
     videoChoice?: RunVideoChoice;
     songAsVoice?: true;
+    heldSong?: true;
+    roomTone?: boolean;
     shots?: RunShots;
     storyboardAutoApproval?: {
         outcome: "approved" | "held";
@@ -239,6 +245,7 @@ export interface NodeItem {
     attempt?: number;
     flagged?: boolean;
     findings?: ClipFinding[];
+    speech?: SpeechSummary;
     staleClaim?: boolean;
     lastRedo?: {
         take: number;
@@ -322,6 +329,9 @@ export type RunStop = {
 } | {
     at: "request-quote";
 } | {
+    at: "audition";
+    audition: NonNullable<VideoRun["templateAudition"]>;
+} | {
     at: "picks";
     nodeId: string;
 } | {
@@ -398,6 +408,8 @@ export interface ManifestScene {
     error: string | null;
     flagged: boolean;
     findings: ClipFinding[];
+    templateAudioSourceReservation?: ClipFinding;
+    speech?: SpeechSummary;
     keyframeFindings: ClipFinding[] | null;
 }
 export interface PullFailure {
@@ -460,6 +472,11 @@ export interface VideoManifest {
         voiceMode: string;
     };
     clipAudio?: "keep" | "discard";
+    roomTone?: boolean;
+    wholeVoice?: true;
+    templateMotion?: {
+        enabled: true;
+    };
     shots?: RunShots;
     lineage?: {
         file: string | null;
@@ -514,6 +531,7 @@ export interface ScriptStartOptions {
     sourceRecordFile?: string;
     adaptationPlanFile?: string;
     resumeScriptFile?: string;
+    renewScriptApproval?: true;
     requestedSeconds?: number;
     picturesPerScene?: 1 | 3;
     productId?: string;
@@ -589,6 +607,7 @@ export declare function approveFlow(runId: string, opts: {
     approveStaleCut: boolean;
     acceptFindings?: boolean;
     requestQuoteHash?: string;
+    auditionDigest?: string;
 }, deps: VideoDeps): Promise<FlowResult>;
 export interface PicksPicture {
     n: number;

@@ -50,12 +50,31 @@ keep their existing timing. After the worker update, **Cut again** can reuse the
 existing clips for this reservation-only failure; it does not require generating
 new clips.
 
+A measured native cut that exceeds its frozen length budget offers a longer target
+and plan re-approval. Re-cutting unchanged selected clips is deterministic, so the
+length refusal does not offer that as a recovery action.
+
 Storyboard caption and overlay boxes use normalized `[x, y, width, height]`.
 The first-cut text adapter converts them to the renderer's
 `[left, top, right, bottom]`; source-ad reference boxes already use that renderer
 contract and are preserved. Invalid geometry still holds the finish without
 clamping. After the worker update, **Cut again** can retry a caption-geometry
 adapter failure using the existing clips; no clip regeneration is needed.
+
+Template sound choices stay explicit through prompt compilation, worker finishing
+and CLI pull: `roomTone: false` requests no ambience and adds neither a room-tone
+asset nor fallback brown noise. An absent historical choice keeps its existing
+behavior. A selected music bed is independent of room tone; music-off templates
+do not mix a stray bed file. In worker cuts and hand cuts from `exodus video pull`,
+an actual held song master owns the audio alone: the pull carries `wholeVoice`
+and `templateMotion` so first-cut omits the selected music bed. `songAsVoice` being
+enabled without a held song does not suppress a selected bed or other sound.
+The worker and backend share the same song-ownership check: a picked track or a
+kept master counts; a pending song request alone does not.
+The backend exposes `heldSong` only for a trusted template launch; ordinary
+and legacy runs keep their existing response shape.
+Narration takes a separate bed only when selected; no sound choice changes the
+approved words, action windows or playback speed.
 
 #### V2 input assistance and script review
 
@@ -307,10 +326,44 @@ If you edit the script or its bound context, first quote and authorize another
 script check using `--resume-script` with **`--stop-at-script --json`**. Review and
 save that refreshed response before separately quoting storyboard preparation.
 Neither a quote nor a previously signed receipt silently reapproves changed copy.
+
+Template script receipts last **24 hours** and belong to the approving member in
+that workspace. Resume using an API key owned by that same member (rotating the
+key without changing its owner is fine). Receipt **v2** predates member/expiry
+binding and cannot authorize a new storyboard quote or launch; this receipt version
+is separate from the V2 template-input API. Already launched runs are unaffected.
+
+An expired or legacy **signed** receipt can be renewed without rewriting your
+script. Keep the saved JSON (including the old receipt) and your edited text file:
+
+```bash
+exodus video start --script reviewed.txt --resume-script saved-stop-response.json \
+  --conceit ugc-template --style raw-iphone-ugc-template \
+  --stop-at-script --renew-script-approval --quote-preparation --json > renewal-quote.json
+# Review the script-check allowance, then authorize that same input:
+exodus video start --script reviewed.txt --resume-script saved-stop-response.json \
+  --conceit ugc-template --style raw-iphone-ugc-template \
+  --stop-at-script --renew-script-approval --authorize-preparation renewal-quote.json \
+  --json > refreshed-review.json
+```
+
+This keeps the edited script, original approved source, product, context **and signed
+receipt**. Before consent, the server verifies the old receipt's signature, workspace,
+template, product and source, including v2's original signing domain. Reapproval
+ignores only the old expiry/member binding and issues the reviewing member a new
+receipt. An unreadable, missing or unverifiable receipt requires a fresh write;
+changing products also requires writing a new script, not renewing the old approval.
+Checking may still cost the quoted amount; it is not a new write or storyboard
+authorization. `--stop-at-script` performs this guarded review for expired/v2
+receipts; `--renew-script-approval` makes recovery explicit after a server rejection.
+It cannot be used with `--rewrite-to-fit`, without `--resume-script --stop-at-script`,
+or on a Show. Review the refreshed response before requesting a separate storyboard
+quote using an API key owned by the new approving member.
+
 The resumed POST carries the script alongside the saved opaque `scriptApproval`,
-exact approved source, brief and product. The server checks its workspace,
-template and context binding. An approved description stays the original
-description, not the generated or edited script. Source modes are `verbatim` and
+exact approved source, brief and product. The server checks its approving member,
+24-hour lifetime, workspace, template and context binding. An approved description
+stays the original description, not the generated or edited script. Source modes are `verbatim` and
 `description`; `script` is not a
 wire mode. Explicit `--requested-seconds`, `--pictures-per-scene`, `--voice`,
 `--voice-path` and `--video-model` override their matching saved choices. The CLI

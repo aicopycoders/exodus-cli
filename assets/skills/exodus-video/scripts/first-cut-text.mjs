@@ -2,6 +2,10 @@
 // The consumer supplies its actual libass raster measurement and trusted media
 // observation capabilities. Neither an item receipt nor a font-width estimate
 // is evidence. Missing capabilities produce holds, never source mutations.
+// Mirrors video/lib/readableProof.ts; executable/TS lockstep is regression-tested.
+export const LOWER_PANEL_TOP = .65;
+/** Editorial app readouts leave the filmed action visible; mirrored in readableProof.ts. */
+export const READOUT_INSET_BOX = [.08, .70, .92, .88];
 const hasText = (v) => typeof v === "string" && v.trim().length > 0;
 const squash = (s) => String(s ?? "").replace(/\s+/gu, " ").trim();
 const CONTROL = /[{}\\\u0000-\u001f\u007f]/u;
@@ -194,7 +198,7 @@ function observe(item, { source, words = [], verifyObservation }) {
   return o;
 }
 
-export function planCards(items, { avoid = [], captionRects = [], W, H, totalSec = null, endCardAllowed = false, measureText, source, words, verifyObservation } = {}) {
+export function planCards(items, { avoid = [], captionRects = [], W, H, totalSec = null, endCardAllowed = false, measureText, source, words, verifyObservation, template = false } = {}) {
   const holds = [], skipped = [], readouts = [], notes = [], reservations = [], cards = [];
   const placed = [...captionRects];
   const fail = (item, code, reason) => item.required === true || ["physical-readout", "authentic-lettering"].includes(item.provenance) ? holds.push(hold(code, item.id, reason)) : skipped.push({ id: item.id, code, reason });
@@ -227,14 +231,24 @@ export function planCards(items, { avoid = [], captionRects = [], W, H, totalSec
     const text = squash(item.text);
     const m = fitText(text, { kind, fs: Math.round(H * FONT_SHARE[kind]), box: item.box, xShare: (item.box[0] + item.box[2]) / 2, yShare: (item.box[1] + item.box[3]) / 2, W, H, maxLines: MAX_LINES[kind], measureText });
     if (m.code) { fail(item, m.code, "no trusted raster measurement fits the authored box"); continue; }
+    const proof = template ? item.proof : undefined;
+    if (proof && (proof.assertion !== "source-assertion" || !hasText(proof.sourceQuote) ||
+      !["full-frame", "lower-panel"].includes(proof.presentation) || item.provenance !== "post")) {
+      fail(item, "proof-invalid", "a template insert must remain a source assertion on a post-owned surface"); continue;
+    }
+    const surface = proof?.kind === "readout" ? READOUT_INSET_BOX
+      : proof?.presentation === "full-frame" ? [0, 0, 1, 1] : proof ? [0, LOWER_PANEL_TOP, 1, 1] : null;
+    if (surface && reservations.some(r => overlapsTime(item, r) && meets(surface, r.box))) {
+      fail(item, "proof-obscures-readout", "an opaque insert cannot cover reserved observed evidence"); continue;
+    }
     if ([...avoid, ...reservations, ...placed].some((a) => validBox(a.box) && overlapsTime(item, a) && meets(m.box, a.box))) { fail(item, "geometry-blocked", "measured text intersects reserved pixels; no invented relocation"); continue; }
-    const card = { id: item.id, kind, label: text, lines: m.lines, fs: m.fs, box: m.box, renderBox: item.box, in: item.in, out: item.out, moved: false, measurement: m.measurement };
+    const card = { id: item.id, kind, label: text, lines: m.lines, fs: m.fs, box: m.box, renderBox: item.box, in: item.in, out: item.out, moved: false, measurement: m.measurement, ...(proof ? { proof } : {}) };
     placed.push(card); cards.push(card);
   }
   return { cards: cards.filter((c) => !["hook", "end"].includes(c.kind)).map((c, i) => ({ n: i + 1, ...c })), hook: cards.find((c) => c.kind === "hook") ?? null, endCard: cards.find((c) => c.kind === "end") ?? null, readouts, holds, skipped, notes, reservations };
 }
 
-export function planText({ treatment, words = [], captions = {}, items = [], avoid = [], selection = {}, libass = false, W, H, totalSec = null, inheritedHolds = [], measureText, source, verifyObservation, cuts = [] }) {
+export function planText({ treatment, words = [], captions = {}, items = [], avoid = [], selection = {}, libass = false, W, H, totalSec = null, inheritedHolds = [], measureText, source, verifyObservation, cuts = [], template = false }) {
   const holds = inheritedHolds.map((h) => ({ ...h, required: true, inherited: true }));
   const permissions = outputPermissions({ treatment, captions: captions.on === true, selection });
   holds.push(...permissions.holds);
@@ -251,7 +265,7 @@ export function planText({ treatment, words = [], captions = {}, items = [], avo
   }
   if (permissions.endCard) all.push({ ...selection.endCard, id: "end-card", kind: "end", required: true });
   if (permissions.offer) all.push({ ...selection.offer, id: "offer", kind: "offer", required: true });
-  const cp = planCards(all, { avoid, W, H, totalSec, endCardAllowed: permissions.endCard, measureText, source, words, verifyObservation });
+  const cp = planCards(all, { avoid, W, H, totalSec, endCardAllowed: permissions.endCard, measureText, source, words, verifyObservation, template });
   holds.push(...cp.holds); result.skipped.push(...cp.skipped); result.readouts = cp.readouts;
   directives.cards = cp.cards; directives.hook = cp.hook; directives.endCard = cp.endCard;
   if (captions.on === true) {

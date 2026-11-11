@@ -8,6 +8,9 @@
  * types are copied here rather than imported.
  */
 
+import { speechIssueText } from "../lib/speechIssueText.js";
+
+import { AUDITION_RESTART_REASON, type AuditionReview } from "../lib/template-audition.js";
 export type CustomerRunStage =
   | "waiting"
   | "planning"
@@ -22,12 +25,33 @@ export type CustomerRunStage =
   | "failed"
   | "cancelled";
 
+/** Mirror of the server's allowlisted exact-script evidence (CLI ships separately). */
+export type SpeechSummary = {
+  status: "verbatim" | "accepted-with-speech-issue" | "speech-issue" | "unverified";
+  issues: {
+    sceneIndex?: number;
+    policy: "exact-script";
+    operation: "insert" | "delete";
+    expected: { startWord: number; endWord: number; text: string };
+    heard: { startWord: number; endWord: number; text: string; startSec?: number; endSec?: number };
+    repeated?: boolean;
+  }[];
+};
+
+export function speechSummaryLines(speech?: SpeechSummary): string[] {
+  if (!speech) return [];
+  const labels = { verbatim: "Verbatim", "accepted-with-speech-issue": "Accepted with speech issue",
+    "speech-issue": "Speech issue — review required", unverified: "Speech not verified" };
+  return [labels[speech.status], ...speech.issues.map(speechIssueText)];
+}
+
 export interface CustomerRunScene {
   sceneIndex: number;
   line: string | null;
   imageUrl: string | null;
   frameStatus: "pending" | "drawing" | "ready" | "failed";
   productNote?: string;
+  clip?: { speech?: SpeechSummary } | null;
 }
 
 export type CustomerStopReason =
@@ -45,11 +69,12 @@ export interface CustomerRun {
   card: { conceit: string; style: string } | null;
   mode: "one-shot" | "guided";
   stage: CustomerRunStage;
+  templateApproval?: { audition?: AuditionReview };
   /** #3299: a Guided video's cut is ready and waits for `exodus video approve`. Absent from older servers. */
   awaitingSignOff?: boolean;
   waiting: { ahead: number; stepsDone: number } | null;
   scenes: CustomerRunScene[] | null;
-  video: { url: string; wordsOff: boolean } | null;
+  video: { url: string; wordsOff: boolean; speech?: SpeechSummary } | null;
   canRetry: boolean;
   stopReason: CustomerStopReason | null;
   detailsPath: string | null;
@@ -110,6 +135,7 @@ export interface CustomerItem {
   kind: "clip" | "voice" | "music";
   status: "ready" | "working" | "failed";
   url: string | null;
+  speech?: SpeechSummary;
 }
 
 export interface CustomerItems {
@@ -218,6 +244,14 @@ function stoppedLines(run: CustomerRun, page: string): string[] {
 /** Where the run is, in the run page's words. */
 export function customerStageLines(run: CustomerRun, page: string): string[] {
   const id = run.runId;
+  const audition = run.templateApproval?.audition;
+  if (audition) return [
+    `Audition held: planned scenes ${audition.sceneIndexes.join(", ")}. Watch their clips on ${page}`,
+    audition.invalidated ? "The bound inputs changed. Start a new run; the remaining batch was not ordered."
+      : audition.retryBlocked ? AUDITION_RESTART_REASON
+      : audition.ready ? `Accept only after watching: exodus video approve ${id} --audition ${audition.digest}`
+      : `Approve another paid attempt for failed audition takes only: exodus video approve ${id}. Completed takes are kept; the remaining batch stays held.`,
+  ];
   switch (run.stage) {
     case "waiting":
       return [waitingSentence(run.waiting)];
@@ -247,6 +281,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
               `When you're happy with it, finish it:  exodus video approve ${id}`,
             ]
           : [`Your video is ready: ${run.video?.url ?? page}`]),
+        ...speechSummaryLines(run.video?.speech),
         ...(run.video?.wordsOff
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),
@@ -267,6 +302,8 @@ export function customerStatusLines(run: CustomerRun, dashboardUrl: string): str
     run.mode === "guided" ? "Storyboard first" : "In one go",
     "",
     ...customerStageLines(run, page),
+    ...(run.scenes ?? []).flatMap(scene => scene.clip?.speech
+      ? [`Scene ${scene.sceneIndex} speech:`, ...speechSummaryLines(scene.clip.speech).map(line => `  ${line}`)] : []),
     "",
     `Watch it on the dashboard: ${page}`,
   ];

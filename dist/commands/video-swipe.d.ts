@@ -6,6 +6,7 @@ export declare const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
 export declare const SWIPE_PRODUCTS_PATH = "/api/v2/video/swipe-products";
 export declare const SWIPES_PATH = "/api/v2/video/swipes";
 export declare const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
+export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
     sourceKind: "url" | "file" | "ad";
@@ -207,6 +208,10 @@ export type SwipePlan = {
     kind: "list";
     opts: SwipeOpts;
 } | {
+    kind: "find";
+    ask: FindAsk;
+    opts: SwipeOpts;
+} | {
     kind: "start";
     swipeId: string;
     ask: StartAsk;
@@ -258,6 +263,46 @@ export declare function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptio
 export declare function fullLines(data: Record<string, unknown>): string[];
 export declare function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeProductsFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare const FIND_READ = 200;
+export declare const FIND_PAID_FLAGS: readonly ["yes", "wait", "file", "url", "ad"];
+export declare const FIND_OTHER_FLAGS: readonly ["one-shot", "music", "mode", "closeness", "product", "look", "script", "style", "title", "sheet", "full", "status", "persona", "retry-refused"];
+export declare const FIND_KIND_LINE = "The kind of an ad is known only after it is read.";
+export declare const FIND_EMPTY_LIBRARY = "The swipe library has no ads yet for this brand.";
+export interface FindAsk {
+    brand: string | null;
+    limit: number;
+}
+export interface SwipeLibraryRow {
+    _id: string;
+    brandName?: string;
+    format?: string;
+    transcript?: string;
+    bodyText?: string;
+    headline?: string;
+    ctaText?: string;
+    imageUrl?: string;
+    videoUrl?: string;
+}
+export interface SwipeCandidate {
+    n: number;
+    id: string;
+    advertiser: string | null;
+    firstLine: string | null;
+    firstLineFrom: "transcript" | "post text" | null;
+    words: number | null;
+    text: string | null;
+}
+export interface SwipeCandidates {
+    read: number;
+    wholeLibrary: boolean;
+    videos: number;
+    competitors: number;
+    candidates: SwipeCandidate[];
+    allVideos: number;
+    advertisers: string[];
+}
+export declare function swipeCandidatesOf(rows: unknown[], ask: FindAsk): SwipeCandidates;
+export declare function swipeFindFlow(ask: FindAsk, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;

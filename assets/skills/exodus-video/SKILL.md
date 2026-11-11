@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, read first, then one sheet of choices and one yes for the write and the whole video (or, when the member asks, step by step with a yes before each paid step). The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
+description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, read first, then one sheet of choices and one yes for the write and the whole video (or, when the member asks, step by step with a yes before each paid step). With no ad named ("find some ads to swipe for this product, give me options"), it first lists the video ads in the brand's swipe library with `exodus video swipe find` and offers at most six. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -369,8 +369,9 @@ sentence to a film") keeps the picks stop and the pilot clip.
 
 By default a swipe is one round: you read the ad, send the member one sheet,
 and on their one yes write the brand's version and make each video they
-picked. A member who asks to say yes before each paid step gets "Step by
-step" below.
+picked. When the member names no ad, the options come first (step 0): video
+ads from the brand's swipe library to pick from. A member who asks to say yes
+before each paid step gets "Step by step" below.
 
 **Long waits.** The CLI waits up to 25 minutes for a breakdown, 10 for a
 template, 15 for a write (the write always waits; it has no `--wait`), and 60
@@ -379,6 +380,122 @@ and check in, so the shell's own time limit does not cut them off. A wait that
 was cut off or timed out is not a failure: the work goes on. Follow it by the
 id it printed, with the command the CLI names, and never by running the paid
 line again: a second run buys it a second time.
+
+### 0. No ad named: find some
+
+When the member asks for ads to swipe without naming one ("find some ads to
+swipe for this product, give me options"), offer options first. Skip this
+step when the member named a file, a link or an id.
+
+1. The free product check comes first, as in step 1: `exodus video swipe
+   products`, and with no products, tell the member and stop. Then, free:
+   `exodus video swipe find --json`. It looks through up to 200 ads of the
+   brand's swipe library, shared fairly across the competitors (the whole
+   library when it holds fewer, and then `"wholeLibrary"` is true), and keeps
+   the video ads with a file, newest collected first, each with its id,
+   advertiser, first line, word count and the start of its transcript. Its
+   counts are of the ads it looked through, not of the whole library.
+2. Send the options in one message, then stop and wait:
+
+> I found <V> video ads from <C> competitors in <your swipe library, or, when "wholeLibrary" is false: the 200 ads I looked through in your swipe library>. The <k> that fit <product> best:
+> 1. **<Advertiser>**: "<first line>" (<w> words). Fits: <one reason, from the ad's words and the product>.
+> 2. **<Advertiser>**: post text "<first line>" (no transcript yet).
+> <V − k> more found. Say "more" for the next six, or name a competitor.
+> Pick by number, or say "all" for these <k>. Your pick is your yes to read
+> every ad you pick, one after another: each read costs a little, on the
+> team's keys and on your model key. Nothing is written or started before
+> your yes to the sheet.
+
+The rules of the options:
+
+- **At most six options in one message.** "More" sends the next six in the
+  same order you chose them by, leaving out every ad already shown; past
+  the rows the CLI showed, run `exodus video swipe find --limit 200
+  --json`. When the member names a competitor, run `exodus video
+  swipe find --brand "<name>" --json`. Leave out the "more found" line when
+  there are no more. When that find says none of the video ads is from that
+  name, say the CLI's line and offer the advertisers it lists.
+- **"All" means the options the member last saw**, never every ad found.
+- **The reason comes from the ad's words and the product.** A product fact
+  in it comes only from `exodus video swipe products` (the product's name
+  and description) or the primer. Say nothing about the competitor beyond
+  the ad's own words. Never call an ad a winner, a top ad or a proven ad:
+  the list holds no results (no spend, no views, no days running) and does
+  not rank by them. Its order is newest collected first, nothing more.
+- **Post text is not spoken.** A first line with `"firstLineFrom": "post
+  text"` is the post's headline or text, not words said in the video: show
+  it as post text, never as something someone says.
+- **An ad with no transcript goes last**, with no reason: its words are not
+  known before the read.
+- **The kind of an ad is known only after it is read.** Never state a kind
+  as fact before a read.
+
+**A find by kind.** When the member asks for a kind of ad ("find me some
+authority yappers"), offer at most six whose words sound like that kind, and
+say so in the message's first line, as "<kind>: sounds like, from the words;
+the read confirms it." After the reads, the sheet's first
+line names any ad the template read as another kind, so the member can drop
+it ("drop video 3, go" is already a yes).
+
+**What a pick is.** Only numbers given after an options message ("1, 3 and
+5"), or "all" (the options the member last saw), are picks. The numbering
+goes on across "more" and across a new find (for a named competitor): the
+next six are 7 to 12, and so on, never 1 again. Keep the id of every
+number you showed, and read a pick by that id. "You pick" is not a
+pick: name your own picks by number, each with its reason, and wait; read
+nothing yet. A reply that takes them ("yes, those") is the pick. "Swipe all
+of them" in the first message, before any options were shown, gets the
+options first. A reply that picks nothing (a question, "tell me more about
+2", "maybe") is not a pick: answer it and wait.
+
+**A pick is the yes to read every ad picked.** Say in one line what you are
+about to read and who pays, in words like: "I'll read these 2 ads now, one
+after another: each breakdown on the team's keys, each template on your own
+model key." Then step 1 reads them in number order, by the ids the find
+printed (`--ad <id>`), each breakdown then its template, without asking
+again between them. Only what the member did not pick still gets the one
+ask of "The limit: $0.50 for the read." in step 1: an ad found or named
+after the pick, or a second pass over the same list. A pick whose read is
+refused (its video expired or was removed; the read says so in one sentence
+and buys nothing) or fails is left out, as step 1 says. Reading a failed ad
+again is paid and needs its own yes.
+
+**Into the sheet.** Every pick is on the sheet, in number order. The count is
+ads × personas, and every rule of step 3 holds, above 6 videos too. In a
+sheet file, each pick is `{"ad": "<id>"}` in `"sources"`, in the same order.
+
+**Only part of the library was looked through.** When `"wholeLibrary"` is false
+and none of those ads is a video with a file, the library is not empty:
+the find looked through only part of it. Say the CLI's line, say that, and
+offer a link or a file of an ad. Do not offer mining.
+
+**An empty library.** When the find answers "The swipe library has no ads yet
+for this brand.", or, with `"wholeLibrary"` true, that none of its ads is a
+video with a file, tell the member in the CLI's own words, then offer
+three ways and run none of them:
+
+- a link or a file of an ad (step 1 reads it);
+- `exodus swipe brands list` (free): the competitors this brand tracks, each
+  with the date it was last mined;
+- `exodus swipe mine`: collects the tracked competitors' ads into the
+  library.
+
+**Before any yes to mining**, tell the member in one message: it runs on
+their own Scrape Creators key; the CLI prints no price for it; it mines every
+active competitor on the watchlist, up to 50 in one run, the least recently
+mined first; and it starts the moment it runs, in the background. Only a
+reply that names mining after that message is the yes ("yes, mine them"), and
+it buys the mining only, no read. After the mine, do not find again at
+once: `exodus swipe latest` and `exodus swipe status <runId>` follow the
+weekly swipe run, not mining, so they cannot show it is done. The mine
+itself prints "Check progress: exodus swipe brands list". Tell the member
+the mine has started and that you can look again in a few minutes. When
+they ask, run `exodus swipe brands list` (a competitor that showed
+`never-scraped` and now shows a `last=` date has been mined; the date has
+no time, so one mined earlier the same day shows no change), then `exodus
+video swipe find --json`. If it is still empty, say what the list shows and
+stop; do not keep checking. Transcripts are made after the mine finishes, so
+a newly mined ad can show "no transcript yet" for a while.
 
 ### 1. Read the ad
 
@@ -424,7 +541,10 @@ member once when the costs counted have reached $0.50, or when any read so
 far is unknown: an unknown cost counts as reaching the limit. Say what is
 left to read. A new template is always
 unknown, so with several ads you read the first and ask before the rest. The
-check comes before each read, so the total can pass $0.50 by one read.
+check comes before each read, so the total can pass $0.50 by one read. Ads
+the member picked by number from the options (step 0), or with "all", are
+already a yes to read: read every picked ad without this ask. The ask still
+comes before any ad they did not pick.
 
 A breakdown or a template that fails prints why. With one ad, tell the
 member and stop. With several, leave that ad out, say so in the sheet's first
@@ -768,8 +888,8 @@ prints no price, never guess one, and run the same line with `--yes` only
 after their yes.
 
 1. **Get the ad.** One of a video file, a link (Meta Ad Library, TikTok,
-   Instagram or YouTube), or an ad in the brand's swipe library by the `id:`
-   that `exodus genesis --list-swipes` prints:
+   Instagram or YouTube), or a video ad in the brand's swipe library by the
+   id that `exodus video swipe find` prints (free):
    `exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId>`.
    The breakdown is paid on the team's keys, not the member's. A link or an
    ad this brand broke down before comes back at once and costs nothing.
@@ -823,6 +943,7 @@ exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closene
                                                           the brand's version (member's key); waits for it
 exodus video swipe show <swipeId>                         one swipe again
 exodus video swipe list                                   the brand's newest swipes; a refused one shows what it cost
+exodus video swipe find [--brand "<name>"] [--limit <n>]  video ads in the swipe library to offer as options (free); no kind, no results
 exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait]
                                                           start the run on the kind the swipe wrote
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file

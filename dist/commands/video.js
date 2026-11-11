@@ -204,6 +204,7 @@ Usage:
   exodus video swipe write <breakdownId> --product <id> [--mode whole-ad|hook-only|their-format|new-look] [--closeness <1-5|mirror|close|same-beats|same-arc|pattern-only>] [--look <slug>] [--script <file>] [--yes] [--json]
   exodus video swipe show <swipeId> [--json]
   exodus video swipe list [--json]
+  exodus video swipe find [--brand "<name>"] [--limit <n>] [--json]
   exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait] [--json]
   exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
 
@@ -449,7 +450,8 @@ what it buys and who pays. The CLI prints no price for any of them.
                        YouTube (swipe). A link this brand broke down before is
                        used again, and costs nothing
   --ad <swipeAdId>     An ad in the brand's swipe library (swipe). An ad
-                       broken down before costs nothing
+                       broken down before costs nothing. swipe find lists
+                       the library's video ads and their ids
   --yes                The member said yes to this paid step (swipe, swipe
                        template, swipe write, swipe start), or to every paid
                        step of the sheet (swipe run)
@@ -502,6 +504,16 @@ what it buys and who pays. The CLI prints no price for any of them.
   --persona <name>     Only that persona's videos (swipe run)
   --retry-refused      Write again an ad the writer refused (swipe run). Paid,
                        so it needs --yes too
+  --brand "<name>"     Only that competitor's ads, by a case-blind piece of
+                       its name (swipe find)
+  --limit <n>          How many ads swipe find shows, 1 to 200. 30 if left off.
+                       The counts are of every match
+swipe find is free and buys nothing: it looks through up to 200 ads of the
+brand's swipe library, shared fairly across its competitors (the whole
+library when it holds fewer), keeping the video ads with a file, newest
+collected first. Its counts are of the ads it looked through. It holds no
+results and no kind, so it ranks by neither; the kind of an ad is known only
+after it is read. It takes no other verb's flags.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
@@ -549,6 +561,7 @@ Examples:
   exodus video swipe template bd_123 --yes
   exodus video swipe write bd_123 --product prod_1 --mode hook-only --closeness close --yes
   exodus video swipe start sw_123 --yes --wait
+  exodus video swipe find --brand "AG1" --json
 `.trim();
 const SHOWS_PATH = "/api/v2/shows";
 const RUNS_PATH = "/api/v2/video/runs";
@@ -6071,23 +6084,30 @@ const VALUE_FLAGS = new Set([
     "sheet",
     "persona",
 ]);
+const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
 export function parsePositional(args = process.argv.slice(3)) {
-    const out = [];
-    let i = 0;
-    while (i < args.length) {
-        const arg = args[i];
-        if (arg.startsWith("--")) {
-            const key = arg.slice(2).split("=", 1)[0] ?? "";
-            if (!arg.includes("=") && VALUE_FLAGS.has(key))
-                i += 2;
-            else
-                i++;
-            continue;
+    const read = (valueFlags) => {
+        const out = [];
+        let i = 0;
+        while (i < args.length) {
+            const arg = args[i];
+            if (arg.startsWith("--")) {
+                const key = arg.slice(2).split("=", 1)[0] ?? "";
+                if (!arg.includes("=") && (VALUE_FLAGS.has(key) || valueFlags.has(key)))
+                    i += 2;
+                else
+                    i++;
+                continue;
+            }
+            out.push(arg);
+            i++;
         }
-        out.push(arg);
-        i++;
-    }
-    return out;
+        return out;
+    };
+    const asFind = read(FIND_VALUE_FLAGS);
+    if (asFind[0] === "swipe" && asFind[1] === "find")
+        return asFind;
+    return read(new Set());
 }
 function flagString(flags, name) {
     const value = flags[name];

@@ -12,6 +12,7 @@ export const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
 export const SWIPE_PRODUCTS_PATH = "/api/v2/video/swipe-products";
 export const SWIPES_PATH = "/api/v2/video/swipes";
 export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
+export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export const SWIPE_MODES = [
     { flag: "whole-ad", mode: "whole", label: "Whole ad", helper: "Every part of their ad, rewritten for your brand." },
     { flag: "hook-only", mode: "hook", label: "Hook only", helper: "Their opening hook. The rest is new, written for your product." },
@@ -73,7 +74,7 @@ export function needsYesResult(step, json, choice = []) {
         ],
     };
 }
-const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run"];
+const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find"];
 export function parseSwipeMode(value) {
     return SWIPE_MODES.find((m) => m.flag === value.trim().toLowerCase())?.mode ?? null;
 }
@@ -148,6 +149,33 @@ export function planSwipeCommand(rest, occurrences) {
         return { kind: "products", opts };
     if (verb === "list")
         return { kind: "list", opts };
+    if (verb === "find") {
+        const typedFlag = (names) => occurrences.find((o) => names.some((name) => o.flag === name || o.flag === `no-${name}`))?.flag;
+        const paid = typedFlag(FIND_PAID_FLAGS);
+        if (paid) {
+            return usage(`video swipe find only lists the swipe library and buys nothing, so it takes no --${paid}. Read a picked ad with exodus video swipe --ad <id>.`);
+        }
+        const other = typedFlag(FIND_OTHER_FLAGS);
+        if (other)
+            return usage(`video swipe find takes no --${other}: it only lists the swipe library. Its flags are --brand, --limit and --json.`);
+        const switchWord = (word) => ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase());
+        const extra = rest
+            .slice(1)
+            .find((word) => !(switchWord(word) && occurrences.some((o) => SWITCHES.includes(o.flag) && o.value === word)));
+        if (extra !== undefined)
+            return usage(`video swipe find takes no id (got "${extra}"). Name a competitor with --brand "<name>".`);
+        const brand = value("brand");
+        if (brand === null)
+            return usage("video swipe find --brand needs a competitor's name.");
+        const limitWord = value("limit");
+        if (limitWord === null)
+            return usage(`video swipe find --limit needs a number from 1 to ${FIND_MAX}.`);
+        const limit = limitWord === undefined ? FIND_DEFAULT_LIMIT : /^\d+$/.test(limitWord.trim()) ? Number(limitWord.trim()) : NaN;
+        if (!(limit >= 1 && limit <= FIND_MAX)) {
+            return usage(`video swipe find --limit must be a whole number from 1 to ${FIND_MAX}, not "${limitWord}".`);
+        }
+        return { kind: "find", ask: { brand: brand?.trim() ?? null, limit }, opts };
+    }
     if (verb === "run") {
         const typed = SHEET_FLAGS.find(([flag]) => last(flag) !== undefined);
         if (typed) {
@@ -645,6 +673,123 @@ export async function swipeProductsFlow(opts, deps) {
         lines: [
             "The brand's products. Write for one with --product <id>:",
             ...products.map((p) => `  ${p.id.padEnd(width)}  ${p.name}${p.description ? ` — ${p.description}` : ""}`),
+        ],
+    };
+}
+export const FIND_READ = 200;
+const FIND_MAX = FIND_READ;
+const FIND_DEFAULT_LIMIT = 30;
+const FIRST_LINE_MAX = 60;
+export const FIND_PAID_FLAGS = ["yes", "wait", "file", "url", "ad"];
+export const FIND_OTHER_FLAGS = [
+    "one-shot",
+    "music",
+    "mode",
+    "closeness",
+    "product",
+    "look",
+    "script",
+    "style",
+    "title",
+    "sheet",
+    "full",
+    "status",
+    "persona",
+    "retry-refused",
+];
+const TEXT_MAX = 400;
+export const FIND_KIND_LINE = "The kind of an ad is known only after it is read.";
+export const FIND_EMPTY_LIBRARY = "The swipe library has no ads yet for this brand.";
+function textOf(value) {
+    return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+function cut(text, max) {
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+export function swipeCandidatesOf(rows, ask) {
+    const videos = rows.filter((row) => isRecord(row) && typeof row._id === "string" && row.format === "video" && textOf(row.videoUrl) !== "");
+    const advertisers = [];
+    for (const row of videos) {
+        const name = textOf(row.brandName);
+        if (name && !advertisers.some((seen) => seen.toLowerCase() === name.toLowerCase()))
+            advertisers.push(name);
+    }
+    const wanted = ask.brand?.toLowerCase() ?? null;
+    const matched = wanted === null ? videos : videos.filter((row) => textOf(row.brandName).toLowerCase().includes(wanted));
+    const competitors = new Set(matched.map((row) => textOf(row.brandName).toLowerCase()).filter(Boolean)).size;
+    const candidates = matched.slice(0, ask.limit).map((row, i) => {
+        const transcript = textOf(row.transcript);
+        const first = transcript || textOf(row.headline) || textOf(row.bodyText);
+        return {
+            n: i + 1,
+            id: row._id,
+            advertiser: textOf(row.brandName) || null,
+            firstLine: first ? cut(first, FIRST_LINE_MAX) : null,
+            firstLineFrom: transcript ? "transcript" : first ? "post text" : null,
+            words: transcript ? transcript.split(" ").length : null,
+            text: transcript ? transcript.slice(0, TEXT_MAX) : null,
+        };
+    });
+    return { read: rows.length, wholeLibrary: rows.length < FIND_READ, videos: matched.length, competitors, candidates, allVideos: videos.length, advertisers };
+}
+function windowWords(found) {
+    if (!found.wholeLibrary) {
+        return `the ${found.read} ads looked through in the swipe library (shared across competitors; the library may hold more)`;
+    }
+    return found.read === 1 ? "the only ad in the swipe library" : `all ${found.read} ads in the swipe library`;
+}
+function findEmptyLine(found, ask) {
+    if (found.read === 0)
+        return FIND_EMPTY_LIBRARY;
+    if (found.allVideos === 0) {
+        return found.read === 1
+            ? "The only ad in the swipe library is not a video with a file."
+            : `None of ${windowWords(found)} is a video with a file.`;
+    }
+    if (found.videos === 0) {
+        const where = found.wholeLibrary ? "in the swipe library" : "looked through in the swipe library";
+        return `None of the ${plural(found.allVideos, "video ad", "video ads")} ${where} is from "${ask.brand}". They are from: ${found.advertisers.join(", ")}.`;
+    }
+    return null;
+}
+export async function swipeFindFlow(ask, opts, deps) {
+    const { json } = opts;
+    const res = await deps.get(`${SWIPE_LIBRARY_PATH}?limit=${FIND_READ}`);
+    if (!res.ok) {
+        const error = formatApiError(res);
+        return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: res.status, error })] : [error] };
+    }
+    const rows = isRecord(res.data) && Array.isArray(res.data.swipes) ? res.data.swipes : null;
+    if (!rows)
+        return failed("The server's answer about the swipe library could not be read.", json);
+    const found = swipeCandidatesOf(rows, ask);
+    const empty = findEmptyLine(found, ask);
+    const { read, wholeLibrary, videos, competitors, candidates } = found;
+    if (json) {
+        return {
+            code: 0,
+            lines: [
+                JSON.stringify({ ok: true, read, wholeLibrary, videos, competitors, shown: candidates.length, candidates, ...(empty ? { empty } : {}) }),
+            ],
+        };
+    }
+    if (empty)
+        return { code: 0, lines: [empty] };
+    const width = Math.max(...candidates.map((c) => c.id.length));
+    return {
+        code: 0,
+        lines: [
+            `${plural(videos, "video ad", "video ads")}${ask.brand ? ` matching "${ask.brand}"` : ""}, from ${plural(competitors, "competitor", "competitors")}, newest collected first.`,
+            `The counts are of ${windowWords(found)}.`,
+            ...candidates.map((c) => {
+                const said = c.firstLine ? `${c.firstLineFrom === "post text" ? "post text " : ""}"${c.firstLine}"` : "";
+                const tail = c.words === null ? "no transcript yet" : plural(c.words, "word", "words");
+                return `${String(c.n).padStart(4)}  ${c.id.padEnd(width)}  ${c.advertiser ?? "(advertiser unknown)"}: ${said ? `${said}  ${tail}` : tail}`;
+            }),
+            ...(candidates.length < videos ? [`Showing the first ${candidates.length}; --limit <n> shows up to ${FIND_MAX}.`] : []),
+            "Read one (paid, on the team's keys; ask first): exodus video swipe --ad <id> --yes --wait",
+            "An ad read before costs nothing to read again, unless that read failed: then reading it again is paid.",
+            `${FIND_KIND_LINE} This list holds no results, so it does not rank by them.`,
         ],
     };
 }
@@ -2408,6 +2553,8 @@ export async function runSwipePlan(plan, deps, onProgressLine) {
             return swipeShowFlow(plan.swipeId, opts, deps);
         case "list":
             return swipeListFlow(opts, deps);
+        case "find":
+            return swipeFindFlow(plan.ask, opts, deps);
         case "start":
             return swipeStartFlow(plan.swipeId, plan.ask, opts, deps);
         case "run":

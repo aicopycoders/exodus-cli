@@ -700,17 +700,18 @@ step 3 comes once every video has started:
    to "End: watch and approve" (pull, cut, upload, the run page). A run that
    stopped at the storyboard goes to stop 3, then the end.
 
-**Never start the same swipe twice.** Each start is a second, paid video.
-Before any second start of a swipe, run `exodus video swipe show <swipeId>`:
-when it prints "It started run <runId>", the run started, so follow it with
-`exodus video status <runId>`. Before writing again after a write whose wait
-was cut off, run `exodus video swipe list`. It lists the newest first, and
-the writes run one at a time, so a row for that ad above the last swipe id
-you noted (any row for it, when you noted none), with no run and not marked
-refused, is that write. Show it with `exodus video swipe show <swipeId>` and
-start it instead of writing again. A row marked refused is that write's
-refusal: report it as a refused write. When no such row is there yet, the write may
-still finish: check again later.
+**Never start the same swipe twice.** One swipe is one video. A start of a
+swipe that already has a video is refused, starts nothing, and names the run:
+follow that run with `exodus video status <runId>`. `--again` makes a second,
+paid video from the same swipe: use it only when the member asks for a second
+video. Before writing again after a write whose wait was cut off, run
+`exodus video swipe list`. It lists the newest first, each with when it was
+written and its product, and the writes run one at a time, so a row for that
+ad and product above the last swipe id you noted (any row for it, when you
+noted none), with no run and not marked refused, is that write. Show it with
+`exodus video swipe show <swipeId>` and start it instead of writing again. A
+row marked refused is that write's refusal: report it as a refused write. When
+no such row is there yet, the write may still finish: check again later.
 
 At the end, report each video on one line: its ad and persona, its run id
 and its `Watch it:` link, or why it stopped.
@@ -927,7 +928,8 @@ after their yes.
    `--title "<name>"` names the ad, for admins only: a beta tester leaves it
    off, or the CLI refuses it with one sentence naming it. With `--one-shot`
    it buys the whole video with no stop: ask before passing it. `--wait` waits until the run needs the
-   member.
+   member. A swipe that already has a video is refused, with its run; a
+   second video from it needs `--again` and the member's yes to a second video.
 6. **Then** stop 3 (the storyboard) and the end, as above.
 
 ### Every swipe command
@@ -942,10 +944,12 @@ exodus video swipe products                               the brand's products a
 exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closeness <step>] [--look <slug>] [--script <file>] [--yes]
                                                           the brand's version (member's key); waits for it
 exodus video swipe show <swipeId>                         one swipe again
-exodus video swipe list                                   the brand's newest swipes; a refused one shows what it cost
+exodus video swipe list                                   the brand's newest swipes, each with when it was written and its product;
+                                                          a refused one shows what it cost
 exodus video swipe find [--brand "<name>"] [--limit <n>]  video ads in the swipe library to offer as options (free); no kind, no results
-exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait]
-                                                          start the run on the kind the swipe wrote
+exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--yes] [--wait]
+                                                          start the run on the kind the swipe wrote; --again for a
+                                                          second, paid video of a swipe that already has one
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file
 ```
 

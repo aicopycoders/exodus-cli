@@ -252,7 +252,7 @@ Usage:
   exodus video swipe show <swipeId> [--json]
   exodus video swipe list [--json]
   exodus video swipe find [--brand "<name>"] [--limit <n>] [--json]
-  exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait] [--json]
+  exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--yes] [--wait] [--json]
   exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
 
 Options:
@@ -534,6 +534,9 @@ what it buys and who pays. The CLI prints no price for any of them.
   --script <file>      Your own script (swipe write --mode their-format)
   --style <look>       A look other than the swipe's own (swipe start)
   --title "<name>"     The ad's name (swipe start). Admin-only
+  --again              A second, paid video from a swipe that already has one
+                       (swipe start). Without it the server refuses to start a
+                       swipe whose video is there, and names that run
   --sheet <file>       The whole swipe in one JSON file (swipe run): the ads
                        (sources, each a url, an ad id or a file), the product,
                        the personas, mode, closeness, look or script, the

@@ -96,10 +96,11 @@ const SHEET_FLAGS = [
     ["url", 'list the ad in the sheet\'s "sources".'],
     ["ad", 'list the ad in the sheet\'s "sources".'],
     ["full", "--full is for exodus video swipe status."],
+    ["again", "a sheet never starts a swipe twice. For a second video of one swipe, use exodus video swipe start <swipeId> --again."],
 ];
 const OFF_WORDS = new Set(["false", "no", "off", "0"]);
 const ON_WORDS = new Set(["true", "yes", "on", "1"]);
-const SWITCHES = ["json", "yes", "wait", "full", "music", "one-shot", "retry-refused", "status"];
+const SWITCHES = ["json", "yes", "wait", "full", "music", "one-shot", "retry-refused", "status", "again"];
 export function planSwipeCommand(rest, occurrences) {
     const last = (name) => occurrences.filter((o) => o.flag === name || o.flag === `no-${name}`).at(-1);
     const switchState = (name) => {
@@ -207,7 +208,7 @@ export function planSwipeCommand(rest, occurrences) {
         const start = startChoicesOf({ style: value("style"), title: value("title"), music: on("music"), oneShot: on("one-shot") }, CLI_WORDS.start);
         if ("problem" in start)
             return usage(start.problem);
-        return { kind: "start", swipeId: id, ask: start.ask, opts };
+        return { kind: "start", swipeId: id, ask: start.ask, again: on("again"), opts };
     }
     const product = value("product");
     if (!product)
@@ -680,7 +681,7 @@ export const FIND_READ = 200;
 const FIND_MAX = FIND_READ;
 const FIND_DEFAULT_LIMIT = 30;
 const FIRST_LINE_MAX = 60;
-export const FIND_PAID_FLAGS = ["yes", "wait", "file", "url", "ad"];
+export const FIND_PAID_FLAGS = ["yes", "wait", "file", "url", "ad", "again"];
 export const FIND_OTHER_FLAGS = [
     "one-shot",
     "music",
@@ -845,9 +846,11 @@ function swipeLines(swipe, after) {
         ...(draft.lengthGap ? [`Length: ours is about ${draft.lengthGap.ours} s, theirs about ${draft.lengthGap.theirs} s.`] : []),
         costLine(swipe),
         "",
-        swipe.workflowRunId
-            ? `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. Another start is a second, paid video.`
-            : `Start the video (paid; ask first): exodus video swipe start ${swipe._id} --yes`,
+        swipe.workflowRunId && swipe.runHoldsStart === false
+            ? `It started run ${swipe.workflowRunId}, which failed or was cancelled: exodus video status ${swipe.workflowRunId}. Starting the swipe again is paid (ask first): exodus video swipe start ${swipe._id} --yes`
+            : swipe.workflowRunId
+                ? `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. A second video from this swipe is paid on its own and needs --again (ask first): exodus video swipe start ${swipe._id} --again --yes`
+                : `Start the video (paid; ask first): exodus video swipe start ${swipe._id} --yes`,
     ];
 }
 export async function swipeWriteFlow(breakdownId, ask, opts, deps) {
@@ -913,6 +916,7 @@ export async function swipeShowFlow(swipeId, opts, deps) {
         return { code: 0, lines: [JSON.stringify({ ok: true, swipe })] };
     return { code: 0, lines: swipeLines(swipe, "show") };
 }
+const writtenAt = (ms) => `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 export async function swipeListFlow(opts, deps) {
     const res = await deps.get(SWIPES_PATH);
     if (!res.ok)
@@ -930,8 +934,10 @@ export async function swipeListFlow(opts, deps) {
             const ad = row.source?.sourceUrl ?? row.source?.fileName ?? "an ad";
             return [
                 row._id,
+                ...(typeof row.createdAt === "number" ? [`written ${writtenAt(row.createdAt)}`] : []),
                 `${mode.label}${step ? `, ${step.step} ${step.name}` : ""}`,
                 ad,
+                ...(row.product !== undefined ? [row.product ? `for ${row.product.name}` : "for a product since deleted"] : []),
                 ...(row.workflowRunId ? [`run ${row.workflowRunId}`] : []),
                 ...(row.outcome?.kind === "refused"
                     ? [`refused, ${typeof row.costUsd === "number" ? `cost ${usd(row.costUsd)}` : "cost unknown"}, nothing started`]
@@ -940,17 +946,42 @@ export async function swipeListFlow(opts, deps) {
         }),
     };
 }
-export async function swipeStartFlow(swipeId, ask, opts, deps) {
+export const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
+export function alreadyStartedOf(res) {
+    if (res.ok || res.status !== 409 || !isRecord(res.data) || !isRecord(res.data.error))
+        return null;
+    const { code, runId, url } = res.data.error;
+    if (code !== SWIPE_ALREADY_STARTED_CODE || typeof runId !== "string" || !runId)
+        return null;
+    return { runId, url: typeof url === "string" ? url : "" };
+}
+export async function swipeStartFlow(swipeId, ask, opts, deps, again = false) {
     const { json } = opts;
-    if (!opts.yes)
-        return needsYesResult(ask.oneShot ? "start-one-shot" : "start", json);
+    if (!opts.yes) {
+        return needsYesResult(ask.oneShot ? "start-one-shot" : "start", json, again ? ["With --again: a second video from this swipe, even if it already has one. It is paid on its own."] : []);
+    }
     const res = await deps.post(SWIPE_RUNS_PATH, {
         swipeId,
         ...(ask.style ? { style: ask.style } : {}),
         ...(ask.title ? { title: ask.title } : {}),
         ...(ask.music ? { music: true } : {}),
         ...(ask.oneShot ? {} : { reviewStoryboard: true }),
+        ...(again ? { again: true } : {}),
     });
+    const held = alreadyStartedOf(res);
+    if (held) {
+        const error = `Swipe ${swipeId} already has a video, so nothing was started: run ${held.runId}.`;
+        if (json)
+            return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, alreadyStarted: held })] };
+        return {
+            code: 1,
+            lines: [
+                error,
+                held.url ? `Watch it: ${held.url}` : `Check it: exodus video status ${held.runId}`,
+                `A second video from this swipe is paid on its own. Only on the member's yes to a second video: exodus video swipe start ${swipeId} --again --yes`,
+            ],
+        };
+    }
     if (!res.ok)
         return swipeError(res, json);
     const customer = customerAnswer(res.data);
@@ -1379,6 +1410,14 @@ export const nodeSheetFiles = {
     realPath(file) {
         return fs.realpathSync(file);
     },
+    listDir(dir) {
+        try {
+            return fs.readdirSync(dir);
+        }
+        catch {
+            return [];
+        }
+    },
     onStop(cleanup) {
         const handlers = ["SIGINT", "SIGTERM"].map((signal) => {
             const handler = () => {
@@ -1397,6 +1436,7 @@ export const nodeSheetFiles = {
 const sheetFilesOf = (deps) => deps.sheetFiles ?? nodeSheetFiles;
 export const sheetLockPath = (sheetFile) => `${sheetStatePath(sheetFile)}.lock`;
 const LOCK_SETTLE_MS = 250;
+export const sheetTakeoverPath = (sheetFile) => `${sheetLockPath(sheetFile)}.takeover`;
 async function takeSheetLock(sheetFile, deps) {
     const files = sheetFilesOf(deps);
     const lockFile = sheetLockPath(sheetFile);
@@ -1438,12 +1478,32 @@ async function takeSheetLock(sheetFile, deps) {
         const stale = holder.pid !== null && holder.host === files.host && !files.isAlive(holder.pid);
         if (!stale)
             return { problem: busy(holder.words) };
-        const still = holderOf();
-        const same = holder.token !== null ? still.token === holder.token : still.token === null && still.pid === holder.pid && still.at === holder.at;
-        if (!same)
-            return { problem: busy(still.words) };
-        files.remove(lockFile);
-        made = tryCreate();
+        const takeoverFile = sheetTakeoverPath(sheetFile);
+        let takeover;
+        try {
+            takeover = files.createNew(takeoverFile, text);
+        }
+        catch (err) {
+            takeover = err instanceof Error ? err : new Error(String(err));
+        }
+        if (takeover !== true) {
+            return {
+                problem: takeover === false
+                    ? `Another run of this sheet is taking over the lock ${lockFile} left by a run that is no longer going, so this one sent nothing. If no run of this sheet is going, deleting ${takeoverFile} and ${lockFile} is safe; then run the command again.`
+                    : `The lock ${lockFile} could not be taken over (${takeover.message}). Nothing was sent.`,
+            };
+        }
+        try {
+            const still = holderOf();
+            const same = holder.token !== null ? still.token === holder.token : still.token === null && still.pid === holder.pid && still.at === holder.at;
+            if (!same)
+                return { problem: busy(still.words) };
+            files.remove(lockFile);
+            made = tryCreate();
+        }
+        finally {
+            files.remove(takeoverFile);
+        }
         note = `A lock left by a run that is no longer going (${holder.words}) was taken.`;
     }
     if (made === false)
@@ -1520,8 +1580,10 @@ function stateFromJson(raw) {
                     return `${whereRun} has a field of the wrong kind`;
                 }
                 const rp = run.pending;
-                if (rp !== null && !(isRecord(rp) && at(rp.at) && typeof rp.swipeId === "string"))
+                if (rp !== null &&
+                    !(isRecord(rp) && at(rp.at) && typeof rp.swipeId === "string" && (rp.serverAt === undefined || (typeof rp.serverAt === "number" && Number.isFinite(rp.serverAt))))) {
                     return `${whereRun} has a "pending" this CLI did not write`;
+                }
                 runs[index] = { ...run };
             }
             writes[persona] = { ...write, runs };
@@ -1537,8 +1599,9 @@ function readSheetState(sheetFile, deps) {
         text = deps.readFile(file);
     }
     catch (err) {
-        if (err.code === "ENOENT")
-            return { state: { version: 3, sheet: path.basename(sheetFile), sources: dict() } };
+        if (err.code === "ENOENT") {
+            return { state: { version: 3, sheet: path.basename(sheetFile), sources: dict() }, missing: true };
+        }
         return {
             problem: `The state file ${file} is there but can't be opened (${err instanceof Error ? err.message : String(err)}). It keeps what this sheet already bought, so nothing was sent. Fix its permissions, then run the command again.`,
         };
@@ -1551,7 +1614,7 @@ function readSheetState(sheetFile, deps) {
         checked = "it is not valid JSON";
     }
     if (typeof checked !== "string")
-        return { state: checked };
+        return { state: checked, missing: false };
     return {
         problem: `The state file ${file} can't be read: ${checked}. Fix it, or move it away; without it the next run buys every step again, even the ones already bought.`,
     };
@@ -2014,12 +2077,19 @@ async function readSwipe(swipeId, deps) {
     const res = await deps.get(`${SWIPES_PATH}?id=${encodeURIComponent(swipeId)}`);
     if (!res.ok)
         return { problem: swipeErrorLine(res) };
-    return isRecord(res.data) && isRecord(res.data.swipe) ? { swipe: res.data.swipe } : { problem: "Its answer could not be read." };
+    if (!isRecord(res.data) || !isRecord(res.data.swipe))
+        return { problem: "Its answer could not be read." };
+    const now = res.data.now;
+    return { swipe: res.data.swipe, serverNow: typeof now === "number" && Number.isFinite(now) ? now : null };
+}
+function startAge(pending, serverNow, deps) {
+    const local = deps.now() - Date.parse(pending.at);
+    return pending.serverAt !== undefined && serverNow !== null ? Math.min(local, serverNow - pending.serverAt) : local;
 }
 async function settlePendingStart(video, run, outcome, ctx) {
     const pending = run.pending;
-    const ago = minutesAgo(ctx.deps.now() - Date.parse(pending.at));
     const read = await readSwipe(pending.swipeId, ctx.deps);
+    const ago = minutesAgo(startAge(pending, "problem" in read ? null : read.serverNow, ctx.deps));
     if ("problem" in read) {
         stopRun(video, run, outcome, `A start was sent ${ago} ago and its answer was not seen, and swipe ${pending.swipeId} could not be read to check it: ${read.problem} Nothing was sent again.`, ctx);
         return "stopped";
@@ -2036,7 +2106,7 @@ async function settlePendingStart(video, run, outcome, ctx) {
         await sayIfFailedAtStart(video, runId, pending.swipeId, ctx);
         return "taken";
     }
-    if (ctx.deps.now() - Date.parse(pending.at) < START_PENDING_MS) {
+    if (startAge(pending, read.serverNow, ctx.deps) < START_PENDING_MS) {
         stopRun(video, run, outcome, `A start was sent ${ago} ago and its answer was not seen. It may still be starting, so nothing was sent again. Run the sheet again in a few minutes.`, ctx);
         return "stopped";
     }
@@ -2062,10 +2132,22 @@ async function startVideo(video, run, swipeId, outcome, ctx) {
         await sayIfFailedAtStart(video, existing, swipeId, ctx);
         return;
     }
-    run.pending = { at: stamp(ctx.deps), swipeId };
+    run.pending = { at: stamp(ctx.deps), swipeId, ...(read.serverNow !== null ? { serverAt: read.serverNow } : {}) };
     run.updatedAt = stamp(ctx.deps);
     ctx.save();
     const started = answerOf(await swipeStartFlow(swipeId, ctx.sheet.start, { json: true, yes: true, wait: false }, ctx.deps));
+    const held = isRecord(started.alreadyStarted) && typeof started.alreadyStarted.runId === "string" ? started.alreadyStarted : null;
+    if (held) {
+        const heldRunId = held.runId;
+        const holder = heldIds(ctx.state).runs.get(heldRunId);
+        if (holder && holder !== run) {
+            stopRun(video, run, outcome, `Swipe ${swipeId} already has run ${heldRunId}, which is another video's in this sheet. One swipe is one video, so nothing was sent again.`, ctx);
+            return;
+        }
+        takeRun(video, run, outcome, heldRunId, typeof held.url === "string" && held.url ? held.url : null, ctx);
+        ctx.say(`  Video ${video.n}: swipe ${swipeId} already has run ${heldRunId}; it is this video's run. Nothing more was started. Check it: exodus video status ${heldRunId}`);
+        return;
+    }
     if (started.ok !== true || typeof started.runId !== "string") {
         if (postRefused(started))
             run.pending = null;
@@ -2314,7 +2396,7 @@ export async function swipeSheetFlow(given, opts, deps) {
             return failed(stateRead.problem, json);
         if (opts.status)
             return sheetStatusFlow(sheet, sheetFile, videos, personas, stateRead.state, opts, deps);
-        return sheetPaidFlow(sheet, sheetFile, videos, personas, stateRead.state, null, opts, deps);
+        return sheetPaidFlow(sheet, sheetFile, videos, personas, stateRead.state, null, opts, deps, stateRead.missing);
     }
     const lock = await takeSheetLock(sheetFile, deps);
     if ("problem" in lock)
@@ -2353,8 +2435,70 @@ async function startChecks(sheet, deps) {
     }
     return null;
 }
+async function lostProgressLines(sheet, sheetFile, state, missing, planned, deps) {
+    const stateName = path.basename(sheetStatePath(sheetFile));
+    const lines = [];
+    if (missing) {
+        const dir = path.dirname(sheetFile);
+        const leftBehind = sheetFilesOf(deps)
+            .listDir(dir)
+            .filter((name) => name.endsWith(".state.json") && name !== stateName)
+            .map((name) => ({ name, sheetName: name.slice(0, -".state.json".length) }))
+            .filter(({ sheetName }) => sheetName && deps.statFile(path.join(dir, sheetName)) === null);
+        for (const { name, sheetName } of leftBehind) {
+            lines.push(`A saved progress file, ${name}, is beside this sheet for a sheet named ${sheetName} that is no longer there. If this sheet was renamed from ${sheetName}, rename ${name} to ${stateName} before the yes; without it the yes buys every step below again.`);
+        }
+        const res = await deps.get(SWIPES_PATH);
+        const rows = res.ok && isRecord(res.data) && Array.isArray(res.data.swipes) ? res.data.swipes : [];
+        const ours = rows.filter((row) => {
+            if (row.outcome?.kind === "refused")
+                return false;
+            return planned.some(({ item, steps }) => {
+                const breakdownId = steps.find((step) => step.step === "breakdown")?.have;
+                if (breakdownId && row.breakdownId === breakdownId)
+                    return true;
+                if (item.source.kind === "url")
+                    return row.source?.sourceUrl === item.source.url;
+                if (item.source.kind === "file")
+                    return row.source?.fileName === path.basename(item.source.file);
+                return row.source?.sourceAdId === item.source.swipeAdId;
+            });
+        });
+        if (ours.length > 0) {
+            const named = ours.map((row) => (row.workflowRunId ? `${row._id} (video run ${row.workflowRunId})` : `${row._id} (no video yet)`)).join(", ");
+            lines.push(`No saved progress was found beside this sheet (${stateName}), but this brand already has swipes of these ads: ${named}. The yes writes and starts them again, which is paid. If this sheet was run before from another folder or under another name, put its saved progress here as ${stateName} first.`);
+        }
+        return lines;
+    }
+    const inSheet = new Set(sheet.personas.length > 0 ? sheet.personas.map((persona) => persona.name) : [""]);
+    for (const item of sheet.sources) {
+        const src = state.sources[item.key];
+        if (!src)
+            continue;
+        for (const [key, write] of Object.entries(src.writes)) {
+            if (inSheet.has(key))
+                continue;
+            const runs = Object.values(write.runs);
+            const runIds = runs.map((run) => run.runId).filter((id) => id !== null);
+            const unseen = runs.map((run) => run.pending?.swipeId).filter((id) => id !== undefined);
+            if (!write.swipeId && !write.pending && runIds.length === 0 && unseen.length === 0)
+                continue;
+            const who = key ? `persona "${key}"` : "the write with no persona";
+            const had = [
+                ...(write.swipeId ? [`swipe ${write.swipeId}`] : []),
+                ...runIds.map((id) => `video run ${id}`),
+            ];
+            lines.push([
+                `The saved progress for ${item.key} has ${who}, which is no longer in the sheet${had.length > 0 ? ` (${had.join(", ")})` : ""}. If it was renamed, the yes writes and starts it again under its new name, which is paid.`,
+                ...unseen.map((id) => `It also has a start for it whose answer was never seen: check exodus video swipe show ${id} before the yes.`),
+                ...(write.pending ? ["It also has a write for it whose end was never seen: check exodus video swipe list before the yes."] : []),
+            ].join(" "));
+        }
+    }
+    return lines;
+}
 const shellWord = (word) => (/^[\w./@%+=:,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`);
-async function sheetPaidFlow(sheet, sheetFile, videos, personas, state, lockNote, opts, deps) {
+async function sheetPaidFlow(sheet, sheetFile, videos, personas, state, lockNote, opts, deps, stateMissing = false) {
     const { json } = opts;
     const stateFile = sheetStatePath(sheetFile);
     for (const [index, item] of sheet.sources.entries()) {
@@ -2389,6 +2533,7 @@ async function sheetPaidFlow(sheet, sheetFile, videos, personas, state, lockNote
         }
         const needsYes = planned.some(({ steps }) => steps.some((step) => step.buy));
         const warning = videos.length > SHEET_VIDEO_WARNING ? [`That is ${videos.length} videos, more than ${SHEET_VIDEO_WARNING}. Check the count with the member before the yes.`] : [];
+        const progressLost = await lostProgressLines(sheet, sheetFile, state, stateMissing, planned, deps);
         if (json) {
             return {
                 code: 0,
@@ -2402,6 +2547,7 @@ async function sheetPaidFlow(sheet, sheetFile, videos, personas, state, lockNote
                         count,
                         videos: videosJson,
                         ...(warning.length > 0 ? { warning: warning[0] } : {}),
+                        ...(progressLost.length > 0 ? { progressLost } : {}),
                         notUsed,
                         moved: sheet.moved,
                         sources: planned.map(({ item, steps }) => ({ source: item.given, steps })),
@@ -2415,6 +2561,7 @@ async function sheetPaidFlow(sheet, sheetFile, videos, personas, state, lockNote
             lines: [
                 ...head,
                 ...warning,
+                ...progressLost,
                 "",
                 ...planned.flatMap(({ item, steps }, i) => [`Ad ${i + 1}: ${item.key}`, ...plannedLines(steps)]),
                 "",
@@ -2556,7 +2703,7 @@ export async function runSwipePlan(plan, deps, onProgressLine) {
         case "find":
             return swipeFindFlow(plan.ask, opts, deps);
         case "start":
-            return swipeStartFlow(plan.swipeId, plan.ask, opts, deps);
+            return swipeStartFlow(plan.swipeId, plan.ask, opts, deps, plan.again);
         case "run":
             return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
     }

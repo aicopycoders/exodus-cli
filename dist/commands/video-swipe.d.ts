@@ -1,4 +1,5 @@
 import type { FlagOccurrence } from "../lib/args.js";
+import type { ApiResponse } from "../lib/client.js";
 import { type FlowResult, type VideoDeps } from "./video.js";
 export declare const SWIPE_BREAKDOWNS_PATH = "/api/v2/video/breakdowns";
 export declare const SWIPE_UPLOAD_URL_PATH = "/api/v2/video/breakdowns/upload-url";
@@ -106,6 +107,7 @@ export interface SwipeView {
     checksFound?: string[];
     workflowRunId: string | null;
     costUsd: number | null;
+    runHoldsStart?: boolean;
 }
 export interface SwipeListRow {
     _id: string;
@@ -120,11 +122,16 @@ export interface SwipeListRow {
         sourceKind: string;
         sourceUrl?: string;
         fileName?: string;
+        sourceAdId?: string;
     } | null;
     outcome?: {
         kind: "written" | "refused";
     };
     costUsd?: number | null;
+    product?: {
+        id: string;
+        name: string;
+    } | null;
 }
 type ServerMode = "whole" | "hook" | "their-format" | "new-look";
 export declare const SWIPE_MODES: ReadonlyArray<{
@@ -215,6 +222,7 @@ export type SwipePlan = {
     kind: "start";
     swipeId: string;
     ask: StartAsk;
+    again: boolean;
     opts: SwipeOpts;
 } | {
     kind: "run";
@@ -264,7 +272,7 @@ export declare function fullLines(data: Record<string, unknown>): string[];
 export declare function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeProductsFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const FIND_READ = 200;
-export declare const FIND_PAID_FLAGS: readonly ["yes", "wait", "file", "url", "ad"];
+export declare const FIND_PAID_FLAGS: readonly ["yes", "wait", "file", "url", "ad", "again"];
 export declare const FIND_OTHER_FLAGS: readonly ["one-shot", "music", "mode", "closeness", "product", "look", "script", "style", "title", "sheet", "full", "status", "persona", "retry-refused"];
 export declare const FIND_KIND_LINE = "The kind of an ad is known only after it is read.";
 export declare const FIND_EMPTY_LIBRARY = "The swipe library has no ads yet for this brand.";
@@ -306,7 +314,12 @@ export declare function swipeFindFlow(ask: FindAsk, opts: SwipeOpts, deps: Video
 export declare function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
-export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
+export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
+    runId: string;
+    url: string;
+} | null;
+export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps, again?: boolean): Promise<FlowResult>;
 export declare const SHEET_FIELDS: readonly ["sources", "product", "personas", "mechanism", "guidance", "mode", "closeness", "look", "script", "characters", "finish", "oneShot", "style", "title", "music"];
 export declare const SHEET_VIDEO_WARNING = 6;
 export interface SheetSource {
@@ -374,6 +387,7 @@ export interface WritePending {
 export interface StartPending {
     at: string;
     swipeId: string;
+    serverAt?: number;
 }
 export interface SheetRunState {
     runId: string | null;
@@ -425,6 +439,7 @@ export interface SheetFiles {
     host: string;
     isAlive(pid: number): boolean;
     realPath(file: string): string;
+    listDir(dir: string): string[];
     onStop(cleanup: () => void): () => void;
 }
 export type SheetDeps = VideoDeps & {
@@ -432,6 +447,7 @@ export type SheetDeps = VideoDeps & {
 };
 export declare const nodeSheetFiles: SheetFiles;
 export declare const sheetLockPath: (sheetFile: string) => string;
+export declare const sheetTakeoverPath: (sheetFile: string) => string;
 export type SheetVideoState = "not started" | "breakdown" | "template" | "written" | "refused" | "running" | "storyboard" | "waiting" | "done" | "failed" | "unread";
 export interface SheetFlowOptions extends SwipeRunOptions {
     retryRefused: boolean;

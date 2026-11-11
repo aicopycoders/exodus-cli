@@ -97,6 +97,7 @@ export interface SwipeView {
         look?: string;
         memberScript?: string;
     };
+    kind?: string;
     outcome: {
         kind: "written";
         draft: SwipeDraft;
@@ -171,6 +172,7 @@ export interface WriteAsk {
     look?: string;
     scriptFile?: string;
     scriptText?: string;
+    kind?: string;
 }
 export interface StartAsk {
     style?: string;
@@ -273,7 +275,7 @@ export declare function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOpt
 export declare function swipeProductsFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const FIND_READ = 200;
 export declare const FIND_PAID_FLAGS: readonly ["yes", "wait", "file", "url", "ad", "again"];
-export declare const FIND_OTHER_FLAGS: readonly ["one-shot", "music", "mode", "closeness", "product", "look", "script", "style", "title", "sheet", "full", "status", "persona", "retry-refused"];
+export declare const FIND_OTHER_FLAGS: readonly ["one-shot", "music", "mode", "closeness", "product", "look", "script", "style", "title", "sheet", "full", "status", "persona", "retry-refused", "kind"];
 export declare const FIND_KIND_LINE = "The kind of an ad is known only after it is read.";
 export declare const FIND_EMPTY_LIBRARY = "The swipe library has no ads yet for this brand.";
 export interface FindAsk {
@@ -320,7 +322,7 @@ export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     url: string;
 } | null;
 export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps, again?: boolean): Promise<FlowResult>;
-export declare const SHEET_FIELDS: readonly ["sources", "product", "personas", "mechanism", "guidance", "mode", "closeness", "look", "script", "characters", "finish", "oneShot", "style", "title", "music"];
+export declare const SHEET_FIELDS: readonly ["sources", "product", "personas", "mechanism", "guidance", "mode", "closeness", "look", "script", "kind", "characters", "finish", "oneShot", "style", "title", "music"];
 export declare const SHEET_VIDEO_WARNING = 6;
 export interface SheetSource {
     key: string;
@@ -359,6 +361,7 @@ export interface SwipeSheet {
     start: StartAsk;
     notUsed: string[];
     moved: string[];
+    kind: string | null;
 }
 export interface SheetVideo {
     n: number;
@@ -372,6 +375,7 @@ export interface WrittenWith {
     closeness: number | null;
     look: string | null;
     scriptSha256: string | null;
+    kind?: string;
 }
 export type SheetStep = "breakdown" | "template" | "write" | "start";
 export interface SourcePending {

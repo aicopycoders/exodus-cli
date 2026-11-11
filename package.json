@@ -1,6 +1,6 @@
 {
   "name": "@aicopycoders/exodus",
-  "version": "2026.11.1100-beta.9",
+  "version": "2026.11.1100-beta.10",
   "description": "CLI + Claude Code skills for the Copycoders Exodus ad pipeline",
   "repository": {
     "type": "git",

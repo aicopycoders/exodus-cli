@@ -603,10 +603,12 @@ the member.
 
 The rows:
 
-- **The kind of ad.** The swipe writes the kind the template read and no
-  other. When the member asks for another kind ("make it UGC instead"),
-  leave this path for "From one sentence to a film", with the ad's words
-  from `status --full`.
+- **The kind of ad.** The swipe writes the kind the template read. When the
+  member asks for another kind ("make it UGC instead"), name it with
+  `--kind <key>` on the write or `"kind"` in the sheet. A kind this ad can't
+  be made as is refused before the write is paid, with the kinds it can be
+  made as: offer those, or leave this path for "From one sentence to a
+  film", with the ad's words from `status --full`.
 - **Persona.** Offer the three saved personas that fit the ad best, each with
   a short reason, then "show all <N>" (every persona not marked
   `[archived]`). Several may be picked: one video for each.
@@ -941,7 +943,7 @@ exodus video swipe status <breakdownId> [--wait] [--full] where the breakdown st
                                                           --full adds what it read: shots, script, cast
 exodus video swipe template <breakdownId> [--yes]         the kind of ad and look it matched (member's key)
 exodus video swipe products                               the brand's products and their ids
-exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closeness <step>] [--look <slug>] [--script <file>] [--yes]
+exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closeness <step>] [--look <slug>] [--script <file>] [--kind <kind>] [--yes]
                                                           the brand's version (member's key); waits for it
 exodus video swipe show <swipeId>                         one swipe again
 exodus video swipe list                                   the brand's newest swipes, each with when it was written and its product;

@@ -92,6 +92,7 @@ const SHEET_FLAGS = [
     ["script", 'set "script" in the sheet, or a persona\'s "script".'],
     ["style", 'set "style" in the sheet.'],
     ["title", 'set "title" in the sheet.'],
+    ["kind", 'set "kind" in the sheet.'],
     ["file", 'list the ad in the sheet\'s "sources".'],
     ["url", 'list the ad in the sheet\'s "sources".'],
     ["ad", 'list the ad in the sheet\'s "sources".'],
@@ -131,6 +132,11 @@ export function planSwipeCommand(rest, occurrences) {
     const opts = { json: on("json"), yes: on("yes"), wait: on("wait") };
     const usage = (line) => ({ kind: "usage", line });
     const [verb, id] = rest;
+    if (last("kind") !== undefined) {
+        const named = rest.find((word) => VERBS.includes(word));
+        if (named !== "write")
+            return usage(kindElsewhere(named));
+    }
     if (verb === undefined) {
         const given = ["file", "url", "ad"].filter((name) => value(name) !== undefined);
         if (given.length !== 1) {
@@ -216,7 +222,24 @@ export function planSwipeCommand(rest, occurrences) {
     const write = writeChoicesOf({ mode: value("mode"), closeness: value("closeness"), look: value("look"), script: value("script") }, CLI_WORDS.write);
     if ("problem" in write)
         return usage(write.problem);
-    return { kind: "write", breakdownId: id, ask: { productId: product.trim(), ...write.ask }, opts };
+    const kind = value("kind");
+    if (kind === null || (kind !== undefined && !kind.trim()))
+        return usage(`video swipe write --kind needs the key of a kind of ad. ${KIND_CHECKED}`);
+    return { kind: "write", breakdownId: id, ask: { productId: product.trim(), ...write.ask, ...(kind !== undefined ? { kind: kind.trim() } : {}) }, opts };
+}
+const KIND_CHECKED = "A kind this ad can't be made as is refused, with the kinds it can be made as, before the write is paid.";
+const templateKindLine = (template, kind) => kind ? `Kind of ad: ${template.kind.label}, the template's pick; the write uses ${kind}, the sheet's kind.` : `Kind of ad: ${template.kind.label}.`;
+function kindElsewhere(verb) {
+    const onWrite = "the kind of ad is named when the swipe is written, with exodus video swipe write --kind <kind>.";
+    if (verb === "run")
+        return `video swipe run takes its choices from the sheet, not from --kind: ${SHEET_FLAGS.find(([flag]) => flag === "kind")[1]}`;
+    if (verb === "start")
+        return "video swipe start takes no --kind. A swipe starts on the kind it was written for; write it again with --kind.";
+    if (verb === "find")
+        return "video swipe find takes no --kind: it only lists the swipe library. Its flags are --brand, --limit and --json.";
+    if (verb === undefined)
+        return `video swipe --file, --url and --ad take no --kind: ${onWrite}`;
+    return `video swipe ${verb} takes no --kind: ${onWrite}`;
 }
 const CLI_WORDS = {
     write: { who: "video swipe write", flag: (name) => `--${name}`, set: (name, value) => `--${name} ${value}` },
@@ -697,6 +720,7 @@ export const FIND_OTHER_FLAGS = [
     "status",
     "persona",
     "retry-refused",
+    "kind",
 ];
 const TEXT_MAX = 400;
 export const FIND_KIND_LINE = "The kind of an ad is known only after it is read.";
@@ -804,7 +828,19 @@ function choiceLines(ask) {
     }
     if (ask.look)
         lines.push(`New look: ${ask.look}`);
+    if (ask.kind)
+        lines.push(kindLine(ask.kind));
     return lines;
+}
+const kindLine = (kind) => `Kind of ad: ${kind}, in place of the one the template picked.`;
+function kindDropped(swipe, asked) {
+    if (asked === undefined)
+        return null;
+    const written = swipe.outcome.kind === "written" ? swipe.outcome.draft.conceit : null;
+    if (swipe.kind === asked && (written === null || written === asked))
+        return null;
+    const how = written === asked ? `as ${asked}, but it did not keep the kind` : `${written ? `as ${written}` : "for the template's kind"}, not ${asked}`;
+    return `This server does not take a kind yet: swipe ${swipe._id} was written ${how}. Nothing was started.`;
 }
 function requestOf(ask, memberScript) {
     switch (ask.mode) {
@@ -868,7 +904,12 @@ export async function swipeWriteFlow(breakdownId, ask, opts, deps) {
         return failed(`--script ${ask.scriptFile} is empty.`, json);
     if (!opts.yes)
         return needsYesResult("write", json, choiceLines(ask));
-    const res = await deps.post(SWIPES_PATH, { breakdownId, productId: ask.productId, request: requestOf(ask, memberScript) });
+    const res = await deps.post(SWIPES_PATH, {
+        breakdownId,
+        productId: ask.productId,
+        request: requestOf(ask, memberScript),
+        ...(ask.kind ? { kind: ask.kind } : {}),
+    });
     if (!res.ok)
         return swipeError(res, json);
     const job = isRecord(res.data) ? res.data.job : undefined;
@@ -899,6 +940,9 @@ export async function swipeWriteFlow(breakdownId, ask, opts, deps) {
     if ("error" in result)
         return failed(`The write stopped: ${result.error} Nothing was started.`, json);
     const { swipe } = result;
+    const dropped = kindDropped(swipe, ask.kind);
+    if (dropped)
+        return failed(dropped, json, { kindDropped: true, swipeId: swipe._id });
     const written = swipe.outcome.kind === "written";
     if (json) {
         return { code: written ? 0 : 1, lines: [JSON.stringify(written ? { ok: true, swipe } : { ok: false, refused: true, swipe })] };
@@ -1024,6 +1068,7 @@ export const SHEET_FIELDS = [
     "closeness",
     "look",
     "script",
+    "kind",
     "characters",
     "finish",
     "oneShot",
@@ -1137,6 +1182,10 @@ export function readSwipeSheet(sheetFile, deps) {
         return { problem: 'In the sheet, "product" must be a product id. exodus video swipe products lists them.' };
     }
     const productId = typeof raw.product === "string" && raw.product.trim() ? raw.product.trim() : null;
+    if (raw.kind !== undefined && raw.kind !== null && (typeof raw.kind !== "string" || !raw.kind.trim())) {
+        return { problem: `In the sheet, "kind" must be the key of a kind of ad, or null. ${KIND_CHECKED}` };
+    }
+    const named = typeof raw.kind === "string" ? { kind: raw.kind.trim() } : {};
     const given = (from, name) => {
         const value = from[name];
         if (value === undefined || value === null)
@@ -1168,10 +1217,10 @@ export function readSwipeSheet(sheetFile, deps) {
             if (typeof entry.script !== "string" || !entry.script.trim())
                 return { problem: `Persona ${name} in the sheet: "script" needs a file.` };
             script = entry.script.trim();
-            const own = sheetWriteOf(sheetFile, { mode: "their-format", closeness: undefined, look: undefined, script }, (named) => `persona ${name}'s script ${named}`, deps);
+            const own = sheetWriteOf(sheetFile, { mode: "their-format", closeness: undefined, look: undefined, script }, (file) => `persona ${name}'s script ${file}`, deps);
             if ("problem" in own)
                 return own;
-            write = own;
+            write = { ...own, ask: { ...own.ask, ...named } };
         }
         personas.push({ name, script, write });
     }
@@ -1180,10 +1229,10 @@ export function readSwipeSheet(sheetFile, deps) {
     let write = null;
     let unusedChoices = [];
     if (personas.length === 0 || personas.some((persona) => persona.write === null)) {
-        const checked = sheetWriteOf(sheetFile, top, (named) => `the sheet's script ${named}`, deps);
+        const checked = sheetWriteOf(sheetFile, top, (file) => `the sheet's script ${file}`, deps);
         if ("problem" in checked)
             return checked;
-        write = checked;
+        write = { ...checked, ask: { ...checked.ask, ...named } };
     }
     else {
         const theirFormat = typeof top.mode === "string" && parseSwipeMode(top.mode) === "their-format";
@@ -1269,6 +1318,7 @@ export function readSwipeSheet(sheetFile, deps) {
             start: start.ask,
             notUsed,
             moved: topMusic !== undefined ? ["music"] : [],
+            kind: typeof raw.kind === "string" ? raw.kind.trim() : null,
         },
     };
 }
@@ -1314,6 +1364,7 @@ function writtenWithOf(write, productId) {
         closeness: write.ask.mode === "their-format" ? null : write.ask.closeness,
         look: write.ask.look ?? null,
         scriptSha256: write.scriptSha256,
+        ...(write.ask.kind ? { kind: write.ask.kind } : {}),
     };
 }
 function changesSince(before, now) {
@@ -1328,6 +1379,8 @@ function changesSince(before, now) {
         changes.push(`look ${before.look ?? "none"}, now ${now.look ?? "none"}`);
     if (before.scriptSha256 !== now.scriptSha256)
         changes.push("the script");
+    if ((before.kind ?? null) !== (now.kind ?? null))
+        changes.push(`kind ${before.kind ?? "the template's"}, now ${now.kind ?? "the template's"}`);
     return changes;
 }
 function notUsedOf(sheet, personas) {
@@ -1368,6 +1421,7 @@ function sheetHeadLines(sheet, sheetFile, personas, product) {
         ...personas
             .filter((persona) => persona !== null && persona.script !== null)
             .map((persona) => `Persona ${persona.name}: ${modeOf("their-format").label}, from ${persona.script}.`),
+        ...(!usesSheetWrite && sheet.kind ? [kindLine(sheet.kind)] : []),
         sheet.start.oneShot
             ? "One shot: the whole video with no stop. It stops only when a check finds a problem."
             : "It stops at each storyboard for the member's yes (oneShot is false or left out).",
@@ -1561,7 +1615,8 @@ function stateFromJson(raw) {
                 ["whole", "hook", "their-format", "new-look"].includes(ww.mode) &&
                 (ww.closeness === null || typeof ww.closeness === "number") &&
                 text(ww.look) &&
-                text(ww.scriptSha256);
+                text(ww.scriptSha256) &&
+                (ww.kind === undefined || typeof ww.kind === "string");
             if (write.writtenWith !== null && !choices(write.writtenWith))
                 return `${whereWrite} has a "writtenWith" this CLI did not write`;
             if (write.swipeId !== null && write.writtenWith === null)
@@ -1913,7 +1968,7 @@ async function runSheetSource(item, videos, ctx) {
                 src.pending = null;
                 src.lastError = null;
                 touch(src);
-                say(`  Kind of ad: ${template.kind.label}. Look: ${template.look.label}. The template was made before, so it cost nothing.`);
+                say(`  ${templateKindLine(template, sheet.kind)} Look: ${template.look.label}. The template was made before, so it cost nothing.`);
             }
             else {
                 const at = stamp(deps);
@@ -1937,7 +1992,7 @@ async function runSheetSource(item, videos, ctx) {
                 src.pending = null;
                 src.lastError = null;
                 touch(src);
-                say(`  Kind of ad: ${view.kind.label}. Look: ${view.look.label}.`);
+                say(`  ${templateKindLine(view, sheet.kind)} Look: ${view.look.label}.`);
             }
         }
     }
@@ -2029,7 +2084,11 @@ async function runSheetSource(item, videos, ctx) {
                 }
                 write.pending = null;
                 write.swipeId = swipe._id;
-                write.writtenWith = truth;
+                const recorded = { ...truth };
+                delete recorded.kind;
+                if (typeof swipe.kind === "string")
+                    recorded.kind = swipe.kind;
+                write.writtenWith = recorded;
                 if (swipe.outcome.kind === "refused") {
                     write.refused = swipe.outcome.why;
                     for (const video of open)
@@ -2167,6 +2226,7 @@ function writtenWithOfSwipe(swipe) {
         closeness: mode === "their-format" ? null : (swipe.request.closeness ?? null),
         look: swipe.request.look ?? null,
         scriptSha256: mode === "their-format" && typeof script === "string" ? sha256Of(script) : null,
+        ...(typeof swipe.kind === "string" ? { kind: swipe.kind } : {}),
     };
 }
 async function findPendingWrite(pending, breakdownId, want, ctx, who, entry) {
@@ -2182,6 +2242,10 @@ async function findPendingWrite(pending, breakdownId, want, ctx, who, entry) {
         }
         if (answer.status === "done" && isRecord(answer.swipe)) {
             const swipe = answer.swipe;
+            const sameKind = (want.kind ?? null) === (pending.asked?.kind ?? null);
+            const dropped = sameKind ? kindDropped(swipe, pending.asked?.kind) : null;
+            if (dropped)
+                return { stop: dropped };
             const truth = writtenWithOfSwipe(swipe);
             const scriptKnown = truth.mode !== "their-format" || truth.scriptSha256 !== null;
             const changes = changesSince(truth, want);
@@ -2214,7 +2278,7 @@ async function findPendingWrite(pending, breakdownId, want, ctx, who, entry) {
             const read = await readSwipe(row._id, deps);
             if ("problem" in read)
                 return { stop: `Swipe ${row._id} could not be read to check it is the write sent before: ${read.problem} Nothing was sent again.` };
-            if (read.swipe.productId === want.productId && (read.swipe.request.look ?? null) === want.look) {
+            if (read.swipe.productId === want.productId && (read.swipe.request.look ?? null) === want.look && (read.swipe.kind ?? null) === (want.kind ?? null)) {
                 return { taken: { swipe: read.swipe, writtenWith: writtenWithOfSwipe(read.swipe) } };
             }
         }
@@ -2566,7 +2630,13 @@ async function sheetPaidFlow(sheet, sheetFile, videos, personas, state, lockNote
                 ...planned.flatMap(({ item, steps }, i) => [`Ad ${i + 1}: ${item.key}`, ...plannedLines(steps)]),
                 "",
                 ...(needsYes
-                    ? ["The CLI prints no price for these steps.", "Nothing that costs money was sent. On the member's yes, run the same command with --yes."]
+                    ? [
+                        ...(sheet.kind
+                            ? [`The sheet's kind, ${sheet.kind}, is checked against each ad at its write, after that ad's breakdown and template are paid.`]
+                            : []),
+                        "The CLI prints no price for these steps.",
+                        "Nothing that costs money was sent. On the member's yes, run the same command with --yes.",
+                    ]
                     : ["Every step is done already. Nothing would be bought again."]),
             ],
         };

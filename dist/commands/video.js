@@ -201,7 +201,7 @@ Usage:
   exodus video swipe status <breakdownId> [--wait] [--full] [--json]
   exodus video swipe template <breakdownId> [--yes] [--json]
   exodus video swipe products [--json]
-  exodus video swipe write <breakdownId> --product <id> [--mode whole-ad|hook-only|their-format|new-look] [--closeness <1-5|mirror|close|same-beats|same-arc|pattern-only>] [--look <slug>] [--script <file>] [--yes] [--json]
+  exodus video swipe write <breakdownId> --product <id> [--mode whole-ad|hook-only|their-format|new-look] [--closeness <1-5|mirror|close|same-beats|same-arc|pattern-only>] [--look <slug>] [--script <file>] [--kind <kind>] [--yes] [--json]
   exodus video swipe show <swipeId> [--json]
   exodus video swipe list [--json]
   exodus video swipe find [--brand "<name>"] [--limit <n>] [--json]
@@ -485,6 +485,10 @@ what it buys and who pays. The CLI prints no price for any of them.
                        line; and the cast. No pictures
   --look <slug>        The new look (swipe write --mode new-look)
   --script <file>      Your own script (swipe write --mode their-format)
+  --kind <kind>        A kind of ad in place of the one the template picked
+                       (swipe write), by its key. A kind this ad can't be made
+                       as is refused, with the kinds it can be made as, before
+                       the write is paid. Every other swipe verb refuses it
   --style <look>       A look other than the swipe's own (swipe start)
   --title "<name>"     The ad's name (swipe start). Admin-only
   --again              A second, paid video from a swipe that already has one
@@ -492,7 +496,7 @@ what it buys and who pays. The CLI prints no price for any of them.
                        swipe whose video is there, and names that run
   --sheet <file>       The whole swipe in one JSON file (swipe run): the ads
                        (sources, each a url, an ad id or a file), the product,
-                       the personas, mode, closeness, look or script, the
+                       the personas, mode, closeness, look or script, kind, the
                        characters, oneShot, style, title and finish. One video
                        for each ad and persona, each with its run's own cast:
                        one breakdown and template per ad, one write per ad and
@@ -6088,6 +6092,7 @@ const VALUE_FLAGS = new Set([
     "persona",
 ]);
 const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
+const WRITE_VALUE_FLAGS = new Set(["kind"]);
 export function parsePositional(args = process.argv.slice(3)) {
     const read = (valueFlags) => {
         const out = [];
@@ -6110,6 +6115,9 @@ export function parsePositional(args = process.argv.slice(3)) {
     const asFind = read(FIND_VALUE_FLAGS);
     if (asFind[0] === "swipe" && asFind[1] === "find")
         return asFind;
+    const asWrite = read(WRITE_VALUE_FLAGS);
+    if (asWrite[0] === "swipe" && asWrite[1] === "write")
+        return asWrite;
     return read(new Set());
 }
 function flagString(flags, name) {

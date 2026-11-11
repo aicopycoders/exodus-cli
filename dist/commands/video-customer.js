@@ -45,6 +45,12 @@ function stoppedLines(run, page) {
             `Try again from the video's page and it will be planned fresh: ${page} If it stops here again, try a shorter script.`,
         ];
     }
+    if (reason?.kind === "plan-rejected") {
+        return [
+            "This video's plan didn't pass our checks.",
+            `Try again from the video's page: ${page} If it stops here again, try a shorter script or another kind of ad.`,
+        ];
+    }
     if (reason?.kind === "keys-missing") {
         return [
             `This video stopped because ${reason.keys.length === 1 ? "a key is" : "some keys are"} missing (${reason.keys.join(", ")}).`,

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { apiGet, apiPost, getDashboardUrl } from "../lib/client.js";
@@ -5,7 +6,8 @@ import { displayRunStatus, formatApiError } from "../lib/format.js";
 import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { probeDurationSec } from "../lib/preflight.js";
-import { ASSET_UPLOAD_POLICY, pauseAheadLine, } from "./workflow.js";
+import { composeTemplateBrief } from "../lib/templateBrief.js";
+import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, } from "./video-customer.js";
 const VOICE_MODES = ["native", "voice-first"];
@@ -78,6 +80,10 @@ The whole loop, in order:
        Add a shot on a line, move one, or remove one while the storyboard
        waits. Each change redraws only the pictures it changes, and every
        other picture stays as it was. Wait for it before you approve.
+     exodus video quote <runId> [--private]
+       A format that quotes its video requests stops before a prepared paid
+       request, even on a One-shot run. Review its exact requests and prices here,
+       then approve those same requests with --request-quote <reviewSha256>.
 
   7. exodus video status <runId>
      Where the run is and how each scene's clip turned out. If the storyboard
@@ -90,6 +96,30 @@ The whole loop, in order:
 
   8. exodus video pull <runId> --out ./ad
      Writes every piece to that folder plus a manifest.json index.
+
+     exodus video review <runId> --file ./cut.mp4 --accept | --reject
+       [--resolve "<findingKey>|accepted-as-is|<why>" ...] [--disagree "<findingKey>|<your words>" ...]
+       Record YOUR review of the final cut as it is now. It binds to that exact
+       local file's bytes and filename; its hash must match the stored final cut.
+       A different cut needs a new review. Give every critical finding a note; a
+       finding still on the cut cannot be called fixed, and your disagreement is
+       kept as you wrote it.
+       --heard "<scene>|<observed speaker>|<term>|<what you heard>|accept|reject"
+       records your own listen against the selected take's actual bytes. Repeat
+       per watched term. The script's speaker and ASR are never a human listen.
+       --heard-final "<observed speaker>|<term>|<what you heard>|accept|reject"
+       listens to the exact final file instead, including its narration or Song.
+       A scene-take listen is never reinterpreted as a final-file listen.
+
+     exodus video song <runId>
+       The Song master to listen to: its sha256s, lyric, coverage, and whether
+       it can be approved at all. Never the audio bytes.
+     exodus video song approve <runId> --master <masterSha256>
+       Approve exactly the master you listened to (a changed one is refused).
+     exodus video song import <runId> --file song.mp3 --lyric @lyric.txt --rights "<who owns it and consents>" [--from <s> --to <s>]
+       Use your own recording as the Song. The rights statement is kept
+       verbatim; the lyric is one line per scene, and a lyric line nobody can
+       hear on the recording keeps it from being approved.
 
      exodus video retry-clip <runId> --scene <n>
        Redo ONE finished clip while the run waits for the cut. Everything
@@ -116,6 +146,10 @@ The whole loop, in order:
 
 Usage:
   exodus video status <runId> [--rejected-draft] [--json]
+  exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
+  exodus video song <runId> [--json]
+  exodus video song approve <runId> --master <masterSha256> [--json]
+  exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "<statement>" [--from <s> --to <s>] [--json]
   exodus video storyboard <runId> [--json]
   exodus video approve <runId> [--approve-stale-cut] [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
@@ -129,7 +163,10 @@ Usage:
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+    Template starts also accept: [--requested-seconds <seconds>] [--pictures-per-scene <1|3>] [--product <brandProductId>] [--elements <json|@file>] [--voices <json|@file>] [--resume-script <saved-stop-response.json>]
+    With --describe: [--product-context <text>] [--audience <text>] [--offer <text>] [--mechanism <text>]
+  exodus video start --input-options [--conceit <template>] [--voice <native|voice-first>] [--voice-path <path>] [--video-model <id>] [--json]
   exodus video director <runId> <on|off|follow> [--json]
 
 Options:
@@ -180,13 +217,98 @@ Options:
                        the server can't tell who says a line, it asks and
                        starts nothing. If a description is too thin to write
                        from, it says what is missing and starts nothing
+  --describe          Template: explicitly write from the brief in --script.
+                       Review the returned script before preparing a storyboard.
+                       Cannot be combined with --adapt or --resume-script
+  --adapt <intent>    Template: adapt the exact pasted text in --script to the
+                       selected structure. State what may change; no new claims,
+                       identities or consent are inferred. Review original and
+                       changed text before continuing. Not --adaptation-plan
+  --keep-original     With --adapt, intentionally review the exact original
+                       instead of generating changes. Guards and billable checks
+                       still require a quote; no adaptation is claimed
+  --input-mode <automatic|manual|hybrid>
+                       Template INPUT assistance only, never --one-shot.
+                       Explicit selections survive every mode. In Hybrid, blank
+                       supported fields resolve automatically; locks still apply
+  --structure <key>   A supported structure published for the selected template.
+                       Unknown or incompatible structures are refused
+  --reference <key>   A template's reference-ad inspiration, not a production
+                       element, actor identity, soundtrack or voice permission
+  --subject <product|service|non-product>
+                       Explicit subject, never guessed from the absence of
+                       --product. Service/non-product cannot select a saved product
+  --template-brief <json|@file>
+                       Template creative pins: { "cards": { "<layer>": "<card>" },
+                       "settings": { "<name>": "<value>" } }. Discover supported
+                       controls first; the server validates capabilities and locks
+  --song-controls <json|@file>
+  --mechanism-plan <json|@file>
+                       Supported template song/story controls. JSON objects only;
+                       server schema, capabilities and locks remain authoritative
+                       Song controls require published songControls:true support;
+                       {} or all-blank text controls explicitly clear saved Song pins
+  --quote-preparation  Request only the current script or storyboard phase quote.
+                       No writer/audio/image/video work. Save --json and review
+                       estimatedUsd (approximate), maximumUsd (phase bound), scope
+                       and expiry; this is not a whole-video price
+  --authorize-preparation <saved-quote.json>
+                       Explicitly accept that quote's maximumUsd for its exact
+                       phase/input. Never upgrades input Automatic to paid consent.
+                       Keep the same file for recovery; no silent new quote/retry
   --source-record <file.json>
                        A real ad's source record (start, with --conceit), for
-                       a kind of ad that copies an ad shot for shot. Such a
-                       kind needs one; any other kind refuses it
-  --stop-at-script     Print the script the run would start on, and start
-                       nothing (start, with --conceit). To read a written or
-                       laid-out script first; send it back with --script
+                       a kind of ad that copies an ad shot for shot. Without
+                       one such a kind plans its own scenes; any other kind
+                       refuses it
+  --adaptation-plan <file|original>
+                       A swipe's adaptation plan JSON (start, with --conceit),
+                       for a template that keeps its source's roles and beats,
+                       or "original" for a brief with no source ad. Any other
+                       kind refuses it
+  --stop-at-script     Print the script the run would start on, and start no
+                       storyboard/video run (start, with --conceit). Preparation
+                       may still be paid. For templates, use
+                       --json to save the approval, source and choices; edit only
+                       a separate script file, then continue with --resume-script
+  --resume-script <saved-stop-response.json>
+                       Continue a template's saved --stop-at-script --json
+                       response with --script <edited.txt>, --conceit and
+                       --style. Keep the server-issued approval, approved source,
+                       brief, product, selected video model, signed references and voice map.
+                       V2 also retains input intent/subject/structure/reference,
+                       direction, sound/story choices and declared source/adaptation
+                       records; material edits need a new quoted script review.
+                       Explicit length, picture, --voice, --voice-path and
+                       --video-model flags override their matching saved choices.
+                       Changed or cleared --elements and --voices require
+                       explicit --stop-at-script --json with
+                       --resume-script to check the edited script and issue a new
+                       approval; then resume that returned response to start.
+                       Keep your original description and edited script files.
+                       A different product still needs fresh writing and approval
+                       without --resume-script.
+                       Not for --show
+  --input-options     List your templates: Golden Six first, then more templates.
+                       Add --conceit <template> for structures, capabilities,
+                       identity locks, references and account voices.
+                       GET only: writes, quotes and starts nothing. Optional
+                       --voice, --voice-path and --video-model require --conceit.
+                       Reports unsupported, unavailable and empty separately;
+                       use the returned IDs with --elements and --voices
+  --elements <json|@file>
+                       Template saved references: [{"handle":"host","elementId":"<id>"}].
+                       Only authorized saved character/location IDs are supported;
+                       this does not upload images. [] means no saved references
+  --voices <json|@file>
+                       Template voices keyed by canonical SCRIPT speaker name:
+                       {"HOST":"<voiceId>","NARRATOR":{"voiceId":"<id>","label":"Name"},"GUEST":null}.
+                       A string pins, an object pins with an optional label,
+                       null clears that speaker. {} means no selected voices.
+                       Repeated --elements or --voices: last value wins.
+                       Empty selections are omitted; the server checks IDs,
+                       template support and approval again before starting.
+                       --voice and --voice-path keep their existing meanings
   --rewrite-to-fit     If the script doesn't fit the kind of ad (more speakers
                        than it takes, or a rule it has), write a new script for
                        it from yours, print it, and start on it (start, with
@@ -197,6 +319,26 @@ Options:
   --conceit <kind>     Kind of ad (start)
   --style <look>       Look (start)
                        The server lists the kinds and looks it offers. An unknown word prints them.
+  --product-context <text>
+                       Product facts for a template's --describe brief.
+                       This is text, not the saved-product ID used by --product.
+  --audience <text>   Audience for a template's --describe brief
+  --offer <text>      Approved offer for a template's --describe brief
+  --mechanism <text>  Supported mechanism for a template's --describe brief.
+                       Brief fields combine with --script file text, not with
+                       --adapt, --keep-original, --resume-script or non-template starts.
+  --requested-seconds <seconds>
+                       Requested template length: a positive finite number,
+                       including fractional seconds. Sent as requested, not
+                       clamped to a preset. The server may refuse an unsupported
+                       length before starting. Not an upload's --duration
+  --pictures-per-scene <1|3>
+                       Template scene-picture candidates: 1 (default) or 3
+  --product <brandProductId>
+                       Existing product from this brand for a template start.
+                       Uses its authorized product photos as references, never
+                       a URL, image-ad reference, actor identity or style pick.
+                       These three options do not work with --show
   --direction "<note>" Note for the whole ad (start)
   --frame pov          Camera-as-character POV: the camera is a person in the
                        scene (start, with --conceit). Leave it off for a
@@ -275,6 +417,14 @@ export const ITEMS_PATH = "/api/v2/workflow/items";
 const REJECTED_DRAFT_PATH = "/api/v2/workflow/rejected-draft";
 const REJECTED_DRAFT_NOT_ON_THIS_SERVER = "This Exodus server does not keep rejected drafts yet, so there is nothing to read. It arrives " +
     "with the next server update.";
+const LINEAGE_PATH = "/api/v2/video/lineage";
+const LINEAGE_NOT_ON_THIS_SERVER = "This Exodus server does not keep run lineage yet, so there is nothing to read. It arrives " +
+    "with the next server update.";
+const REVIEW_PATH = "/api/v2/video/review";
+const SONG_PATH = "/api/v2/video/song";
+const SONG_APPROVE_PATH = "/api/v2/video/song/approve";
+const SONG_IMPORT_PATH = "/api/v2/video/song/import";
+const QUOTE_PATH = "/api/v2/video/quote";
 const STORYBOARD_PATH = "/api/v2/video/storyboard";
 const FLAG_PATH = "/api/v2/video/storyboard/flag";
 const BROLL_PATH = "/api/v2/video/storyboard/broll";
@@ -448,6 +598,8 @@ export function classifyRun(run) {
                 ...(why ? { error: why } : {}),
             };
         }
+        if (run.requestQuotePending === true)
+            return { at: "request-quote" };
         const pausedNode = run.nodes.find((n) => n.nodeId === run.pausedNodeId);
         if (pausedNode && parkedAtStoryboardGate(run, pausedNode)) {
             const held = heldReason(run);
@@ -574,6 +726,12 @@ function missingSceneLines(missing, framesNodeId, runId, runUrl) {
     return lines;
 }
 export function stopLines(stop, runId, runUrl) {
+    if (stop.at === "request-quote")
+        return [
+            "Parked: final provider requests are prepared; the unapproved paid operations have not been sent.",
+            `Review the exact requests and prices: exodus video quote ${runId}`,
+            `Approve the reviewed identities: exodus video approve ${runId} --request-quote <reviewSha256>`,
+        ];
     if (stop.at === "storyboard-gate") {
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
@@ -755,6 +913,7 @@ function clipFromArtifact(sceneIndex, artifact) {
         voicePitchHz: artifact.voicePitchHz ?? null,
         voicePitchMethod: artifact.voicePitchMethod ?? null,
         replannedIdea: artifact.replannedIdea ?? null,
+        ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
     };
 }
 function keyframeDownload(sceneIndex, imageUrl) {
@@ -932,6 +1091,10 @@ function withReplannedPrompts(raw, replanned) {
 }
 export function planPull(run, items, opts) {
     const texts = [];
+    const clipAudio = run.videoChoice?.videoModel === "template-video"
+        ? run.songAsVoice || run.videoChoice.voiceMode === "voice-first" ? "discard"
+            : run.videoChoice.voiceMode === "native" ? "keep" : undefined
+        : undefined;
     const storyboardArtifact = run.nodes
         .flatMap((n) => n.outputs ?? [])
         .find((a) => a.type === "storyboard");
@@ -1145,6 +1308,7 @@ export function planPull(run, items, opts) {
             voiceFirstBlockedBy: clip ? clip.voiceFirstBlockedBy : null,
             voicePitchHz: clip ? clip.voicePitchHz : null,
             voicePitchMethod: clip ? clip.voicePitchMethod : null,
+            ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
             clipStatus: item?.status ?? "missing",
             error: item?.error ?? null,
             flagged: item?.flagged === true,
@@ -1204,6 +1368,7 @@ export function planPull(run, items, opts) {
                     },
                 }
                 : {}),
+            ...(clipAudio ? { clipAudio } : {}),
             ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
         },
     };
@@ -1246,6 +1411,7 @@ export function markPullFailure(manifest, failure) {
             scene.voiceFirstBlockedBy = null;
             scene.voicePitchHz = null;
             scene.voicePitchMethod = null;
+            delete scene.voiceLock;
         }
         if (scene.voice === failure.file)
             scene.voice = null;
@@ -1432,6 +1598,24 @@ function planValueFlag(occurrences, name) {
     }
     return { ok: true, value };
 }
+function planTemplateValue(occurrences, name, exactText = false) {
+    let value;
+    for (const occurrence of occurrences) {
+        if (occurrence.flag !== name)
+            continue;
+        const given = occurrence.value?.trim();
+        if (!given || given.startsWith("--")) {
+            return { ok: false, line: `video start --${name} needs a value.` };
+        }
+        const choice = exactText ? occurrence.value : given;
+        if (value !== undefined && value !== choice) {
+            return { ok: false, line: `video start --${name} has conflicting values. Pass one choice.` };
+        }
+        value = choice;
+    }
+    return { ok: true, value };
+}
+const TEMPLATE_WRITER_BRIEF_USAGE = "--product-context, --audience, --offer and --mechanism require a template start with --describe; not --adapt, --keep-original or --resume-script.";
 export function planVideoStart(flags, occurrences) {
     const showId = nonBlank(flagString(flags, "show"));
     const scriptFile = nonBlank(flagString(flags, "script"));
@@ -1467,6 +1651,124 @@ export function planVideoStart(flags, occurrences) {
     const recordFlag = planValueFlag(occurrences, "source-record");
     if (!recordFlag.ok)
         return { kind: "usage", line: recordFlag.line };
+    const planFlag = planValueFlag(occurrences, "adaptation-plan");
+    if (!planFlag.ok)
+        return { kind: "usage", line: planFlag.line };
+    const resumeFlag = planTemplateValue(occurrences, "resume-script");
+    if (!resumeFlag.ok)
+        return { kind: "usage", line: resumeFlag.line };
+    if (showId && resumeFlag.value !== undefined) {
+        return { kind: "usage", line: "--resume-script is a template input, not a --show choice." };
+    }
+    const secondsFlag = planTemplateValue(occurrences, "requested-seconds");
+    if (!secondsFlag.ok)
+        return { kind: "usage", line: secondsFlag.line };
+    const picturesFlag = planTemplateValue(occurrences, "pictures-per-scene");
+    if (!picturesFlag.ok)
+        return { kind: "usage", line: picturesFlag.line };
+    const productFlag = planTemplateValue(occurrences, "product");
+    if (!productFlag.ok)
+        return { kind: "usage", line: productFlag.line };
+    const elementsFlag = planValueFlag(occurrences, "elements");
+    if (!elementsFlag.ok)
+        return { kind: "usage", line: elementsFlag.line };
+    const voicesFlag = planValueFlag(occurrences, "voices");
+    if (!voicesFlag.ok)
+        return { kind: "usage", line: voicesFlag.line };
+    const inputModeFlag = planTemplateValue(occurrences, "input-mode");
+    if (!inputModeFlag.ok)
+        return { kind: "usage", line: inputModeFlag.line };
+    if (inputModeFlag.value !== undefined
+        && inputModeFlag.value !== "automatic" && inputModeFlag.value !== "manual" && inputModeFlag.value !== "hybrid") {
+        return { kind: "usage", line: "video start --input-mode must be automatic, manual or hybrid." };
+    }
+    const structureFlag = planTemplateValue(occurrences, "structure");
+    if (!structureFlag.ok)
+        return { kind: "usage", line: structureFlag.line };
+    const referenceFlag = planTemplateValue(occurrences, "reference");
+    if (!referenceFlag.ok)
+        return { kind: "usage", line: referenceFlag.line };
+    const subjectFlag = planTemplateValue(occurrences, "subject");
+    if (!subjectFlag.ok)
+        return { kind: "usage", line: subjectFlag.line };
+    if (subjectFlag.value !== undefined
+        && subjectFlag.value !== "product" && subjectFlag.value !== "service" && subjectFlag.value !== "non-product") {
+        return { kind: "usage", line: "video start --subject must be product, service or non-product." };
+    }
+    const adaptFlag = planTemplateValue(occurrences, "adapt", true);
+    if (!adaptFlag.ok)
+        return { kind: "usage", line: adaptFlag.line };
+    const briefFlag = planTemplateValue(occurrences, "template-brief");
+    if (!briefFlag.ok)
+        return { kind: "usage", line: briefFlag.line };
+    const songFlag = planTemplateValue(occurrences, "song-controls");
+    if (!songFlag.ok)
+        return { kind: "usage", line: songFlag.line };
+    const mechanismFlag = planTemplateValue(occurrences, "mechanism-plan");
+    if (!mechanismFlag.ok)
+        return { kind: "usage", line: mechanismFlag.line };
+    const authorizationFlag = planTemplateValue(occurrences, "authorize-preparation");
+    if (!authorizationFlag.ok)
+        return { kind: "usage", line: authorizationFlag.line };
+    const quoteFlags = occurrences.filter(({ flag }) => flag === "quote-preparation");
+    if (quoteFlags.some(({ value }) => value !== undefined && !value.startsWith("--"))) {
+        return { kind: "usage", line: "--quote-preparation takes no value. It requests a phase quote, not paid preparation." };
+    }
+    const quotePreparation = quoteFlags.length > 0;
+    if (quotePreparation && authorizationFlag.value !== undefined) {
+        return { kind: "usage", line: "Pass --quote-preparation to review the quote, or --authorize-preparation <saved-quote.json> to accept that exact quote, not both." };
+    }
+    const describeFlags = occurrences.filter(({ flag }) => flag === "describe");
+    if (describeFlags.some(({ value }) => value !== undefined && !value.startsWith("--"))) {
+        return { kind: "usage", line: "--describe takes no value. It writes from the brief in --script." };
+    }
+    const describe = describeFlags.length > 0;
+    const keepFlags = occurrences.filter(({ flag }) => flag === "keep-original");
+    if (keepFlags.some(({ value }) => value !== undefined && !value.startsWith("--"))) {
+        return { kind: "usage", line: "--keep-original takes no value. It requests guarded review of the exact original, not new adaptation." };
+    }
+    const keepOriginal = keepFlags.length > 0;
+    const writerBrief = {};
+    for (const [flag, field] of [
+        ["product-context", "product"], ["audience", "audience"], ["offer", "offer"], ["mechanism", "mechanism"],
+    ]) {
+        const choice = planTemplateValue(occurrences, flag);
+        if (!choice.ok)
+            return { kind: "usage", line: choice.line };
+        if (choice.value !== undefined)
+            writerBrief[field] = choice.value;
+    }
+    if (Object.keys(writerBrief).length
+        && (!describe || showId || keepOriginal || adaptFlag.value !== undefined || resumeFlag.value !== undefined)) {
+        return { kind: "usage", line: TEMPLATE_WRITER_BRIEF_USAGE };
+    }
+    if (describe && keepOriginal) {
+        return { kind: "usage", line: "Pass --describe to write from a brief or --keep-original to review unchanged copy, not both." };
+    }
+    if (describe && adaptFlag.value !== undefined) {
+        return { kind: "usage", line: "Pass --describe to write from a brief or --adapt <intent> to adapt pasted text, not both." };
+    }
+    if (resumeFlag.value !== undefined && (describe || adaptFlag.value !== undefined)) {
+        return { kind: "usage", line: "--resume-script retains the original source and adaptation intent; do not combine it with --describe or --adapt." };
+    }
+    if (showId && (inputModeFlag.value !== undefined || structureFlag.value !== undefined
+        || referenceFlag.value !== undefined || subjectFlag.value !== undefined
+        || adaptFlag.value !== undefined || briefFlag.value !== undefined || songFlag.value !== undefined
+        || mechanismFlag.value !== undefined || quotePreparation || authorizationFlag.value !== undefined || keepOriginal || describe)) {
+        return { kind: "usage", line: "V2 input and preparation flags are template inputs, not --show choices." };
+    }
+    const requestedSeconds = secondsFlag.value === undefined ? undefined : Number(secondsFlag.value);
+    if (requestedSeconds !== undefined && (!Number.isFinite(requestedSeconds) || requestedSeconds <= 0)) {
+        return { kind: "usage", line: "video start --requested-seconds must be a positive finite number of seconds." };
+    }
+    if (picturesFlag.value !== undefined && picturesFlag.value !== "1" && picturesFlag.value !== "3") {
+        return { kind: "usage", line: "video start --pictures-per-scene must be 1 or 3." };
+    }
+    const hasTemplateInputs = requestedSeconds !== undefined || picturesFlag.value !== undefined
+        || productFlag.value !== undefined || elementsFlag.value !== undefined || voicesFlag.value !== undefined;
+    if (showId && hasTemplateInputs) {
+        return { kind: "usage", line: "--requested-seconds, --pictures-per-scene, --product, --elements and --voices are template inputs, not --show choices." };
+    }
     const videoModel = videoModelFlag.value;
     const voiceMode = voiceFlag.value;
     const reviewStoryboardFlag = occurrences.some((o) => o.flag === "review-storyboard");
@@ -1551,6 +1853,12 @@ export function planVideoStart(flags, occurrences) {
             line: "--source-record works with --conceit, not --show.",
         };
     }
+    if (showId && planFlag.value) {
+        return {
+            kind: "usage",
+            line: "--adaptation-plan works with --conceit, not --show.",
+        };
+    }
     if (showId && broll) {
         return {
             kind: "usage",
@@ -1631,6 +1939,48 @@ export function planVideoStart(flags, occurrences) {
         opts.rewriteToFit = true;
     if (recordFlag.value)
         opts.sourceRecordFile = recordFlag.value;
+    if (planFlag.value)
+        opts.adaptationPlanFile = planFlag.value;
+    if (resumeFlag.value)
+        opts.resumeScriptFile = resumeFlag.value;
+    if (requestedSeconds !== undefined)
+        opts.requestedSeconds = requestedSeconds;
+    if (picturesFlag.value !== undefined)
+        opts.picturesPerScene = picturesFlag.value === "3" ? 3 : 1;
+    if (productFlag.value !== undefined)
+        opts.productId = productFlag.value;
+    if (elementsFlag.value !== undefined)
+        opts.elementsInput = elementsFlag.value;
+    if (voicesFlag.value !== undefined)
+        opts.voicesInput = voicesFlag.value;
+    if (inputModeFlag.value === "automatic" || inputModeFlag.value === "manual" || inputModeFlag.value === "hybrid") {
+        opts.inputMode = inputModeFlag.value;
+    }
+    if (structureFlag.value !== undefined)
+        opts.structure = structureFlag.value;
+    if (referenceFlag.value !== undefined)
+        opts.reference = referenceFlag.value;
+    if (subjectFlag.value === "product" || subjectFlag.value === "service" || subjectFlag.value === "non-product") {
+        opts.subject = subjectFlag.value;
+    }
+    if (adaptFlag.value !== undefined)
+        opts.adaptationIntent = adaptFlag.value;
+    if (briefFlag.value !== undefined)
+        opts.templateBriefInput = briefFlag.value;
+    if (songFlag.value !== undefined)
+        opts.songControlsInput = songFlag.value;
+    if (mechanismFlag.value !== undefined)
+        opts.mechanismPlanInput = mechanismFlag.value;
+    if (quotePreparation)
+        opts.quotePreparation = true;
+    if (authorizationFlag.value !== undefined)
+        opts.authorizePreparationFile = authorizationFlag.value;
+    if (describe)
+        opts.describe = true;
+    if (keepOriginal)
+        opts.keepOriginal = true;
+    if (Object.keys(writerBrief).length)
+        opts.writerBrief = writerBrief;
     if (frameFlag.value || pacingFlag.value) {
         opts.shots = {
             ...(frameFlag.value ? { frame: frameFlag.value } : {}),
@@ -1642,15 +1992,24 @@ export function planVideoStart(flags, occurrences) {
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function scriptRunOptionsOf(data) {
-    if (!isRecord(data) || !Array.isArray(data.conceits) || !Array.isArray(data.styles)) {
+function scriptRunOptionsOf(data, door = "script") {
+    const rows = isRecord(data) ? data[door === "template" ? "templates" : "conceits"] : undefined;
+    if (!isRecord(data) || !Array.isArray(rows) || !Array.isArray(data.styles)) {
         return null;
     }
     const conceits = [];
-    for (const row of data.conceits) {
+    for (const row of rows) {
         if (!isRecord(row) || typeof row.key !== "string" || typeof row.label !== "string")
             return null;
-        conceits.push({ key: row.key, label: row.label });
+        if (door === "template" && row.style !== undefined) {
+            if (!isRecord(row.style) || typeof row.style.slug !== "string" || row.style.slug.trim() === ""
+                || typeof row.style.label !== "string")
+                return null;
+            conceits.push({ key: row.key, label: row.label, style: { slug: row.style.slug, label: row.style.label } });
+        }
+        else {
+            conceits.push({ key: row.key, label: row.label });
+        }
     }
     const styles = [];
     for (const row of data.styles) {
@@ -1659,6 +2018,181 @@ function scriptRunOptionsOf(data) {
         styles.push({ slug: row.slug, label: row.label });
     }
     return { conceits, styles };
+}
+const GOLDEN_TEMPLATE_KEYS = [
+    "ugc-template", "authority-yapper-template", "microdrama-template",
+    "skeleton-timeline-template", "pixar-song-template", "personification-template",
+];
+function templateListingResult(menu, data, json) {
+    const rows = isRecord(data) && Array.isArray(data.templates) ? data.templates : [];
+    const templates = menu.conceits.map(({ key, label }) => {
+        const row = rows.find((entry) => isRecord(entry) && entry.key === key);
+        const experience = isRecord(row) && isRecord(row.templateExperience) ? row.templateExperience : undefined;
+        return {
+            key, label,
+            description: isRecord(row) && typeof row.description === "string" ? row.description.replace(/\s+/g, " ").trim() : "",
+            structureCount: Array.isArray(experience?.structures) ? experience.structures.length : 0,
+        };
+    });
+    const golden = GOLDEN_TEMPLATE_KEYS.flatMap((key) => templates.filter((row) => row.key === key));
+    const extras = templates.filter(({ key }) => !GOLDEN_TEMPLATE_KEYS.some((goldenKey) => goldenKey === key));
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ templates: [
+                        ...golden.map((row) => ({ ...row, group: "golden-six" })),
+                        ...extras.map((row) => ({ ...row, group: "more" })),
+                    ] })] };
+    return { code: 0, lines: templates.length === 0 ? ["No templates are available."] : [
+            { label: "Golden Six", templates: golden },
+            { label: `${extras.length} more ${extras.length === 1 ? "template" : "templates"}`, templates: extras },
+        ].flatMap((group) => group.templates.length ? [
+            group.label,
+            ...group.templates.map((row) => `  ${row.key} — ${row.label} — ${row.description} — ${row.structureCount} ${row.structureCount === 1 ? "structure" : "structures"}`),
+        ] : []) };
+}
+async function templateInputOptionsFlow(occurrences, json, deps) {
+    const allowed = {
+        conceit: true, "input-options": true, voice: true, "voice-path": true, "video-model": true, json: true,
+    };
+    const unsupported = occurrences.find(({ flag }) => !Object.hasOwn(allowed, flag));
+    if (unsupported) {
+        return { code: 1, usage: true, lines: [`--input-options is read-only; --${unsupported.flag} is not a discovery option.`] };
+    }
+    if (occurrences.some(({ flag, value }) => flag === "input-options" && value !== undefined && !value.startsWith("--"))) {
+        return { code: 1, usage: true, lines: ["--input-options takes no value. Choose the template with --conceit <template>."] };
+    }
+    const template = planTemplateValue(occurrences, "conceit");
+    if (!template.ok)
+        return { code: 1, usage: true, lines: [template.line] };
+    if (!template.value && occurrences.some(({ flag }) => flag === "voice" || flag === "voice-path" || flag === "video-model")) {
+        return { code: 1, usage: true, lines: ["Choose --conceit <template> to inspect voice and video route options."] };
+    }
+    const query = new URLSearchParams({ door: "template" });
+    if (template.value)
+        query.set("template", template.value);
+    for (const [flag, field] of [["voice", "voiceMode"], ["voice-path", "voicePath"], ["video-model", "videoModel"]]) {
+        const choice = planValueFlag(occurrences, flag);
+        if (!choice.ok)
+            return { code: 1, usage: true, lines: [choice.line] };
+        if (choice.value !== undefined) {
+            if (flag === "voice" && !isVoiceMode(choice.value)) {
+                return { code: 1, usage: true, lines: [`video start --voice must be native or voice-first (got "${choice.value}").`] };
+            }
+            query.set(field, choice.value);
+        }
+    }
+    const response = await deps.get(`${SCRIPT_RUNS_PATH}?${query}`).catch(() => null);
+    if (!response)
+        return adminOnlyResult("Template input options could not be read. Nothing has started.", json);
+    if (!response.ok)
+        return errorResult(response, json);
+    const menu = scriptRunOptionsOf(response.data, "template");
+    if (!menu)
+        return adminOnlyResult("This server did not publish a readable template catalog. Nothing has started.", json);
+    if (!template.value)
+        return templateListingResult(menu, response.data, json);
+    const options = isRecord(response.data) ? response.data.inputOptions : undefined;
+    if (!menu?.conceits.some(({ key }) => key === template.value)
+        || !isRecord(options) || !isRecord(options.selectors)
+        || typeof options.selectors.elements !== "boolean" || typeof options.selectors.voices !== "boolean"
+        || !Array.isArray(options.elements) || !Array.isArray(options.voices)
+        || typeof options.voicesUnavailable !== "boolean") {
+        return adminOnlyResult("This server did not publish readable input options for that template. Nothing has started.", json);
+    }
+    const rows = isRecord(response.data) && Array.isArray(response.data.templates) ? response.data.templates : [];
+    const selected = rows.find((row) => isRecord(row) && row.key === template.value);
+    const experience = isRecord(selected) && isRecord(selected.templateExperience) ? selected.templateExperience : undefined;
+    const capabilities = isRecord(selected) && isRecord(selected.templateCapabilities) ? selected.templateCapabilities : undefined;
+    const metadata = {
+        ...(experience ? { templateExperience: experience } : {}),
+        ...(capabilities ? { templateCapabilities: capabilities } : {}),
+    };
+    const experienceLines = [];
+    if (experience) {
+        if (isRecord(experience.identity)) {
+            experienceLines.push(`Identity: ${String(experience.identity.summary ?? "")}`, ...stringsOf(experience.identity.locks).flatMap((lock) => {
+                const lines = [];
+                let remaining = lock.replace(/\s+/g, " ").trim();
+                while (remaining.length > 90) {
+                    const space = remaining.lastIndexOf(" ", 90);
+                    const end = space > 0 ? space : 90;
+                    lines.push(`${lines.length ? "          " : "  Locked: "}${remaining.slice(0, end)}`);
+                    remaining = remaining.slice(end).trimStart();
+                }
+                lines.push(`${lines.length ? "          " : "  Locked: "}${remaining}`);
+                return lines;
+            }), ...stringsOf(experience.identity.flexible).map((choice) => `  Supported variation: ${choice}`));
+        }
+        if (Array.isArray(experience.structures)) {
+            experienceLines.push("Story structures (select with --structure):");
+            let structureNumber = 0;
+            for (const structure of experience.structures) {
+                if (!isRecord(structure) || typeof structure.key !== "string" || typeof structure.label !== "string")
+                    continue;
+                experienceLines.push(`  ${++structureNumber}. ${structure.label} (${structure.key})${structure.key === experience.defaultStructureKey ? " (template-default)" : ""}`, ...(typeof structure.description === "string" ? [`    ${structure.description}`] : []), ...(Array.isArray(structure.beats) ? [`    Beats: ${structure.beats
+                        .filter((beat) => isRecord(beat) && typeof beat.label === "string")
+                        .map((beat, index) => `${index + 1}. ${beat.label}`).join(" → ")}`] : []), ...(typeof structure.exampleScript === "string" ? [
+                    "    Example:",
+                    ...structure.exampleScript.split(/\r?\n/).map((line) => `      ${line}`),
+                ] : []));
+            }
+        }
+        if (Array.isArray(experience.references)) {
+            experienceLines.push("Reference examples — production rights are not granted:");
+            for (const reference of experience.references) {
+                if (!isRecord(reference) || typeof reference.key !== "string" || typeof reference.label !== "string")
+                    continue;
+                const playable = reference.availability === "playable" && reference.previewRights !== "restricted"
+                    && isRecord(reference.media) && reference.media.kind === "video" && typeof reference.media.url === "string"
+                    && reference.media.url.trim().length > 0;
+                const unavailable = reference.previewRights === "restricted" ? "preview restricted"
+                    : reference.availability === "playable" ? "no video preview"
+                        : String(reference.availability ?? "unavailable");
+                experienceLines.push(`  ${reference.label} (${reference.key}): ${playable ? "playable" : `not playable — ${unavailable}`}`, ...(typeof reference.unavailableReason === "string" ? [`    ${reference.unavailableReason}`] : []), ...(isRecord(reference.source) && typeof reference.source.label === "string" ? [`    Source: ${reference.source.label}`] : []), ...(isRecord(reference.source) && typeof reference.source.url === "string" ? [`    URL: ${reference.source.url}`] : []));
+            }
+        }
+    }
+    const references = [];
+    for (const row of options.elements) {
+        if (!isRecord(row) || typeof row.elementId !== "string" || typeof row.handle !== "string"
+            || (row.kind !== "character" && row.kind !== "location")
+            || typeof row.name !== "string" || typeof row.look !== "string" || typeof row.imageUrl !== "string") {
+            return adminOnlyResult("This server returned unreadable saved references. Nothing has started.", json);
+        }
+        references.push(`  ${row.name} (${row.kind}) — handle: ${row.handle}; elementId: ${row.elementId}`, `    Look: ${row.look}`, `    Image: ${row.imageUrl}`);
+    }
+    const voices = [];
+    for (const row of options.voices) {
+        if (!isRecord(row) || typeof row.voiceId !== "string" || typeof row.name !== "string"
+            || (row.description !== undefined && typeof row.description !== "string")
+            || (row.previewUrl !== undefined && typeof row.previewUrl !== "string")) {
+            return adminOnlyResult("This server returned unreadable account voices. Nothing has started.", json);
+        }
+        voices.push(`  ${row.name} — voiceId: ${row.voiceId}`, ...(row.description ? [`    ${row.description}`] : []), ...(row.previewUrl ? [`    Preview: ${row.previewUrl}`] : []));
+    }
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ...options, ...metadata })] };
+    return {
+        code: 0,
+        lines: [
+            `Template input options: ${template.value}`,
+            ...experienceLines,
+            ...(capabilities ? [
+                "Server-supported creative controls (template-default values are not intelligent automatic choices):",
+                JSON.stringify(capabilities, null, 2),
+                "Use --template-brief for supported pins. Server locks, dependencies and paid approval still apply.",
+            ] : ["V2 creative capabilities are not published by this server; no local catalog or fallback choices are supplied."]),
+            ...(!options.selectors.elements
+                ? ["Saved references are not supported for this template and selected route."]
+                : references.length === 0 ? ["No supported saved references are available."]
+                    : ["Saved references:", ...references]),
+            ...(!options.selectors.voices
+                ? ["Account voices are not supported for this template and selected route."]
+                : options.voicesUnavailable
+                    ? ["Account voices are unavailable right now; this is not an empty catalog. No fallback voices are offered."]
+                    : voices.length === 0 ? ["No account voices are available."]
+                        : ["Account voices:", ...voices]),
+        ],
+    };
 }
 function isResolvedCard(value) {
     if (!isRecord(value))
@@ -1811,16 +2345,57 @@ function scriptStartRefused(res, json) {
             ],
     };
 }
-function stoppedAtScriptResult(data, json) {
+function stoppedAtScriptResult(data, json, templateStart, voices, selections, templateIntent, context, intentResolution) {
     const script = typeof data.script === "string" ? data.script : "";
     const tidied = data.tidied === undefined ? null : scriptTidiedOf(data.tidied);
     const written = writtenOf(data.written);
     const rewritten = writtenOf(data.rewritten);
+    if (templateIntent) {
+        const retained = scriptResumeOf(data);
+        if (!retained?.templateIntent
+            || !sameJsonValue(retained.templateIntent, templateIntent)
+            || !sameTemplateBrief(retained.templateBrief, context?.templateBrief)
+            || retained.productId !== context?.productId || retained.videoModel !== context?.videoModel
+            || (data.direction !== undefined && retained.direction !== context?.direction)
+            || (data.music !== undefined && retained.music !== context?.music)
+            || (data.shots !== undefined && !sameJsonValue(retained.shots, context?.shots))
+            || (data.songControls !== undefined && !sameJsonValue(retained.songControls, context?.songControls))
+            || (data.mechanismPlan !== undefined && !sameJsonValue(retained.mechanismPlan, context?.mechanismPlan))) {
+            return adminOnlyResult("The server did not return a signed script review with the exact original input, mode, structure and adaptation intent. Do not resume this response; request a fresh review.", json);
+        }
+    }
+    const { voiceMode: serverVoiceMode, voicePath: serverVoicePath, elements: serverElements, voices: serverVoices, ...templateData } = data;
+    if (templateStart && ((voices.voiceMode !== undefined && serverVoiceMode !== undefined && voices.voiceMode !== serverVoiceMode)
+        || (voices.voicePath !== undefined && serverVoicePath !== undefined && voices.voicePath !== serverVoicePath))) {
+        return adminOnlyResult("The server returned different voice choices from those selected. Nothing has started. Check the choices and write the script again before resuming.", json);
+    }
+    if (templateStart) {
+        const elements = serverElements === undefined ? [] : scriptElementsOf(serverElements);
+        const voiceMap = serverVoices === undefined ? {} : scriptVoicesOf(serverVoices);
+        if (elements === null || voiceMap === null
+            || !sameScriptSelections(selections, { elements, voices: voiceMap })) {
+            return adminOnlyResult("The server did not retain the selected references and voices in its script approval response. Nothing has started. Write and approve the script again before resuming.", json);
+        }
+    }
     if (json) {
         return {
             code: 0,
             lines: [
                 JSON.stringify({
+                    ...(templateStart ? {
+                        ...templateData,
+                        ...selections,
+                        ...(voices.voiceMode !== undefined ? { voiceMode: voices.voiceMode } : {}),
+                        ...(voices.voicePath !== undefined ? { voicePath: voices.voicePath } : {}),
+                        ...(templateIntent && context?.direction !== undefined ? { direction: context.direction } : {}),
+                        ...(templateIntent && context?.music !== undefined ? { music: context.music } : {}),
+                        ...(templateIntent && context?.shots !== undefined ? { shots: context.shots } : {}),
+                        ...(templateIntent && context?.songControls !== undefined ? { songControls: context.songControls } : {}),
+                        ...(templateIntent && context?.mechanismPlan !== undefined ? { mechanismPlan: context.mechanismPlan } : {}),
+                        ...(templateIntent && context?.sourceRecord !== undefined ? { sourceRecord: context.sourceRecord } : {}),
+                        ...(templateIntent && context?.adaptationPlan !== undefined ? { adaptationPlan: context.adaptationPlan } : {}),
+                        ...(intentResolution !== undefined ? { intentResolution } : {}),
+                    } : {}),
                     stoppedAtScript: true,
                     script,
                     ...(tidied ? { tidied } : {}),
@@ -1834,15 +2409,47 @@ function stoppedAtScriptResult(data, json) {
         code: 0,
         lines: [
             ...scriptTidiedHead(tidied),
-            rewritten !== null
-                ? "Your script didn't fit this kind of ad, so we wrote a new one from it. Nothing has started."
-                : written !== null
-                    ? "Your file described the ad, so we wrote this script from it. Nothing has started."
-                    : "This is the script the run would start on. Nothing has started.",
+            ...(templateIntent ? [
+                `Input assistance: ${templateIntent.mode === "auto" ? "automatic" : templateIntent.mode}`,
+                ...(templateIntent.structureKey ? [`Structure: ${templateIntent.structureKey}`] : []),
+                ...(templateIntent.referenceKey ? [`Reference inspiration: ${templateIntent.referenceKey} (not production rights)`] : []),
+                "",
+            ] : []),
+            ...(templateIntent ? intentResolution ? [
+                "Effective creative brief (server-resolved; raw pins remain separate):",
+                JSON.stringify(intentResolution.effectiveBrief, null, 2),
+                "Choice provenance (template-default / resolved / pinned):",
+                JSON.stringify(intentResolution.provenance, null, 2),
+                "",
+            ] : ["This server did not publish resolved-choice provenance for this draft.", ""] : []),
+            ...(templateIntent?.input.kind === "adapt" ? [
+                "Original pasted text (retained exactly in --json):",
+                templateIntent.input.originalText,
+                "",
+                "Adaptation intent:",
+                templateIntent.input.adaptationIntent,
+                "",
+                templateIntent.input.originalText === script
+                    ? "No text changed. The original was kept; no adaptation is claimed."
+                    : "Changed text — compare the original above with the complete resulting script below:",
+                "",
+            ] : []),
+            templateIntent
+                ? "Script preparation finished; no storyboard or video run has started. Review this exact resulting script before continuing:"
+                : rewritten !== null
+                    ? "Your script didn't fit this kind of ad, so we wrote a new one from it. Nothing has started."
+                    : written !== null
+                        ? "Your file described the ad, so we wrote this script from it. Nothing has started."
+                        : "This is the script the run would start on. Nothing has started.",
             "",
             ...script.split("\n").map((line) => (line ? `  ${line}` : "")),
             "",
-            "To start it, save it to a file and run the same command with --script <that file> and without --stop-at-script.",
+            ...(templateStart ? [
+                "Use --stop-at-script --json to save the server-issued approval, original source and template choices as a JSON file.",
+                "Edit only a separate script file, then repeat --conceit and --style with --resume-script <saved-stop-response.json> --script <edited.txt>, without --stop-at-script.",
+            ] : [
+                "To start it, save it to a file and run the same command with --script <that file> and without --stop-at-script.",
+            ]),
         ],
     };
 }
@@ -1880,6 +2487,391 @@ function waitJsonWith(waited, facts) {
         lines: [JSON.stringify({ ...parsed, ...facts })],
     };
 }
+function scriptElementsOf(value) {
+    if (!Array.isArray(value))
+        return null;
+    const elements = [];
+    for (const row of value) {
+        if (!isRecord(row) || Object.keys(row).some((key) => key !== "handle" && key !== "elementId")
+            || typeof row.handle !== "string" || row.handle.trim() === ""
+            || typeof row.elementId !== "string" || row.elementId.trim() === "")
+            return null;
+        elements.push({ handle: row.handle, elementId: row.elementId });
+    }
+    return elements;
+}
+function scriptVoicesOf(value) {
+    if (!isRecord(value))
+        return null;
+    const entries = [];
+    for (const [who, choice] of Object.entries(value)) {
+        if (choice === null) {
+            entries.push([who, null]);
+            continue;
+        }
+        const voiceId = typeof choice === "string" ? choice : isRecord(choice) ? choice.voiceId : undefined;
+        if (typeof voiceId !== "string" || voiceId.trim() === "" || /\s/.test(voiceId.trim()))
+            return null;
+        entries.push([who, typeof choice === "string" ? choice : {
+                voiceId,
+                ...(isRecord(choice) && typeof choice.label === "string" ? { label: choice.label } : {}),
+            }]);
+    }
+    return Object.fromEntries(entries);
+}
+function sameScriptSelections(left, right) {
+    const facts = [left, right].map((selection) => ({
+        elements: [...(selection.elements ?? [])].sort((a, b) => a.handle.localeCompare(b.handle)),
+        voices: Object.entries(selection.voices ?? {})
+            .map(([who, choice]) => {
+            const voiceId = typeof choice === "string" ? choice : choice?.voiceId;
+            const label = typeof choice === "object" && choice !== null ? choice.label?.trim() : undefined;
+            return {
+                who: who.trim(),
+                choice: voiceId === undefined ? null : {
+                    voiceId: voiceId.trim(), ...(label ? { label } : {}),
+                },
+            };
+        })
+            .sort((a, b) => a.who.localeCompare(b.who)),
+    }));
+    return JSON.stringify(facts[0]) === JSON.stringify(facts[1]);
+}
+function scriptTemplateBriefOf(value) {
+    if (!isRecord(value) || Object.keys(value).some((key) => key !== "cards" && key !== "settings"))
+        return null;
+    if (value.cards !== undefined
+        && (!isRecord(value.cards) || !Object.values(value.cards).every((card) => typeof card === "string")))
+        return null;
+    if (value.settings !== undefined
+        && (!isRecord(value.settings) || !Object.values(value.settings).every((setting) => typeof setting === "string" || typeof setting === "boolean"
+            || (typeof setting === "number" && Number.isFinite(setting)))))
+        return null;
+    return value;
+}
+function withoutBlankTemplatePins(pins) {
+    if (pins === undefined)
+        return undefined;
+    let result = pins;
+    for (const [key, value] of Object.entries(pins)) {
+        if (typeof value !== "string" || value.trim() !== "")
+            continue;
+        if (result === pins)
+            result = { ...pins };
+        delete result[key];
+    }
+    return Object.keys(result).length ? result : undefined;
+}
+function templateIntentOf(value) {
+    if (!isRecord(value) || Object.keys(value).some((key) => !["mode", "structureKey", "referenceKey", "input"].includes(key))
+        || (value.mode !== "auto" && value.mode !== "manual" && value.mode !== "hybrid"))
+        return null;
+    for (const field of ["structureKey", "referenceKey"]) {
+        if (value[field] !== undefined && (typeof value[field] !== "string" || value[field].trim() === ""))
+            return null;
+    }
+    const input = value.input;
+    if (!isRecord(input) || Object.keys(input).some((key) => !["kind", "subject", "originalText", "adaptationIntent"].includes(key))
+        || (input.kind !== "brief" && input.kind !== "adapt")
+        || typeof input.originalText !== "string" || input.originalText.trim() === "")
+        return null;
+    if (input.subject !== undefined && input.subject !== "product" && input.subject !== "service" && input.subject !== "non-product")
+        return null;
+    if (input.kind === "adapt"
+        ? typeof input.adaptationIntent !== "string" || input.adaptationIntent.trim() === ""
+        : input.adaptationIntent !== undefined)
+        return null;
+    return {
+        mode: value.mode,
+        ...(value.structureKey !== undefined ? { structureKey: value.structureKey } : {}),
+        ...(value.referenceKey !== undefined ? { referenceKey: value.referenceKey } : {}),
+        input: {
+            kind: input.kind, originalText: input.originalText,
+            ...(input.subject !== undefined ? { subject: input.subject } : {}),
+            ...(input.kind === "adapt" ? { adaptationIntent: input.adaptationIntent } : {}),
+        },
+    };
+}
+function sameTemplateBrief(left, right) {
+    for (const field of ["cards", "settings"]) {
+        const a = left?.[field] ?? {};
+        const b = right?.[field] ?? {};
+        if (Object.keys(a).length !== Object.keys(b).length
+            || Object.entries(a).some(([key, value]) => !Object.hasOwn(b, key) || b[key] !== value))
+            return false;
+    }
+    return true;
+}
+function sameJsonValue(left, right) {
+    if (left === right)
+        return true;
+    if (Array.isArray(left) && Array.isArray(right)) {
+        return left.length === right.length && left.every((value, index) => sameJsonValue(value, right[index]));
+    }
+    if (!isRecord(left) || !isRecord(right))
+        return false;
+    return Object.keys(left).length === Object.keys(right).length
+        && Object.entries(left).every(([key, value]) => Object.hasOwn(right, key) && sameJsonValue(value, right[key]));
+}
+function preparationQuoteOf(value) {
+    if (!isRecord(value) || typeof value.quoteId !== "string" || !value.quoteId.trim()
+        || (value.phase !== "script" && value.phase !== "storyboard")
+        || typeof value.contextHash !== "string" || !value.contextHash.trim()
+        || typeof value.expiresAt !== "number" || !Number.isFinite(new Date(value.expiresAt).getTime())
+        || (value.estimatedUsd !== null && (typeof value.estimatedUsd !== "number" || !Number.isFinite(value.estimatedUsd) || value.estimatedUsd < 0))
+        || typeof value.maximumUsd !== "number" || !Number.isFinite(value.maximumUsd) || value.maximumUsd <= 0
+        || typeof value.scope !== "string" || !value.scope.trim())
+        return null;
+    return {
+        quoteId: value.quoteId, phase: value.phase, contextHash: value.contextHash, expiresAt: value.expiresAt,
+        estimatedUsd: value.estimatedUsd, maximumUsd: value.maximumUsd, scope: value.scope,
+    };
+}
+function preparationInputOf(body, phase) {
+    const input = {};
+    for (const field of [
+        "script", "conceit", "style", "templateBrief", "productId", "elements", "voiceMode", "voicePath",
+        "videoModel", "scriptApproval", "approvedSource", "adaptationPlan", "direction", "templateIntent",
+        "music", "shots", "songControls", "mechanismPlan",
+    ]) {
+        if (body[field] !== undefined)
+            input[field] = body[field];
+    }
+    if (body.voices !== undefined) {
+        input.voices = Object.entries(body.voices).map(([who, choice]) => {
+            const voiceId = typeof choice === "string" ? choice.trim() : choice?.voiceId.trim();
+            const label = typeof choice === "object" && choice !== null ? choice.label?.trim() : undefined;
+            return {
+                who: who.trim(),
+                choice: voiceId === undefined ? { kind: "clear" } : {
+                    kind: "pin", voiceId, ...(label ? { label } : {}),
+                },
+            };
+        });
+    }
+    if (phase === "script") {
+        input.operation = body.rewriteToFit === true ? "rewrite" : body.describe === true ? "write" : "reapprove";
+        if (body.describe !== undefined)
+            input.describe = body.describe;
+    }
+    else {
+        for (const field of ["reviewStoryboard", "director", "broll", "sourceRecord"]) {
+            if (body[field] !== undefined)
+                input[field] = body[field];
+        }
+        input.launchedVia = "cli";
+    }
+    return input;
+}
+async function templateResolutionFlow(template, templateIntent, templateBrief, route, deps) {
+    const query = new URLSearchParams({ door: "template", template, templateIntent: JSON.stringify(templateIntent) });
+    if (templateBrief !== undefined)
+        query.set("templateBrief", JSON.stringify(templateBrief));
+    for (const field of ["voiceMode", "voicePath", "videoModel"]) {
+        const value = route[field];
+        if (value !== undefined)
+            query.set(field, value);
+    }
+    const response = await deps.get(`${SCRIPT_RUNS_PATH}?${query}`).catch(() => null);
+    const refused = (line) => ({ kind: "result", result: adminOnlyResult(line, route.json) });
+    if (!response)
+        return refused("Current template input options could not be read. No paid preparation was requested.");
+    if (!response.ok)
+        return { kind: "result", result: errorResult(response, route.json) };
+    const options = isRecord(response.data) ? response.data.inputOptions : undefined;
+    if (!isRecord(options))
+        return refused("The server did not return selected template input options. No paid preparation was requested.");
+    if (route.songControls !== undefined) {
+        const rows = isRecord(response.data) && Array.isArray(response.data.templates) ? response.data.templates : [];
+        const selected = rows.find((row) => isRecord(row) && row.key === template);
+        const capabilities = isRecord(selected) && isRecord(selected.templateCapabilities) ? selected.templateCapabilities : undefined;
+        if (capabilities?.songControls !== true) {
+            return refused("The server does not advertise Song controls for this template. Your pins were not discarded. Remove them explicitly with --song-controls '{}' or select a supported template and request fresh review. No paid preparation was requested.");
+        }
+    }
+    if (options.intentResolution === undefined)
+        return { kind: "resolution" };
+    const raw = options.intentResolution;
+    const intent = isRecord(raw) ? templateIntentOf(raw.intent) : null;
+    if (!isRecord(raw) || !intent || !sameJsonValue(intent, templateIntent) || typeof raw.ok !== "boolean"
+        || !isRecord(raw.effectiveBrief) || !isRecord(raw.provenance) || !Array.isArray(raw.holds)) {
+        return refused("The server returned unreadable or stale template input resolution. No paid preparation was requested.");
+    }
+    const holds = [];
+    for (const hold of raw.holds) {
+        if (!isRecord(hold) || typeof hold.code !== "string" || typeof hold.field !== "string" || typeof hold.message !== "string") {
+            return refused("The server returned unreadable template input holds. No paid preparation was requested.");
+        }
+        holds.push({ code: hold.code, field: hold.field, message: hold.message });
+    }
+    const value = {
+        ok: raw.ok, intent, effectiveBrief: raw.effectiveBrief, provenance: raw.provenance, holds,
+        ...(raw.structure !== undefined ? { structure: raw.structure } : {}),
+        ...(raw.reference !== undefined ? { reference: raw.reference } : {}),
+        ...(raw.capabilities !== undefined ? { capabilities: raw.capabilities } : {}),
+    };
+    if (!raw.ok || holds.length > 0) {
+        const error = holds.length ? holds.map(({ field, message }) => `${field}: ${message}`).join("\n") : "The current template input is held.";
+        return {
+            kind: "result",
+            result: { code: 1, lines: route.json ? [JSON.stringify({ ok: false, error, intentResolution: value })] : [error, "No paid preparation was requested."] },
+        };
+    }
+    return { kind: "resolution", value };
+}
+async function preparationFlow(phase, input, opts, deps, intentResolution, reviewedControls) {
+    const result = (line) => ({ kind: "result", result: adminOnlyResult(line, opts.json) });
+    let saved;
+    if (opts.authorizePreparationFile !== undefined) {
+        try {
+            const value = JSON.parse(deps.readFile(opts.authorizePreparationFile));
+            const quote = isRecord(value) ? preparationQuoteOf(value.preparationQuote) : null;
+            if (!isRecord(value) || !quote || typeof value.requestId !== "string" || !value.requestId.trim()
+                || !isRecord(value.input))
+                throw new Error("expected an unchanged --quote-preparation --json response");
+            saved = { preparationQuote: quote, requestId: value.requestId, input: value.input };
+        }
+        catch (error) {
+            return result(`Can't read --authorize-preparation: ${error instanceof Error ? error.message : String(error)}. No paid preparation was requested.`);
+        }
+        if (saved.preparationQuote.phase !== phase) {
+            return result("The saved preparation quote belongs to a different phase or input. Review a new quote for this exact draft; an old quote cannot authorize changed text or context. No paid preparation was requested.");
+        }
+    }
+    else if (!opts.quotePreparation) {
+        return result("Template preparation requires a reviewed phase quote. Repeat this command with --quote-preparation --json, save and review the response, then explicitly accept it with --authorize-preparation <saved-quote.json>. Input mode never approves spending. No paid preparation was requested.");
+    }
+    const requestId = saved?.requestId ?? randomUUID();
+    const response = await deps.post("/api/v2/video/template-preparation", { phase, requestId, input }).catch(() => null);
+    if (!response)
+        return result("The preparation quote could not be read. Keep the same saved quote for recovery; no paid preparation was requested.");
+    if (!response.ok && response.status === 404)
+        return result("The preparation quote endpoint is unavailable for this key or server. No paid preparation was requested.");
+    if (!response.ok)
+        return { kind: "result", result: errorResult(response, opts.json) };
+    const quote = preparationQuoteOf(response.data);
+    if (!quote || quote.phase !== phase)
+        return result("This server did not return a usable quote for the requested phase. No paid preparation was requested.");
+    const canonicalInput = isRecord(response.data) && isRecord(response.data.canonicalInput) ? response.data.canonicalInput : null;
+    if (!canonicalInput || canonicalInput.script !== input.script
+        || !sameJsonValue(canonicalInput.templateIntent, input.templateIntent)
+        || !sameJsonValue(canonicalInput.approvedSource, input.approvedSource)
+        || canonicalInput.operation !== input.operation || canonicalInput.describe !== input.describe
+        || (canonicalInput.songControls !== undefined && !isRecord(canonicalInput.songControls))
+        || (canonicalInput.mechanismPlan !== undefined && !isRecord(canonicalInput.mechanismPlan))) {
+        return result("The server did not return canonical preparation input for the same exact source and operation. No paid preparation was requested.");
+    }
+    if (reviewedControls && (!sameJsonValue(canonicalInput.songControls, reviewedControls.songControls)
+        || !sameJsonValue(canonicalInput.mechanismPlan, reviewedControls.mechanismPlan))) {
+        return result("The script or template context changed after review. Resume with --stop-at-script --json to review the current controls before starting. No paid preparation was requested.");
+    }
+    if (saved) {
+        if (!sameJsonValue(quote, saved.preparationQuote)) {
+            return result("The server returned different preparation authority. The saved approval was not replayed and the new quote was not accepted. Review current authority explicitly; no paid preparation was requested.");
+        }
+        if (!sameJsonValue(canonicalInput, saved.input)) {
+            return result("The saved preparation quote belongs to a different phase or input. Review a new quote for this exact draft; an old quote cannot authorize changed text or context. No paid preparation was requested.");
+        }
+        return { kind: "authorized", authorization: { quoteId: quote.quoteId, maximumUsd: saved.preparationQuote.maximumUsd }, canonicalInput };
+    }
+    const envelope = { preparationQuote: quote, requestId, input: canonicalInput, ...(intentResolution ? { intentResolution } : {}) };
+    return {
+        kind: "result",
+        result: {
+            code: 0,
+            lines: opts.json ? [JSON.stringify(envelope)] : [
+                `${phase === "script" ? "Script" : "Storyboard"} preparation quote (no paid preparation requested)`,
+                quote.estimatedUsd === null
+                    ? "Actual cost unknown; only the maximum allowance is available."
+                    : `Approximate estimate: $${quote.estimatedUsd}`,
+                `Maximum for this phase: $${quote.maximumUsd}`,
+                `Scope: ${quote.scope}`,
+                `Expires: ${new Date(quote.expiresAt).toISOString()}`,
+                ...(intentResolution ? [
+                    "Effective creative brief and provenance (server):",
+                    JSON.stringify({ effectiveBrief: intentResolution.effectiveBrief, provenance: intentResolution.provenance }, null, 2),
+                ] : ["This server did not publish resolved-choice provenance for this draft."]),
+                "This is not a whole-video price or approval.",
+                "Save this command's --quote-preparation --json response. After reviewing it, repeat the exact draft with --authorize-preparation <saved-quote.json> instead of --quote-preparation.",
+            ],
+        },
+    };
+}
+function scriptJsonObjectInput(input, deps) {
+    const raw = input.trim();
+    const value = JSON.parse(raw.startsWith("@") ? deps.readFile(raw.slice(1)) : raw);
+    if (!isRecord(value))
+        throw new Error("expected a JSON object");
+    return value;
+}
+function scriptResumeOf(value) {
+    if (!isRecord(value) || value.stoppedAtScript !== true
+        || typeof value.script !== "string" || value.script.trim() === "")
+        return null;
+    if (typeof value.scriptApproval !== "string" || value.scriptApproval.trim() === "")
+        return null;
+    const source = value.approvedSource;
+    if (!isRecord(source) || Object.keys(source).some((key) => key !== "mode" && key !== "text")
+        || (source.mode !== "verbatim" && source.mode !== "description")
+        || typeof source.text !== "string" || source.text.trim() === "")
+        return null;
+    const brief = value.templateBrief === undefined ? undefined : scriptTemplateBriefOf(value.templateBrief);
+    if (brief === null)
+        return null;
+    const templateIntent = value.templateIntent === undefined ? undefined : templateIntentOf(value.templateIntent);
+    if (templateIntent === null)
+        return null;
+    if (templateIntent && value.direction !== undefined && typeof value.direction !== "string")
+        return null;
+    if (templateIntent) {
+        if (value.music !== undefined && typeof value.music !== "boolean")
+            return null;
+        if (value.shots !== undefined && (!isRecord(value.shots)
+            || Object.keys(value.shots).some((key) => key !== "frame" && key !== "pacing")
+            || !Object.values(value.shots).every((field) => typeof field === "string")))
+            return null;
+        if (value.songControls !== undefined && !isRecord(value.songControls))
+            return null;
+        if (value.mechanismPlan !== undefined && !isRecord(value.mechanismPlan))
+            return null;
+    }
+    if (value.productId !== undefined
+        && (typeof value.productId !== "string" || value.productId.trim() === ""))
+        return null;
+    if (value.voiceMode !== undefined
+        && (typeof value.voiceMode !== "string" || !isVoiceMode(value.voiceMode)))
+        return null;
+    if (value.voicePath !== undefined
+        && (typeof value.voicePath !== "string" || value.voicePath.trim() === ""))
+        return null;
+    if (value.videoModel !== undefined
+        && (typeof value.videoModel !== "string" || value.videoModel.trim() === ""))
+        return null;
+    const elements = value.elements === undefined ? undefined : scriptElementsOf(value.elements);
+    const voices = value.voices === undefined ? undefined : scriptVoicesOf(value.voices);
+    if (elements === null || voices === null)
+        return null;
+    return {
+        reviewedScript: value.script,
+        ...(templateIntent !== undefined ? { templateIntent } : {}),
+        ...(templateIntent && typeof value.direction === "string" ? { direction: value.direction } : {}),
+        ...(templateIntent && value.music !== undefined ? { music: value.music } : {}),
+        ...(templateIntent && value.shots !== undefined ? { shots: value.shots } : {}),
+        ...(templateIntent && value.songControls !== undefined ? { songControls: value.songControls } : {}),
+        ...(templateIntent && value.mechanismPlan !== undefined ? { mechanismPlan: value.mechanismPlan } : {}),
+        ...(templateIntent && value.sourceRecord !== undefined ? { sourceRecord: value.sourceRecord } : {}),
+        ...(templateIntent && value.adaptationPlan !== undefined ? { adaptationPlan: value.adaptationPlan } : {}),
+        scriptApproval: value.scriptApproval,
+        approvedSource: { mode: source.mode, text: source.text },
+        ...(brief !== undefined ? { templateBrief: brief } : {}),
+        ...(value.productId !== undefined ? { productId: value.productId } : {}),
+        ...(value.voiceMode !== undefined ? { voiceMode: value.voiceMode } : {}),
+        ...(value.voicePath !== undefined ? { voicePath: value.voicePath } : {}),
+        ...(value.videoModel !== undefined ? { videoModel: value.videoModel } : {}),
+        ...(elements !== undefined ? { elements } : {}),
+        ...(voices !== undefined ? { voices } : {}),
+    };
+}
 export async function startScriptFlow(opts, deps) {
     let script;
     try {
@@ -1896,7 +2888,127 @@ export async function startScriptFlow(opts, deps) {
     if (script.trim().length === 0) {
         return { code: 1, lines: [`The script file "${opts.scriptFile}" is empty.`] };
     }
-    let sourceRecord;
+    if (opts.writerBrief)
+        script = composeTemplateBrief({ ...opts.writerBrief, about: script });
+    let resume;
+    if (opts.resumeScriptFile) {
+        let saved;
+        try {
+            saved = JSON.parse(deps.readFile(opts.resumeScriptFile));
+        }
+        catch (error) {
+            return { code: 1, lines: [`Can't read the saved script response "${opts.resumeScriptFile}" as JSON: ${String(error)}`] };
+        }
+        const parsed = scriptResumeOf(saved);
+        if (!parsed) {
+            return {
+                code: 1,
+                lines: ["--resume-script needs a saved stoppedAtScript:true response with a nonempty script and server-issued scriptApproval, approvedSource { mode: \"verbatim\" | \"description\", text }, and valid templateBrief/productId/voiceMode/voicePath/videoModel/elements/voices if supplied. Write and explicitly approve a fresh script with --stop-at-script --json before resuming."],
+            };
+        }
+        resume = parsed;
+    }
+    if (resume && opts.productId !== undefined && opts.productId !== resume.productId) {
+        return {
+            code: 1,
+            lines: ["The selected product differs from the saved script's approved product. Write and explicitly approve a fresh script for that product with --stop-at-script --json, without --resume-script. Nothing has started."],
+        };
+    }
+    const hasIntentInputs = opts.inputMode !== undefined || opts.structure !== undefined || opts.reference !== undefined
+        || opts.subject !== undefined || opts.adaptationIntent !== undefined || opts.describe === true || opts.keepOriginal === true
+        || opts.templateBriefInput !== undefined || opts.songControlsInput !== undefined || opts.mechanismPlanInput !== undefined;
+    const hasPreparationConsent = opts.quotePreparation === true || opts.authorizePreparationFile !== undefined;
+    if (resume && resume.templateIntent === undefined && hasIntentInputs) {
+        return adminOnlyResult("This saved review has no V2 original-input context. Start a fresh --describe or --adapt review using the original source file, without --resume-script. Nothing has started.", opts.json);
+    }
+    const templateIntent = resume?.templateIntent || hasIntentInputs
+        ? {
+            mode: opts.inputMode === "automatic" ? "auto" : opts.inputMode ?? resume?.templateIntent?.mode ?? "auto",
+            ...(opts.structure !== undefined || resume?.templateIntent?.structureKey !== undefined
+                ? { structureKey: opts.structure ?? resume?.templateIntent?.structureKey } : {}),
+            ...(opts.reference !== undefined || resume?.templateIntent?.referenceKey !== undefined
+                ? { referenceKey: opts.reference ?? resume?.templateIntent?.referenceKey } : {}),
+            input: {
+                ...(resume?.templateIntent?.input ?? {
+                    kind: opts.adaptationIntent !== undefined ? "adapt" : "brief",
+                    originalText: script,
+                    ...(opts.adaptationIntent !== undefined ? { adaptationIntent: opts.adaptationIntent } : {}),
+                }),
+                ...(opts.subject !== undefined ? { subject: opts.subject } : {}),
+            },
+        }
+        : undefined;
+    let stopAtScript = opts.stopAtScript === true || opts.keepOriginal === true
+        || (templateIntent !== undefined && (resume === undefined || opts.rewriteToFit === true));
+    if (templateIntent && opts.rewriteToFit && resume === undefined) {
+        return adminOnlyResult("A V2 rewrite needs a previously reviewed --resume-script response. For an initial adaptation, use --adapt <intent>; write and review before rewriting. Nothing has started.", opts.json);
+    }
+    if (opts.keepOriginal && script !== templateIntent?.input.originalText) {
+        return adminOnlyResult("--keep-original requires --script to contain the exact original text, not an edited result. Nothing has started.", opts.json);
+    }
+    if (templateIntent && opts.reviewStoryboard !== true) {
+        return adminOnlyResult("V2 template inputs require storyboard review; do not combine them with --one-shot. Nothing has started.", opts.json);
+    }
+    if (templateIntent && resume === undefined && !opts.describe && opts.adaptationIntent === undefined) {
+        return adminOnlyResult("Choose an explicit initial V2 script path: --describe to write from a brief, --adapt <intent> to adapt copy, or --adapt <intent> --keep-original for guarded unchanged review. Input mode alone never rewrites text. No paid preparation was requested.", opts.json);
+    }
+    const music = opts.music ?? (templateIntent ? resume?.music : undefined);
+    const shots = templateIntent && (resume?.shots || opts.shots)
+        ? { ...resume?.shots, ...opts.shots }
+        : opts.shots;
+    let songControls = templateIntent ? resume?.songControls : undefined;
+    let mechanismPlan = templateIntent ? resume?.mechanismPlan : undefined;
+    try {
+        if (opts.songControlsInput !== undefined)
+            songControls = withoutBlankTemplatePins(scriptJsonObjectInput(opts.songControlsInput, deps));
+        if (opts.mechanismPlanInput !== undefined)
+            mechanismPlan = scriptJsonObjectInput(opts.mechanismPlanInput, deps);
+    }
+    catch (error) {
+        return adminOnlyResult(`Can't read template sound/story controls: ${error instanceof Error ? error.message : String(error)}`, opts.json);
+    }
+    let suppliedBrief;
+    if (opts.templateBriefInput !== undefined) {
+        try {
+            const raw = opts.templateBriefInput.trim();
+            const parsed = scriptTemplateBriefOf(JSON.parse(raw.startsWith("@") ? deps.readFile(raw.slice(1)) : raw));
+            if (parsed === null)
+                throw new Error("expected { cards?: { layer: card }, settings?: { name: primitive } }");
+            suppliedBrief = parsed;
+        }
+        catch (error) {
+            return adminOnlyResult(`Can't read --template-brief: ${error instanceof Error ? error.message : String(error)}`, opts.json);
+        }
+    }
+    let elements = resume?.elements;
+    let selectedVoices = resume?.voices;
+    try {
+        if (opts.elementsInput !== undefined) {
+            let text = opts.elementsInput.trim();
+            if (text.startsWith("@"))
+                text = deps.readFile(text.slice(1));
+            const parsed = scriptElementsOf(JSON.parse(text));
+            if (parsed === null)
+                throw new Error("--elements must be an array of { handle, elementId } with nonempty strings.");
+            elements = parsed;
+        }
+        if (opts.voicesInput !== undefined) {
+            const parsed = scriptVoicesOf(parseVoicesFlag([{ flag: "voices", value: opts.voicesInput }], deps.readFile));
+            if (parsed === null)
+                throw new Error("--voices must map script speaker names to a nonempty voice ID without spaces, { voiceId, label? }, or null.");
+            selectedVoices = parsed;
+        }
+    }
+    catch (error) {
+        return { code: 1, lines: [`Can't read template selections: ${error instanceof Error ? error.message : String(error)}`] };
+    }
+    if (resume && !opts.stopAtScript && !sameScriptSelections(resume, { elements, voices: selectedVoices })) {
+        return {
+            code: 1,
+            lines: ["The selected references or voices differ from the saved script's approved selections. Keep your original description and edited script files. Use --stop-at-script --json with --resume-script to explicitly check and approve the edited script with these selections, then resume the returned approval response to start. Nothing has started."],
+        };
+    }
+    let sourceRecord = templateIntent ? resume?.sourceRecord : undefined;
     if (opts.sourceRecordFile) {
         try {
             sourceRecord = JSON.parse(deps.readFile(opts.sourceRecordFile));
@@ -1910,38 +3022,184 @@ export async function startScriptFlow(opts, deps) {
             };
         }
     }
-    const listed = await deps.get(SCRIPT_RUNS_PATH).catch(() => null);
+    let adaptationPlan = templateIntent ? resume?.adaptationPlan : undefined;
+    if (opts.adaptationPlanFile) {
+        try {
+            adaptationPlan = opts.adaptationPlanFile === "original"
+                ? { kind: "original", reason: "Member explicitly selected an original brief." }
+                : JSON.parse(deps.readFile(opts.adaptationPlanFile));
+        }
+        catch (error) {
+            return { code: 1, lines: [`Can't read semantic adaptation JSON: ${String(error)}`] };
+        }
+    }
+    let templateStart = resume !== undefined || opts.requestedSeconds !== undefined
+        || opts.picturesPerScene !== undefined || opts.productId !== undefined
+        || opts.elementsInput !== undefined || opts.voicesInput !== undefined || templateIntent !== undefined || hasPreparationConsent;
+    const templateMenuPath = `${SCRIPT_RUNS_PATH}?door=template`;
+    let templateDefaultStyle;
+    const listed = await deps.get(templateStart ? templateMenuPath : SCRIPT_RUNS_PATH).catch(() => null);
+    if (templateStart && !listed?.ok) {
+        return listed
+            ? errorResult(listed, opts.json)
+            : adminOnlyResult("Template preflight could not be read. Nothing has started.", opts.json);
+    }
     if (listed?.ok) {
-        const options = scriptRunOptionsOf(listed.data);
+        let options = scriptRunOptionsOf(listed.data, templateStart ? "template" : "script");
         if (!options) {
-            return adminOnlyResult("The server's list of kinds and looks could not be read.", opts.json);
+            return adminOnlyResult(templateStart
+                ? "This server did not publish a readable template menu. Nothing has started."
+                : "The server's list of kinds and looks could not be read.", opts.json);
+        }
+        if (!templateStart && !options.conceits.some((row) => row.key === opts.conceit)) {
+            const templates = await deps.get(templateMenuPath).catch(() => null);
+            const offered = templates?.ok ? scriptRunOptionsOf(templates.data, "template") : null;
+            if (offered?.conceits.some((row) => row.key === opts.conceit)) {
+                options = offered;
+                templateStart = true;
+            }
         }
         const problem = scriptRunPickProblem(options, opts.conceit, opts.style);
+        if (opts.writerBrief && !options.conceits.some((row) => row.key === opts.conceit)) {
+            const line = `${TEMPLATE_WRITER_BRIEF_USAGE} ${problem}`;
+            return opts.json ? adminOnlyResult(line, true) : { code: 1, usage: true, lines: [line] };
+        }
         if (problem) {
             return opts.json ? adminOnlyResult(problem, true) : { code: 1, lines: [problem], usage: true };
         }
+        if (templateStart) {
+            templateDefaultStyle = options.conceits.find((row) => row.key === opts.conceit)?.style?.slug;
+        }
     }
-    const res = await deps.post(SCRIPT_RUNS_PATH, {
+    if (templateStart) {
+        if (opts.reviewStoryboard !== true) {
+            return adminOnlyResult("Template preparation requires storyboard review; do not combine it with --one-shot. Nothing has started.", opts.json);
+        }
+        if (opts.rewriteToFit && resume === undefined) {
+            return adminOnlyResult("A template rewrite needs a previously reviewed --resume-script response. Review the initial script before quoting a rewrite. Nothing has started.", opts.json);
+        }
+        stopAtScript ||= resume === undefined || opts.rewriteToFit === true;
+    }
+    let baseBrief = suppliedBrief === undefined ? resume?.templateBrief : {
+        ...resume?.templateBrief,
+        ...(suppliedBrief.cards !== undefined ? { cards: { ...resume?.templateBrief?.cards, ...suppliedBrief.cards } } : {}),
+        ...(suppliedBrief.settings !== undefined ? { settings: { ...resume?.templateBrief?.settings, ...suppliedBrief.settings } } : {}),
+    };
+    if (templateIntent && baseBrief) {
+        const cards = withoutBlankTemplatePins(baseBrief.cards);
+        const settings = withoutBlankTemplatePins(baseBrief.settings);
+        if (cards !== baseBrief.cards || settings !== baseBrief.settings) {
+            baseBrief = { ...(cards !== undefined ? { cards } : {}), ...(settings !== undefined ? { settings } : {}) };
+        }
+    }
+    const hasBriefOverrides = opts.requestedSeconds !== undefined || opts.picturesPerScene !== undefined;
+    let templateBrief = hasBriefOverrides
+        ? {
+            ...baseBrief,
+            settings: {
+                ...baseBrief?.settings,
+                ...(opts.requestedSeconds !== undefined ? { planningSeconds: opts.requestedSeconds } : {}),
+                ...(opts.picturesPerScene !== undefined ? { sceneFrameCandidates: opts.picturesPerScene } : {}),
+            },
+        }
+        : baseBrief;
+    if (templateIntent && (opts.style !== templateDefaultStyle || templateBrief?.cards?.style !== undefined)) {
+        templateBrief = { ...templateBrief, cards: { ...templateBrief?.cards, style: opts.style } };
+    }
+    else if (templateDefaultStyle !== undefined
+        && (opts.style !== templateDefaultStyle || templateBrief?.cards?.style !== undefined)) {
+        const cards = { ...templateBrief?.cards };
+        delete cards.style;
+        if (opts.style !== templateDefaultStyle)
+            cards.style = opts.style;
+        templateBrief = {
+            ...(Object.keys(cards).length > 0 ? { cards } : {}),
+            ...(templateBrief?.settings !== undefined ? { settings: templateBrief.settings } : {}),
+        };
+        if (Object.keys(templateBrief).length === 0)
+            templateBrief = undefined;
+    }
+    const productId = opts.productId ?? resume?.productId;
+    const videoModel = opts.videoModel ?? resume?.videoModel;
+    const voices = {
+        voiceMode: opts.voiceMode ?? resume?.voiceMode,
+        voicePath: opts.voicePath ?? resume?.voicePath,
+    };
+    const direction = opts.direction ?? (templateIntent ? resume?.direction : undefined);
+    if (resume?.templateIntent && !stopAtScript && (script !== resume.reviewedScript
+        || !sameJsonValue(templateIntent, resume.templateIntent)
+        || !sameTemplateBrief(templateBrief, resume.templateBrief)
+        || videoModel !== resume.videoModel || voices.voiceMode !== resume.voiceMode || voices.voicePath !== resume.voicePath
+        || direction !== resume.direction
+        || music !== resume.music || !sameJsonValue(shots, resume.shots)
+        || (!(opts.quotePreparation || opts.authorizePreparationFile)
+            && (!sameJsonValue(songControls, resume.songControls) || !sameJsonValue(mechanismPlan, resume.mechanismPlan)))
+        || !sameJsonValue(sourceRecord, resume.sourceRecord)
+        || !sameJsonValue(adaptationPlan, resume.adaptationPlan))) {
+        return adminOnlyResult("The script or template context changed after review. Keep the original source and edited script. Resume with --stop-at-script --json, review the exact returned text and context, then resume that new response without --stop-at-script. Nothing has started.", opts.json);
+    }
+    const selections = {
+        ...(elements?.length ? { elements } : {}),
+        ...(selectedVoices && Object.keys(selectedVoices).length ? { voices: selectedVoices } : {}),
+    };
+    const body = {
         script,
         conceit: opts.conceit,
         style: opts.style,
-        ...(opts.direction ? { direction: opts.direction } : {}),
-        ...(opts.voicePath ? { voicePath: opts.voicePath } : {}),
-        ...(opts.videoModel ? { videoModel: opts.videoModel } : {}),
-        ...(opts.voiceMode ? { voiceMode: opts.voiceMode } : {}),
-        ...(opts.music === true ? { music: true } : {}),
+        ...(direction ? { direction } : {}),
+        ...(voices.voicePath !== undefined ? { voicePath: voices.voicePath } : {}),
+        ...(videoModel !== undefined ? { videoModel } : {}),
+        ...(voices.voiceMode !== undefined ? { voiceMode: voices.voiceMode } : {}),
+        ...(templateIntent ? (music !== undefined ? { music } : {}) : music === true ? { music: true } : {}),
         ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
         ...(opts.director ? { director: true } : {}),
         ...(opts.broll ? { broll: true } : {}),
-        ...(opts.shots ? { shots: opts.shots } : {}),
-        ...(opts.stopAtScript ? { stopAtScript: true } : {}),
+        ...(shots ? { shots } : {}),
+        ...(templateIntent && songControls !== undefined ? { songControls } : {}),
+        ...(templateIntent && mechanismPlan !== undefined ? { mechanismPlan } : {}),
+        ...(stopAtScript ? { stopAtScript: true } : {}),
         ...(opts.rewriteToFit ? { rewriteToFit: true } : {}),
         ...(sourceRecord !== undefined ? { sourceRecord } : {}),
-    });
+        ...(adaptationPlan !== undefined ? { adaptationPlan } : {}),
+        ...(resume ? { approvedSource: resume.approvedSource, scriptApproval: resume.scriptApproval } : {}),
+        ...(templateIntent !== undefined ? { templateIntent } : {}),
+        ...(templateIntent !== undefined && resume === undefined && !opts.keepOriginal
+            && (opts.describe || opts.adaptationIntent !== undefined) ? { describe: true } : {}),
+        ...(templateStart && templateBrief !== undefined ? { templateBrief } : {}),
+        ...(templateStart && productId !== undefined ? { productId } : {}),
+        ...selections,
+    };
+    let intentResolution;
+    if (templateIntent) {
+        const resolution = await templateResolutionFlow(opts.conceit, templateIntent, templateBrief, { ...voices, videoModel, json: opts.json, songControls }, deps);
+        if (resolution.kind === "result")
+            return resolution.result;
+        intentResolution = resolution.value;
+    }
+    if (templateStart) {
+        const preparation = await preparationFlow(stopAtScript ? "script" : "storyboard", preparationInputOf(body, stopAtScript ? "script" : "storyboard"), opts, deps, intentResolution, resume?.templateIntent && !stopAtScript ? resume : undefined);
+        if (preparation.kind === "result")
+            return preparation.result;
+        body.preparationAuthorization = preparation.authorization;
+        songControls = isRecord(preparation.canonicalInput.songControls) ? preparation.canonicalInput.songControls : undefined;
+        mechanismPlan = isRecord(preparation.canonicalInput.mechanismPlan) ? preparation.canonicalInput.mechanismPlan : undefined;
+        if (songControls === undefined)
+            delete body.songControls;
+        else
+            body.songControls = songControls;
+        if (mechanismPlan === undefined)
+            delete body.mechanismPlan;
+        else
+            body.mechanismPlan = mechanismPlan;
+    }
+    const res = await deps.post(SCRIPT_RUNS_PATH, body);
     if (!res.ok)
         return scriptNeedsCallerResult(res, opts.json) ?? scriptStartRefused(res, opts.json);
     if (isRecord(res.data) && res.data.stoppedAtScript === true) {
-        return stoppedAtScriptResult(res.data, opts.json);
+        return stoppedAtScriptResult(res.data, opts.json, templateStart || scriptResumeOf(res.data) !== null, voices, selections, templateIntent, { templateBrief, productId, videoModel, direction, music, shots, songControls, mechanismPlan, sourceRecord, adaptationPlan }, intentResolution);
+    }
+    if (templateStart && stopAtScript) {
+        return adminOnlyResult("The server did not return the requested script-review stop. Do not retry automatically; inspect the response/server run before continuing.", opts.json);
     }
     const customerStart = customerAnswer(res.data);
     if (customerStart)
@@ -2512,11 +3770,81 @@ function sceneCardLines(scene) {
         lines.push(`    picture: ${scene.frame.status}`);
     return lines;
 }
+function readPreparedQuotes(data) {
+    if (!data || typeof data !== "object" || !("prepared" in data) || !Array.isArray(data.prepared))
+        return null;
+    const result = [];
+    const seen = new Set();
+    for (const q of data.prepared) {
+        if (!q || typeof q !== "object" ||
+            !Number.isInteger(q.sceneIndex) || q.sceneIndex < 0 || seen.has(q.sceneIndex) ||
+            q.operation !== "clip" ||
+            typeof q.requestSha256 !== "string" || !/^[0-9a-f]{64}$/.test(q.requestSha256) ||
+            typeof q.refsSha256 !== "string" || !/^[0-9a-f]{64}$/.test(q.refsSha256) ||
+            typeof q.model !== "string" || typeof q.mode !== "string" ||
+            typeof q.durationSec !== "number" || !Number.isFinite(q.durationSec) || q.durationSec <= 0 ||
+            typeof q.quotedUsd !== "number" || !Number.isFinite(q.quotedUsd) || q.quotedUsd < 0 ||
+            (q.voiceId !== undefined && typeof q.voiceId !== "string"))
+            return null;
+        seen.add(q.sceneIndex);
+        result.push({
+            sceneIndex: q.sceneIndex, requestSha256: q.requestSha256, refsSha256: q.refsSha256,
+            operation: q.operation,
+            model: q.model, mode: q.mode, durationSec: q.durationSec, quotedUsd: q.quotedUsd,
+            ...(q.voiceId !== undefined ? { voiceId: q.voiceId } : {}),
+        });
+    }
+    return result;
+}
+function quoteReviewHash(prepared) {
+    return createHash("sha256").update(JSON.stringify([...prepared].sort((a, b) => a.sceneIndex - b.sceneIndex || a.operation.localeCompare(b.operation)))).digest("hex");
+}
+export async function quoteFlow(runId, json, deps, privateExport = false) {
+    const res = await deps.get(`${QUOTE_PATH}?runId=${encodeURIComponent(runId)}${privateExport ? "&private=1" : ""}`);
+    if (!res.ok)
+        return errorResult(res, json);
+    const prepared = readPreparedQuotes(res.data);
+    if (!prepared)
+        return { code: 1, lines: ["The server did not return readable prepared request identities. Nothing was approved."] };
+    if (prepared.length === 0)
+        return { code: 1, lines: ["No final requests have been prepared yet. Nothing can be quoted or approved."] };
+    const reviewSha256 = quoteReviewHash(prepared);
+    const privateView = res.data && typeof res.data === "object" && "private" in res.data ? res.data.private : undefined;
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ runId, prepared, reviewSha256, ...(privateView !== undefined ? { private: privateView } : {}) })] };
+    return { code: 0, lines: [
+            `EXACT REQUEST QUOTE — ${runId}`,
+            ...prepared.flatMap((q) => [
+                `  scene ${q.sceneIndex} ${q.operation}: ${q.model} / ${q.mode} / ${q.durationSec}s / $${q.quotedUsd.toFixed(4)}${q.voiceId ? ` / voice ${q.voiceId}` : ""}`,
+                `    request sha256: ${q.requestSha256}`,
+                `    references sha256: ${q.refsSha256}`,
+            ]),
+            `  total: $${prepared.reduce((sum, q) => sum + q.quotedUsd, 0).toFixed(4)}`,
+            `Approve only these requests: exodus video approve ${runId} --request-quote ${reviewSha256}`,
+            ...(privateExport ? [privateView === undefined
+                    ? "Private request review is not available for this caller or run."
+                    : `AUTHORIZED RAW REQUEST REVIEW: ${JSON.stringify(privateView)}`] : []),
+        ] };
+}
 export async function approveFlow(runId, opts, deps) {
+    let requestQuote;
+    if (opts.requestQuoteHash !== undefined) {
+        const read = await deps.get(`${QUOTE_PATH}?runId=${encodeURIComponent(runId)}`);
+        if (!read.ok)
+            return errorResult(read, opts.json);
+        const prepared = readPreparedQuotes(read.data);
+        if (!prepared)
+            return { code: 1, lines: ["The server did not return readable prepared request identities. Nothing was approved."] };
+        if (!prepared.length || quoteReviewHash(prepared) !== opts.requestQuoteHash) {
+            return { code: 1, lines: [`The prepared requests are not the quote you reviewed. Review again: exodus video quote ${runId}`] };
+        }
+        requestQuote = { quotes: prepared };
+    }
     const res = await deps.post(APPROVE_PATH, {
         runId,
         ...(opts.acceptFindings ? { acceptFindings: true } : {}),
         ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
+        ...(requestQuote ? { requestQuote } : {}),
     });
     if (!res.ok) {
         const refusal = errorResult(res, opts.json);
@@ -3437,9 +4765,11 @@ export async function pullFlow(runId, dir, json, deps) {
         if (failure)
             markPullFailure(plan.manifest, failure);
     }
+    if (run.sourceEditMap === true)
+        plan.manifest.lineage = await pullLineage(runId, dir, deps);
     deps.writeFile(path.join(dir, "manifest.json"), `${JSON.stringify(plan.manifest, null, 2)}\n`);
     const failed = plan.manifest.failed;
-    const wrote = plan.downloads.length + plan.texts.length - failed.length + 1;
+    const wrote = plan.downloads.length + plan.texts.length - failed.length + 1 + (plan.manifest.lineage?.file ? 1 : 0);
     if (json) {
         return {
             code: failed.length > 0 ? 1 : 0,
@@ -3650,13 +4980,33 @@ function readSidecar(file, parse, max, deps) {
     const parsed = rows.map(parse);
     return parsed.every((r) => r !== null) ? parsed : null;
 }
+async function pullLineage(runId, dir, deps) {
+    const res = await deps.get(`${LINEAGE_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (!res.ok) {
+        return { file: null, reason: res.status === 404 ? LINEAGE_NOT_ON_THIS_SERVER : `could not read it: ${videoApiError(res)}` };
+    }
+    const lineage = res.data?.lineage;
+    if (typeof lineage !== "object" || lineage === null) {
+        return { file: null, reason: "the server answered without a lineage" };
+    }
+    deps.writeFile(path.join(dir, "lineage.json"), `${JSON.stringify(res.data, null, 2)}\n`);
+    return { file: "lineage.json" };
+}
 export function cutSidecars(filePath, deps) {
     const base = path.join(path.dirname(filePath), path.basename(filePath, path.extname(filePath)));
     const cutScenes = readSidecar(`${base}.scenes.json`, cutScene, CUT_SCENES_MAX, deps);
     const cutWords = readSidecar(`${base}.words.json`, cutWord, CUT_WORDS_MAX, deps);
-    return { ...(cutScenes ? { cutScenes } : {}), ...(cutWords ? { cutWords } : {}) };
+    let finalSourceMap;
+    try {
+        const raw = JSON.parse(deps.readFile(`${base}.source-map.json`));
+        if (raw && typeof raw === "object" && "version" in raw && raw.version === "source-edit-map.v2")
+            finalSourceMap = raw;
+    }
+    catch {
+    }
+    return { ...(cutScenes ? { cutScenes } : {}), ...(cutWords ? { cutWords } : {}), ...(finalSourceMap ? { finalSourceMap } : {}) };
 }
-export async function uploadFlow(runId, filePath, durationFlag, json, deps) {
+export async function uploadFlow(runId, filePath, durationFlag, json, deps, options = {}) {
     const stat = deps.statFile(filePath);
     if (!stat)
         return { code: 1, lines: [`No such file: ${filePath}`] };
@@ -3735,11 +5085,15 @@ export async function uploadFlow(runId, filePath, durationFlag, json, deps) {
     if (!assetId) {
         return { code: 1, lines: ["The server stored the file but did not say what to call it."] };
     }
+    const finalSha256 = timing.finalSourceMap || options.bindFinalBytes
+        ? createHash("sha256").update(bytes).digest("hex")
+        : undefined;
     const attaching = await withUploadRetry("attach", deps, () => deps.post(FINAL_PATH, {
         runId,
         assetId,
         durationSec,
         ...timing,
+        ...(finalSha256 ? { finalSha256 } : {}),
     }));
     if (!attaching.ok)
         return uploadRetryResult(attaching, json);
@@ -3784,6 +5138,235 @@ export async function uploadFlow(runId, filePath, durationFlag, json, deps) {
             ],
     };
 }
+export function parseReviewFlags(flags, occurrences) {
+    const accept = flags["accept"] !== undefined && flags["accept"] !== false;
+    const reject = flags["reject"] !== undefined && flags["reject"] !== false;
+    if (accept === reject)
+        return { ok: false, line: "video review needs exactly one of --accept or --reject." };
+    const file = flagString(flags, "file");
+    if (!file)
+        return { ok: false, line: "video review needs --file <cut.mp4>, the actual final file you reviewed." };
+    const resolutions = [];
+    const disagreements = [];
+    const humanListens = [];
+    for (const o of occurrences) {
+        if (o.flag === "resolve") {
+            const [findingKey, resolution, ...why] = (o.value ?? "").split("|");
+            if (!findingKey || (resolution !== "accepted-as-is" && resolution !== "waived") || !why.join("|").trim()) {
+                return { ok: false, line: 'video review --resolve is "<findingKey>|accepted-as-is|<why>" (or waived); a finding still on the cut is never "fixed".' };
+            }
+            resolutions.push({ findingKey, resolution, note: why.join("|").trim() });
+        }
+        else if (o.flag === "disagree") {
+            const [findingKey, ...words] = (o.value ?? "").split("|");
+            if (!findingKey || !words.join("|").trim())
+                return { ok: false, line: 'video review --disagree is "<findingKey>|<your words>".' };
+            disagreements.push({ findingKey, note: words.join("|").trim() });
+        }
+        else if (o.flag === "heard") {
+            const [scene, speaker, term, heard, decision, ...extra] = (o.value ?? "").split("|");
+            if (extra.length || !scene?.trim() || !Number.isInteger(Number(scene)) ||
+                !speaker?.trim() || !term?.trim() || !heard?.trim() || (decision !== "accept" && decision !== "reject")) {
+                return { ok: false, line: 'video review --heard is "<scene>|<observed speaker>|<term>|<what you heard>|accept|reject".' };
+            }
+            humanListens.push({ scope: "selected-take", sceneIndex: Number(scene), speaker: speaker.trim(), term: term.trim(), heard: heard.trim(), accepted: decision === "accept" });
+        }
+        else if (o.flag === "heard-final") {
+            const [speaker, term, heard, decision, ...extra] = (o.value ?? "").split("|");
+            if (extra.length || !speaker?.trim() || !term?.trim() || !heard?.trim() || (decision !== "accept" && decision !== "reject")) {
+                return { ok: false, line: 'video review --heard-final is "<observed speaker>|<term>|<what you heard>|accept|reject".' };
+            }
+            humanListens.push({ scope: "final-file", speaker: speaker.trim(), term: term.trim(), heard: heard.trim(), accepted: decision === "accept" });
+        }
+    }
+    return {
+        ok: true,
+        opts: {
+            verdict: accept ? "accept" : "reject",
+            file,
+            resolutions,
+            disagreements,
+            ...(humanListens.length ? { humanListens } : {}),
+            ...(flagString(flags, "grade") ? { gradeVersion: flagString(flags, "grade") } : {}),
+            ...(flagString(flags, "media") ? { mediaVersion: flagString(flags, "media") } : {}),
+        },
+    };
+}
+export async function reviewFlow(runId, opts, deps) {
+    const read = await deps.get(`${LINEAGE_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (missingRouteLine(read, "exodus video review"))
+        return { code: 1, lines: [LINEAGE_NOT_ON_THIS_SERVER] };
+    if (!read.ok)
+        return errorResult(read, opts.json);
+    const final = read.data.lineage.final;
+    if (final.state !== "known")
+        return { code: 1, lines: [`There is no final cut to review yet (${final.reason}).`] };
+    const file = final.value.file;
+    if (file.sha256Base64.state !== "known") {
+        return { code: 1, lines: [`The final cut's stored hash could not be read (${file.sha256Base64.reason}), so it cannot be reviewed yet.`] };
+    }
+    let reviewedBytes;
+    try {
+        reviewedBytes = deps.readFileBytes(opts.file);
+    }
+    catch (err) {
+        return { code: 1, lines: [`Cannot read the reviewed file: ${err instanceof Error ? err.message : String(err)}`] };
+    }
+    const reviewedHash = createHash("sha256").update(reviewedBytes).digest("base64");
+    if (reviewedHash !== file.sha256Base64.value) {
+        return { code: 1, lines: ["That file's bytes do not match the current stored final cut. Pull and review the current file."] };
+    }
+    const res = await deps.post(REVIEW_PATH, {
+        runId,
+        verdict: opts.verdict,
+        storageId: file.storageId,
+        sha256Base64: file.sha256Base64.value,
+        filename: path.basename(opts.file),
+        ...(opts.gradeVersion ? { gradeVersion: opts.gradeVersion } : {}),
+        ...(opts.mediaVersion ? { mediaVersion: opts.mediaVersion } : {}),
+        resolutions: opts.resolutions,
+        disagreements: opts.disagreements,
+        ...(opts.humanListens?.length ? { humanListens: opts.humanListens } : {}),
+    });
+    if (missingRouteLine(res, "exodus video review"))
+        return { code: 1, lines: ["This Exodus server does not record final reviews yet."] };
+    if (!res.ok)
+        return errorResult(res, opts.json);
+    const verdict = res.data;
+    if (opts.json)
+        return { code: 0, lines: [JSON.stringify({ runId, storageId: file.storageId, filename: path.basename(opts.file), sha256Base64: reviewedHash, ...verdict })] };
+    const lines = [`Recorded your ${opts.verdict} of ${path.basename(opts.file)} — ${file.storageId} (sha256 base64 ${reviewedHash}).`];
+    if (verdict.ok)
+        lines.push("This final-file review accepts these exact bytes. Delivery still checks the current run gates.");
+    for (const b of verdict.blockers) {
+        lines.push(b.finding
+            ? `  still open: ${b.finding.key} [${b.finding.status}] — answer it with --resolve "${b.finding.key}|accepted-as-is|<why>"`
+            : `  blocks delivery: ${b.kind}${b.scene !== undefined ? ` (scene ${b.scene})` : ""}`);
+    }
+    return { code: 0, lines };
+}
+async function readSongListen(runId, deps) {
+    const res = await deps.get(`${SONG_PATH}?runId=${encodeURIComponent(runId)}`);
+    const data = res.ok ? res.data : null;
+    return { res, song: data?.song ?? null, hold: data?.hold ?? null };
+}
+const SONG_NOT_ON_THIS_SERVER = "This Exodus server does not hold Song masters for approval yet.";
+export async function songListenFlow(runId, json, deps) {
+    const { res, song, hold } = await readSongListen(runId, deps);
+    if (missingRouteLine(res, "exodus video song"))
+        return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
+    if (!res.ok)
+        return errorResult(res, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ runId, song, ...(hold ? { hold } : {}) })] };
+    if (hold)
+        return { code: 0, lines: [
+                `SONG HELD — ad run ${runId}`,
+                `  ${hold.reason}`,
+                `  No master is ready to approve. Try again on step ${hold.nodeId} to resume the retained song, not a new run.`,
+            ] };
+    if (!song)
+        return { code: 0, lines: ["This run holds no Song master yet, so there is nothing to listen to."] };
+    const heard = song.coverage.status === "full" ? "every lyric line heard" : `lyric ${song.coverage.status}${song.coverage.unheardLines.length ? `; no word heard on line ${song.coverage.unheardLines.map((n) => n + 1).join(", ")}` : ""}`;
+    return {
+        code: 0,
+        lines: [
+            `SONG MASTER — ad run ${runId} (${song.source}, ${song.status}, ${song.seconds}s, track ${song.identity.track})`,
+            `  ${song.stop}`,
+            `  listen: ${song.audioUrl}`,
+            `  master sha256: ${song.identity.masterSha256}`,
+            `  lyric sha256: ${song.identity.lyricSha256} — ${heard}`,
+            ...song.lyric.split("\n").map((line, i) => `    ${i + 1}. ${line}`),
+            ...(song.cannotApprove ? [`  cannot be approved: ${song.cannotApprove}`] : []),
+            song.status === "approved"
+                ? `  approved at ${new Date(song.approvedAt ?? 0).toISOString()}`
+                : `  approve it after listening: exodus video song approve ${runId} --master ${song.identity.masterSha256}`,
+        ],
+    };
+}
+export async function songApproveFlow(runId, masterSha256, json, deps) {
+    const { res, song, hold } = await readSongListen(runId, deps);
+    if (missingRouteLine(res, "exodus video song approve"))
+        return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
+    if (!res.ok)
+        return errorResult(res, json);
+    if (hold)
+        return { code: 1, lines: [`No Song master is ready to approve: ${hold.reason}`] };
+    if (!song)
+        return { code: 1, lines: ["This run holds no Song master yet, so there is nothing to approve."] };
+    if (song.identity.masterSha256 !== masterSha256) {
+        return { code: 1, lines: [`The Song master now held is ${song.identity.masterSha256}, not the one you listened to. Listen again: exodus video song ${runId}`] };
+    }
+    const approved = await deps.post(SONG_APPROVE_PATH, { runId, ...song.identity });
+    if (!approved.ok)
+        return errorResult(approved, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, ...approved.data })] };
+    return { code: 0, lines: ["Song master approved. The run may go on to timing and motion."] };
+}
+export async function songImportFlow(runId, opts, json, deps) {
+    const stat = deps.statFile(opts.file);
+    if (!stat)
+        return { code: 1, lines: [`No such file: ${opts.file}`] };
+    const policy = ASSET_UPLOAD_POLICY.audio;
+    const mime = policy.mimeByExtension[path.extname(opts.file).toLowerCase()];
+    if (!mime)
+        return { code: 1, lines: [`"${path.basename(opts.file)}" isn't an audio file the dashboard accepts. It takes ${policy.accepts}.`] };
+    if (stat.size > policy.maxBytes)
+        return { code: 1, lines: [`"${path.basename(opts.file)}" is over the ${Math.round(policy.maxBytes / MB)}MB limit.`] };
+    const lyric = opts.lyric.startsWith("@") ? deps.readFile(opts.lyric.slice(1)) : opts.lyric;
+    let bytes;
+    try {
+        bytes = deps.readFileBytes(opts.file);
+    }
+    catch (e) {
+        return { code: 1, lines: [`Can't read "${opts.file}": ${e instanceof Error ? e.message : String(e)}`] };
+    }
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const minting = await withUploadRetry("mint", deps, () => deps.post(ASSET_UPLOAD_URL_PATH, {}));
+    if (!minting.ok)
+        return uploadRetryResult(minting, json);
+    if (!minting.value.ok)
+        return errorResult(minting.value, json);
+    const { uploadUrl, receiptId } = minting.value.data;
+    if (!uploadUrl || !receiptId)
+        return { code: 1, lines: ["The server did not hand back a place to upload to."] };
+    const storing = await withUploadRetry("store", deps, () => deps.uploadBytes(uploadUrl, mime, bytes));
+    if (!storing.ok)
+        return uploadRetryResult(storing, json);
+    if (!storing.value.ok || !storing.value.storageId)
+        return { code: 1, lines: [`Upload failed (HTTP ${storing.value.status})`] };
+    const storageId = storing.value.storageId;
+    const registering = await withUploadRetry("register", deps, () => deps.post(ASSETS_PATH, { storageId, receiptId, filename: path.basename(opts.file) }));
+    if (!registering.ok)
+        return uploadRetryResult(registering, json);
+    if (!registering.value.ok)
+        return errorResult(registering.value, json);
+    const assetId = registering.value.data.assetId;
+    if (!assetId)
+        return { code: 1, lines: ["The server stored the file but did not say what to call it."] };
+    const res = await deps.post(SONG_IMPORT_PATH, {
+        runId,
+        assetId,
+        sha256,
+        lyric,
+        rightsStatement: opts.rights,
+        ...(opts.trim ? { trim: opts.trim } : {}),
+    });
+    if (missingRouteLine(res, "exodus video song import"))
+        return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
+    if (!res.ok)
+        return errorResult(res, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, assetId, sha256 })] };
+    return {
+        code: 0,
+        lines: [
+            `Your recording is the Song for this run (sha256 ${sha256}).`,
+            `Listen to it and approve it before motion: exodus video song ${runId}`,
+        ],
+    };
+}
 const VALUE_FLAGS = new Set([
     "show",
     "script",
@@ -3796,6 +5379,26 @@ const VALUE_FLAGS = new Set([
     "frame",
     "pacing",
     "source-record",
+    "adaptation-plan",
+    "resume-script",
+    "requested-seconds",
+    "pictures-per-scene",
+    "product",
+    "product-context",
+    "audience",
+    "offer",
+    "mechanism",
+    "elements",
+    "voices",
+    "input-mode",
+    "structure",
+    "reference",
+    "subject",
+    "adapt",
+    "template-brief",
+    "song-controls",
+    "mechanism-plan",
+    "authorize-preparation",
     "note",
     "out",
     "file",
@@ -3806,6 +5409,11 @@ const VALUE_FLAGS = new Set([
     "set",
     "clear",
     "from",
+    "to",
+    "master",
+    "lyric",
+    "rights",
+    "request-quote",
 ]);
 export function parsePositional(args = process.argv.slice(3)) {
     const out = [];
@@ -3849,6 +5457,12 @@ export async function run(flags, occurrences) {
     if (sub === "shows")
         return printResult(await showsFlow(json, defaultDeps));
     if (sub === "start") {
+        if (occurrences.some(({ flag }) => flag === "input-options")) {
+            const options = await templateInputOptionsFlow(occurrences, json, defaultDeps);
+            if (options.usage)
+                usage(options.lines[0] ?? "");
+            return printResult(options);
+        }
         const plan = planVideoStart(flags, occurrences);
         if (plan.kind === "usage")
             usage(plan.line);
@@ -3882,6 +5496,9 @@ export async function run(flags, occurrences) {
         "pull",
         "upload",
         "director",
+        "review",
+        "song",
+        "quote",
     ];
     if (sub === "voices" && flags["catalog"] !== undefined && flags["catalog"] !== false) {
         return printResult(await voiceCatalogFlow(runId, json, defaultDeps));
@@ -3895,6 +5512,37 @@ export async function run(flags, occurrences) {
         }
         return printResult(await statusFlow(runId, json, defaultDeps));
     }
+    if (sub === "review") {
+        const plan = parseReviewFlags(flags, occurrences);
+        if (!plan.ok)
+            usage(plan.line);
+        return printResult(await reviewFlow(runId, { ...plan.opts, json }, defaultDeps));
+    }
+    if (sub === "song") {
+        if (runId === "approve" || runId === "import") {
+            const songRun = rest[1];
+            if (!songRun)
+                usage(`video song ${runId} needs a run id: exodus video song ${runId} <runId>`);
+            if (runId === "approve") {
+                const master = flagString(flags, "master");
+                if (!master)
+                    usage("video song approve needs --master <masterSha256>, the master you listened to.");
+                return printResult(await songApproveFlow(songRun, master, json, defaultDeps));
+            }
+            const file = flagString(flags, "file");
+            const lyric = flagString(flags, "lyric");
+            const rights = flagString(flags, "rights");
+            if (!file || !lyric || !rights)
+                usage('video song import needs --file <audio>, --lyric <text|@file> and --rights "<who owns it and consents>".');
+            const from = flagString(flags, "from");
+            const to = flagString(flags, "to");
+            if ((from === undefined) !== (to === undefined) || (from !== undefined && !(Number(from) >= 0 && Number(to) > Number(from)))) {
+                usage("video song import --from and --to are a cut of the recording in seconds, given together, with --to after --from.");
+            }
+            return printResult(await songImportFlow(songRun, { file, lyric, rights, ...(from !== undefined ? { trim: { from: Number(from), to: Number(to) } } : {}) }, json, defaultDeps));
+        }
+        return printResult(await songListenFlow(runId, json, defaultDeps));
+    }
     if (sub === "storyboard")
         return printResult(await storyboardFlow(runId, json, defaultDeps));
     if (sub === "director") {
@@ -3903,11 +5551,18 @@ export async function run(flags, occurrences) {
             usage(`video director needs on, off or follow: exodus video director ${runId} on`);
         return printResult(await directorFlow(runId, choice.on, json, defaultDeps));
     }
+    if (sub === "quote")
+        return printResult(await quoteFlow(runId, json, defaultDeps, flags["private"] !== undefined && flags["private"] !== false));
     if (sub === "approve") {
+        const requestQuoteHash = flagString(flags, "request-quote");
+        if (flags["request-quote"] !== undefined && !/^[0-9a-f]{64}$/.test(requestQuoteHash ?? "")) {
+            usage("--request-quote needs the reviewSha256 printed by exodus video quote.");
+        }
         return printResult(await approveFlow(runId, {
             json,
             approveStaleCut: flags["approve-stale-cut"] === true,
             acceptFindings: flags["accept-findings"] === true,
+            ...(requestQuoteHash ? { requestQuoteHash } : {}),
         }, defaultDeps));
     }
     if (sub === "flag") {

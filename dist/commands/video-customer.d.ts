@@ -13,6 +13,8 @@ export type CustomerStopReason = {
 } | {
     kind: "plan-too-big";
 } | {
+    kind: "plan-rejected";
+} | {
     kind: "keys-missing";
     keys: string[];
 };

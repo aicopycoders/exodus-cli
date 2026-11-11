@@ -8,6 +8,10 @@ export type ScriptRunOptions = {
     conceits: {
         key: string;
         label: string;
+        style?: {
+            slug: string;
+            label: string;
+        };
     }[];
     styles: {
         slug: string;
@@ -26,6 +30,7 @@ export interface ClipWord {
     w: string;
     s: number;
     e: number;
+    lineId?: string;
 }
 export type ClipQcTakeNeighbours = {
     state: "not-applicable";
@@ -106,6 +111,7 @@ export type ArtifactSubset = {
     voicePitchHz?: number;
     voicePitchMethod?: string;
     replannedIdea?: ReplannedIdea;
+    voiceLock?: unknown;
 } | {
     type: "audio";
     sceneIndex?: number;
@@ -181,12 +187,15 @@ export interface VideoRun {
     error?: string;
     pauseReason?: BuilderPauseReason;
     pausedNodeId?: string;
+    requestQuotePending?: boolean;
+    sourceEditMap?: true;
     nodes: VideoRunNode[];
     pauseAhead?: WorkflowRun["pauseAhead"];
     castLock?: PullCastLock | null;
     provenance?: RunProvenance;
     musicBed?: boolean;
     videoChoice?: RunVideoChoice;
+    songAsVoice?: true;
     shots?: RunShots;
     storyboardAutoApproval?: {
         outcome: "approved" | "held";
@@ -295,6 +304,8 @@ export type RunStop = {
     missingScenes?: MissingScene[];
     framesNodeId?: string;
 } | {
+    at: "request-quote";
+} | {
     at: "paused";
     nodeId?: string;
     reason?: string;
@@ -354,6 +365,7 @@ export interface ManifestScene {
     voiceFirstBlockedBy: string[] | null;
     voicePitchHz: number | null;
     voicePitchMethod: string | null;
+    voiceLock?: unknown;
     clipStatus: string;
     error: string | null;
     flagged: boolean;
@@ -419,7 +431,12 @@ export interface VideoManifest {
         videoModel: string;
         voiceMode: string;
     };
+    clipAudio?: "keep" | "discard";
     shots?: RunShots;
+    lineage?: {
+        file: string | null;
+        reason?: string;
+    };
 }
 export interface RunShots {
     frame?: string;
@@ -467,6 +484,31 @@ export interface ScriptStartOptions {
     stopAtScript?: true;
     rewriteToFit?: true;
     sourceRecordFile?: string;
+    adaptationPlanFile?: string;
+    resumeScriptFile?: string;
+    requestedSeconds?: number;
+    picturesPerScene?: 1 | 3;
+    productId?: string;
+    elementsInput?: string;
+    voicesInput?: string;
+    inputMode?: "automatic" | "manual" | "hybrid";
+    structure?: string;
+    reference?: string;
+    subject?: "product" | "service" | "non-product";
+    adaptationIntent?: string;
+    describe?: true;
+    keepOriginal?: true;
+    writerBrief?: {
+        product?: string;
+        audience?: string;
+        offer?: string;
+        mechanism?: string;
+    };
+    templateBriefInput?: string;
+    songControlsInput?: string;
+    mechanismPlanInput?: string;
+    quotePreparation?: true;
+    authorizePreparationFile?: string;
     wait: boolean;
     json: boolean;
     onProgressLine?: (line: string) => void;
@@ -508,10 +550,12 @@ export declare function parseDirectorSwitch(word: string | undefined): {
 export declare function directorFlow(runId: string, on: DirectorSwitch, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function rejectedDraftFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function storyboardFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function quoteFlow(runId: string, json: boolean, deps: VideoDeps, privateExport?: boolean): Promise<FlowResult>;
 export declare function approveFlow(runId: string, opts: {
     json: boolean;
     approveStaleCut: boolean;
     acceptFindings?: boolean;
+    requestQuoteHash?: string;
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function flagFlow(runId: string, note: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function retryFrameFlow(runId: string, nodeId: string | undefined, sceneIndex: number, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
@@ -683,8 +727,56 @@ export interface CutWord {
 export declare function cutSidecars(filePath: string, deps: VideoDeps): {
     cutScenes?: CutScene[];
     cutWords?: CutWord[];
+    finalSourceMap?: unknown;
 };
-export declare function uploadFlow(runId: string, filePath: string, durationFlag: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function uploadFlow(runId: string, filePath: string, durationFlag: string | undefined, json: boolean, deps: VideoDeps, options?: {
+    bindFinalBytes?: boolean;
+}): Promise<FlowResult>;
+export interface ReviewOptions {
+    verdict: "accept" | "reject";
+    file: string;
+    resolutions: Array<{
+        findingKey: string;
+        resolution: "accepted-as-is" | "waived" | "fixed";
+        note: string;
+    }>;
+    disagreements: Array<{
+        findingKey: string;
+        note: string;
+    }>;
+    humanListens?: Array<{
+        scope?: "selected-take" | "final-file";
+        sceneIndex?: number;
+        term: string;
+        speaker: string;
+        heard: string;
+        accepted: boolean;
+    }>;
+    gradeVersion?: string;
+    mediaVersion?: string;
+}
+export declare function parseReviewFlags(flags: Record<string, string | boolean>, occurrences: FlagOccurrence[]): {
+    ok: true;
+    opts: ReviewOptions;
+} | {
+    ok: false;
+    line: string;
+};
+export declare function reviewFlow(runId: string, opts: ReviewOptions & {
+    json: boolean;
+}, deps: VideoDeps): Promise<FlowResult>;
+export declare function songListenFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function songApproveFlow(runId: string, masterSha256: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export interface SongImportOptions {
+    file: string;
+    lyric: string;
+    rights: string;
+    trim?: {
+        from: number;
+        to: number;
+    };
+}
+export declare function songImportFlow(runId: string, opts: SongImportOptions, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function parsePositional(args?: string[]): string[];
 export declare function run(flags: Record<string, string | boolean>, occurrences: FlagOccurrence[]): Promise<void>;
 export {};

@@ -198,6 +198,7 @@ Usage:
   exodus video swipe show <swipeId> [--json]
   exodus video swipe list [--json]
   exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--yes] [--wait] [--json]
+  exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull)
@@ -435,7 +436,8 @@ what it buys and who pays. The CLI prints no price for any of them.
   --ad <swipeAdId>     An ad in the brand's swipe library (swipe). An ad
                        broken down before costs nothing
   --yes                The member said yes to this paid step (swipe, swipe
-                       template, swipe write, swipe start)
+                       template, swipe write, swipe start), or to every paid
+                       step of the sheet (swipe run)
   --product <id>       The product the swipe is for (swipe write). exodus
                        video swipe products lists them
   --mode <mode>        What to swipe (swipe write). whole-ad if left off:
@@ -468,10 +470,28 @@ what it buys and who pays. The CLI prints no price for any of them.
   --script <file>      Your own script (swipe write --mode their-format)
   --style <look>       A look other than the swipe's own (swipe start)
   --title "<name>"     The ad's name (swipe start). Admin-only
+  --sheet <file>       The whole swipe in one JSON file (swipe run): the ads
+                       (sources, each a url, an ad id or a file), the product,
+                       the personas, mode, closeness, look or script, the
+                       characters, oneShot, style, title and finish. One video
+                       for each ad and persona, each with its run's own cast:
+                       one breakdown and template per ad, one write per ad and
+                       persona, one run per video. Without --yes it checks the
+                       sheet, lists the videos and prints each paid step and
+                       who pays, and sends nothing. With --yes it runs them
+                       all, ad by ad. It keeps <file>.state.json beside the
+                       sheet, so a second run goes on where the first stopped
+                       and never buys a step twice
+  --status             Each video's state and any cost the server reports
+                       (swipe run). Reads only
+  --persona <name>     Only that persona's videos (swipe run)
+  --retry-refused      Write again an ad the writer refused (swipe run). Paid,
+                       so it needs --yes too
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
-status waits for the breakdown; on swipe start, for the run.
+status waits for the breakdown; on swipe start, for the run; on swipe run, for
+each run once every ad is started.
 
 Who can use what. Admins get every command here. Beta testers with video
 switched on get these, on their own brands: start (--script, --conceit,
@@ -5971,6 +5991,8 @@ const VALUE_FLAGS = new Set([
     "closeness",
     "look",
     "title",
+    "sheet",
+    "persona",
 ]);
 export function parsePositional(args = process.argv.slice(3)) {
     const out = [];

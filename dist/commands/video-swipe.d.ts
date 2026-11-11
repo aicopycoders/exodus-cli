@@ -93,6 +93,7 @@ export interface SwipeView {
         mode: ServerMode;
         closeness?: number;
         look?: string;
+        memberScript?: string;
     };
     outcome: {
         kind: "written";
@@ -108,6 +109,7 @@ export interface SwipeView {
 export interface SwipeListRow {
     _id: string;
     breakdownId: string;
+    createdAt?: number;
     request: {
         mode: ServerMode;
         closeness?: number;
@@ -160,6 +162,7 @@ export interface WriteAsk {
     closeness: number;
     look?: string;
     scriptFile?: string;
+    scriptText?: string;
 }
 export interface StartAsk {
     style?: string;
@@ -208,12 +211,47 @@ export type SwipePlan = {
     swipeId: string;
     ask: StartAsk;
     opts: SwipeOpts;
+} | {
+    kind: "run";
+    sheetFile: string;
+    retryRefused: boolean;
+    status: boolean;
+    persona: string | null;
+    opts: SwipeOpts;
 };
 export declare function parseSwipeMode(value: string): ServerMode | null;
 export declare function parseCloseness(value: string): number | null;
 export declare function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]): SwipePlan;
+export interface ChoiceWords {
+    who: string;
+    flag: (name: string) => string;
+    set: (name: string, value: string) => string;
+}
+type Given = string | undefined | null;
+export declare function writeChoicesOf(given: {
+    mode: Given;
+    closeness: Given;
+    look: Given;
+    script: Given;
+}, words: ChoiceWords): {
+    ask: Omit<WriteAsk, "productId">;
+} | {
+    problem: string;
+};
+export declare function startChoicesOf(given: {
+    style: Given;
+    title: Given;
+    music: boolean;
+    oneShot: boolean;
+}, words: ChoiceWords): {
+    ask: StartAsk;
+} | {
+    problem: string;
+};
 export interface SwipeRunOptions extends SwipeOpts {
     onProgressLine?: (line: string) => void;
+    onJob?: (job: string) => void;
+    beforePaidAsk?: () => void;
 }
 export declare function swipeBreakdownFlow(source: SwipeSource, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps, full?: boolean): Promise<FlowResult>;
@@ -224,6 +262,138 @@ export declare function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts:
 export declare function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare const SHEET_FIELDS: readonly ["sources", "product", "personas", "mechanism", "guidance", "mode", "closeness", "look", "script", "characters", "finish", "oneShot", "style", "title", "music"];
+export declare const SHEET_VIDEO_WARNING = 6;
+export interface SheetSource {
+    key: string;
+    given: {
+        url: string;
+    } | {
+        ad: string;
+    } | {
+        file: string;
+    };
+    source: SwipeSource;
+}
+interface SheetWrite {
+    ask: Omit<WriteAsk, "productId">;
+    scriptSha256: string | null;
+}
+export interface SheetPersona {
+    name: string;
+    script: string | null;
+    write: SheetWrite | null;
+}
+export interface SheetCharacter {
+    index: number;
+    pick: {
+        elements: unknown[];
+        voices: unknown[];
+    } | null;
+}
+export interface SwipeSheet {
+    sources: SheetSource[];
+    productId: string | null;
+    personas: SheetPersona[];
+    write: SheetWrite | null;
+    unusedChoices: string[];
+    characters: SheetCharacter[];
+    start: StartAsk;
+    notUsed: string[];
+    moved: string[];
+}
+export interface SheetVideo {
+    n: number;
+    source: SheetSource;
+    persona: SheetPersona | null;
+    character: SheetCharacter;
+}
+export interface WrittenWith {
+    productId: string;
+    mode: ServerMode;
+    closeness: number | null;
+    look: string | null;
+    scriptSha256: string | null;
+}
+export type SheetStep = "breakdown" | "template" | "write" | "start";
+export interface SourcePending {
+    step: "breakdown" | "template";
+    at: string;
+    job?: string;
+}
+export interface WritePending {
+    at: string;
+    job?: string;
+    asked?: WrittenWith;
+}
+export interface StartPending {
+    at: string;
+    swipeId: string;
+}
+export interface SheetRunState {
+    runId: string | null;
+    watch: string | null;
+    pending: StartPending | null;
+    lastError: string | null;
+    updatedAt: string | null;
+}
+export interface SheetWriteState {
+    swipeId: string | null;
+    writtenWith: WrittenWith | null;
+    refused: string | null;
+    pending: WritePending | null;
+    lastError: string | null;
+    updatedAt: string | null;
+    runs: Record<string, SheetRunState>;
+}
+export interface SheetSourceState {
+    kind: SwipeSource["kind"];
+    breakdownId: string | null;
+    templateDone: boolean;
+    pending: SourcePending | null;
+    lastError: string | null;
+    updatedAt: string | null;
+    writes: Record<string, SheetWriteState>;
+}
+export interface SheetState {
+    version: 3;
+    sheet: string;
+    sources: Record<string, SheetSourceState>;
+}
+export declare const sheetStatePath: (sheetFile: string) => string;
+export declare function readSwipeSheet(sheetFile: string, deps: VideoDeps): {
+    sheet: SwipeSheet;
+} | {
+    problem: string;
+};
+export declare function sheetVideos(sheet: SwipeSheet, only: string | null): {
+    videos: SheetVideo[];
+    personas: Array<SheetPersona | null>;
+} | {
+    problem: string;
+};
+export interface SheetFiles {
+    createNew(file: string, text: string): boolean;
+    remove(file: string): void;
+    writeAtomic(file: string, text: string): void;
+    pid: number;
+    host: string;
+    isAlive(pid: number): boolean;
+    realPath(file: string): string;
+    onStop(cleanup: () => void): () => void;
+}
+export type SheetDeps = VideoDeps & {
+    sheetFiles?: SheetFiles;
+};
+export declare const nodeSheetFiles: SheetFiles;
+export declare const sheetLockPath: (sheetFile: string) => string;
+export type SheetVideoState = "not started" | "breakdown" | "template" | "written" | "refused" | "running" | "storyboard" | "waiting" | "done" | "failed" | "unread";
+export interface SheetFlowOptions extends SwipeRunOptions {
+    retryRefused: boolean;
+    status: boolean;
+    persona: string | null;
+}
+export declare function swipeSheetFlow(given: string, opts: SheetFlowOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function runSwipePlan(plan: Exclude<SwipePlan, {
     kind: "usage";
 }>, deps: VideoDeps, onProgressLine?: (line: string) => void): Promise<FlowResult>;

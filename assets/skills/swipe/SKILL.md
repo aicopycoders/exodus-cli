@@ -118,7 +118,7 @@ On "make this a video", hand over to the `exodus-video` skill's "From one senten
 
 From there the walkthrough runs as written: a yes before each paid step, with its price where the CLI prints one, and the user's own picks at each stop.
 
-A video ad to swipe as it is made, from its file, its link or its id in Exodus, skips this skill: it goes to the `exodus-video` skill's "Swiping a video ad": it reads the ad, asks one sheet (persona, mechanism, how close, characters, run, finish, and how many videos), and makes the videos on one yes.
+A video ad to swipe as it is made, from its file, its link or its id in Exodus, skips this skill: it goes to the `exodus-video` skill's "Swiping a video ad": it reads the ad, asks one sheet (persona, mechanism, how close, characters, run, finish, and how many videos), and makes the videos on one yes. With a persona or a mechanism, and the keys this skill needs, it calls this skill's bot as sections 3 and 4 say, then makes the video from those lines.
 
 ## Security
 

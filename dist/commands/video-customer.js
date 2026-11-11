@@ -71,6 +71,13 @@ export function customerStageLines(run, page) {
         case "filming":
         case "editing":
             return [WORKING_SENTENCE[run.stage]];
+        case "picking":
+            return ["This video is waiting for its picks: a face, a voice and a room for each part. The team makes them for now."];
+        case "pilot":
+            return [
+                "Your pilot clip is being checked: one clip is made first, so a wrong voice or face is caught before the others are made. The team checks it, and redoes it if needed, before the others are made.",
+                `Watch it here: ${page}`,
+            ];
         case "review":
             return [
                 "Your storyboard is ready for your review.",

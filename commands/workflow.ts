@@ -460,7 +460,9 @@ export type WorkflowNodeKind =
   // {{variable}} slots ARE its required input ports. It COEXISTS with the older
   // bot node carrying slug "prompt" — nothing is converted — so export/import
   // must round-trip both shapes.
-  | "prompt";
+  | "prompt"
+  // Stop 2: the picks box a format puts in front of a script run's storyboard — mirror of convex NODE_KINDS.
+  | "picks";
 
 /**
  * #861 (MS-7): a workflow's exposed input slot — mirror of convex/lib/workflow/
@@ -1171,7 +1173,9 @@ export type WorkflowPauseReason =
   | "repair"
   | "slots"
   | "call"
-  | "checkpoint";
+  | "checkpoint"
+  // Stop 4: a video run made its pilot clip and waits before the other clips.
+  | "pilot";
 
 /**
  * #891: a slot a "slots"-parked run awaits — mirror of convex
@@ -1332,11 +1336,19 @@ export interface WorkflowRun {
    * check passes, so it only truly pauses when one fails. Absent on runs that
    * wait for a click, and on every backend older than #2587.
    */
-  pauseAhead?: { nodeId: string; after: "frames" | "storyboard"; selfApproves?: true };
+  pauseAhead?: { nodeId: string; after: "frames" | "storyboard" | "picks" | "pilot"; selfApproves?: true };
 }
 
 /** #1883: the one sentence both status commands say about a coming pause. */
 export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>): string {
+  // Stop 2: the picks stop comes before the storyboard.
+  if (ahead.after === "picks") {
+    return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
+  }
+  // Stop 4: past the storyboard, the pilot clip comes before the others.
+  if (ahead.after === "pilot") {
+    return "This run will stop after its pilot clip. One clip is made and checked first; the other clips are made only when you approve it.";
+  }
   if (ahead.after === "frames" && ahead.selfApproves) {
     return "When the frames are ready, the app checks the storyboard and approves it itself if the checks pass, then goes on to the voices and clips. It only stops for your approval if a check finds a problem. The reference, cast and scene pictures are made first (a few cents each).";
   }
@@ -1757,7 +1769,7 @@ function gateParkedNodeId(
   pausedNodeId: string | undefined,
 ): string | undefined {
   if (!status || normalizeRunStatus(status) !== "awaiting-approval") return undefined;
-  if (pauseReason === "taste" || pauseReason === "checkpoint" || pauseReason === undefined) {
+  if (pauseReason === "taste" || pauseReason === "checkpoint" || pauseReason === "pilot" || pauseReason === undefined) {
     return pausedNodeId;
   }
   return undefined;
@@ -1806,6 +1818,14 @@ export function formatPauseNotice(
   // would only refuse the run.
   if (pauseReason === "call") {
     return ["  ⏸ waiting on a child workflow run — it resumes on its own."];
+  }
+  // Stop 4: the pilot clip of a video run. `exodus video status` prints its lines.
+  if (pauseReason === "pilot") {
+    return [
+      "  ⏸ paused after the pilot clip — the other clips wait for your approval.",
+      `     Resolve here:  exodus video status ${runId}`,
+      `     Or in the app: ${dashboardUrl}${RUN_PAGE_PREFIX}${runId}`,
+    ];
   }
   // #998: a checkpoint park means the run reached a Checkpoint box — say exactly
   // that, then point at the checkpoint verb (same 3-line shape).
@@ -4132,10 +4152,10 @@ function isParkedSnapshot(raw: Record<string, unknown>): boolean {
   return typeof status === "string" && normalizeRunStatus(status) === "awaiting-approval";
 }
 
-type VideoParkStop = Extract<RunStop, { at: "storyboard-gate" | "final-watch" }>;
+type VideoParkStop = Extract<RunStop, { at: "storyboard-gate" | "final-watch" | "picks" | "pilot" }>;
 
 /**
- * #1788: the two parks EVERY `--wait` ends on, whichever verb is waiting. A
+ * #1788: the parks EVERY `--wait` ends on, whichever verb is waiting. A
  * video run parks at its storyboard gate and again at the final watch with no
  * `pauseReason` at all — the builder vocabulary (checkpoint / repair / slots /
  * call) never describes them — and both are decisions only the caller can
@@ -4144,7 +4164,8 @@ type VideoParkStop = Extract<RunStop, { at: "storyboard-gate" | "final-watch" }>
  * `workflow run --wait` was never told the run had parked and burned to the
  * 60-minute cap. Classified by the same `classifyRun` that `exodus video
  * status` / `video wait` use, so the stop and its next-step lines are one
- * vocabulary on both routes. Every other park is NOT a stop here: a Checkpoint
+ * vocabulary on both routes. Stop 2's picks park is the same kind of decision
+ * and ends the wait too. Every other park is NOT a stop here: a Checkpoint
  * / repair / slots park prints its banner once and the loop keeps polling so a
  * resolve from another shell or the app carries the run on to its finish, and
  * a "call" park (a parent waiting on its child run) resumes on its own.
@@ -4152,7 +4173,7 @@ type VideoParkStop = Extract<RunStop, { at: "storyboard-gate" | "final-watch" }>
 function videoParkStop(raw: Record<string, unknown>): VideoParkStop | undefined {
   if (!isParkedSnapshot(raw)) return undefined;
   const stop = classifyRun(asVideoRun(raw));
-  return stop.at === "storyboard-gate" || stop.at === "final-watch" ? stop : undefined;
+  return stop.at === "storyboard-gate" || stop.at === "final-watch" || stop.at === "picks" || stop.at === "pilot" ? stop : undefined;
 }
 
 async function waitForRun(
@@ -5079,6 +5100,7 @@ export function parkBadge(pauseReason: string | undefined): string {
   if (pauseReason === "repair") return "repair";
   if (pauseReason === "slots") return "slots";
   if (pauseReason === "checkpoint") return "checkpoint";
+  if (pauseReason === "pilot") return "pilot";
   return "legacy";
 }
 
@@ -5163,6 +5185,8 @@ function describePark(run: WorkflowRun): string {
       return "parked on a child workflow";
     case "checkpoint":
       return `parked at a checkpoint (use: exodus workflow checkpoint ${run._id})`;
+    case "pilot":
+      return `parked after its pilot clip (use: exodus video status ${run._id})`;
     default:
       return "parked at the cost gate (legacy)";
   }
@@ -5175,6 +5199,7 @@ const PARK_LABEL: Record<WorkflowPauseReason, string> = {
   slots: "slot answers",
   call: "a child workflow",
   checkpoint: "a checkpoint approval",
+  pilot: "the pilot clip's approval",
 };
 
 /**

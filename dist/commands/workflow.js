@@ -380,6 +380,12 @@ export function formatRulesLine(provenance) {
     return `Format rules: ${rigName}${version}${where}.${borrowed}`;
 }
 export function pauseAheadLine(ahead) {
+    if (ahead.after === "picks") {
+        return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
+    }
+    if (ahead.after === "pilot") {
+        return "This run will stop after its pilot clip. One clip is made and checked first; the other clips are made only when you approve it.";
+    }
     if (ahead.after === "frames" && ahead.selfApproves) {
         return "When the frames are ready, the app checks the storyboard and approves it itself if the checks pass, then goes on to the voices and clips. It only stops for your approval if a check finds a problem. The reference, cast and scene pictures are made first (a few cents each).";
     }
@@ -562,7 +568,7 @@ function progressLine(node, parked = false) {
 function gateParkedNodeId(status, pauseReason, pausedNodeId) {
     if (!status || normalizeRunStatus(status) !== "awaiting-approval")
         return undefined;
-    if (pauseReason === "taste" || pauseReason === "checkpoint" || pauseReason === undefined) {
+    if (pauseReason === "taste" || pauseReason === "checkpoint" || pauseReason === "pilot" || pauseReason === undefined) {
         return pausedNodeId;
     }
     return undefined;
@@ -577,6 +583,13 @@ export function formatPauseNotice(pauseReason, runId, dashboardUrl, { workerStop
     }
     if (pauseReason === "call") {
         return ["  ⏸ waiting on a child workflow run — it resumes on its own."];
+    }
+    if (pauseReason === "pilot") {
+        return [
+            "  ⏸ paused after the pilot clip — the other clips wait for your approval.",
+            `     Resolve here:  exodus video status ${runId}`,
+            `     Or in the app: ${dashboardUrl}${RUN_PAGE_PREFIX}${runId}`,
+        ];
     }
     if (pauseReason === "checkpoint") {
         return [
@@ -2095,7 +2108,7 @@ function videoParkStop(raw) {
     if (!isParkedSnapshot(raw))
         return undefined;
     const stop = classifyRun(asVideoRun(raw));
-    return stop.at === "storyboard-gate" || stop.at === "final-watch" ? stop : undefined;
+    return stop.at === "storyboard-gate" || stop.at === "final-watch" || stop.at === "picks" || stop.at === "pilot" ? stop : undefined;
 }
 async function waitForRun(runId, opts, deps) {
     const seen = new Map();
@@ -2662,6 +2675,8 @@ export function parkBadge(pauseReason) {
         return "slots";
     if (pauseReason === "checkpoint")
         return "checkpoint";
+    if (pauseReason === "pilot")
+        return "pilot";
     return "legacy";
 }
 export function invocationBadge(row) {
@@ -2725,6 +2740,8 @@ function describePark(run) {
             return "parked on a child workflow";
         case "checkpoint":
             return `parked at a checkpoint (use: exodus workflow checkpoint ${run._id})`;
+        case "pilot":
+            return `parked after its pilot clip (use: exodus video status ${run._id})`;
         default:
             return "parked at the cost gate (legacy)";
     }
@@ -2735,6 +2752,7 @@ const PARK_LABEL = {
     slots: "slot answers",
     call: "a child workflow",
     checkpoint: "a checkpoint approval",
+    pilot: "the pilot clip's approval",
 };
 async function preflightPark(runId, expected, verb, json, deps) {
     const res = await deps.get(`${STATUS_PATH}?runId=${encodeURIComponent(runId)}`);

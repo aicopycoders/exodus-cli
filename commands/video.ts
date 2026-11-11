@@ -107,6 +107,16 @@ The whole loop, in order:
      also settle the voices here, at the launch, instead of at step 5 — the
      launch flags all live in: exodus workflow --help
 
+     A format with a picks stop stops first, before anything is planned:
+     exodus video picks <runId>
+       The faces, voices and rooms it drew for each person and place, a link
+       each.
+     exodus video pick <runId> --face <who>=<n> --voice <who>=<n> --room <place>=<n>
+       Nothing is planned until every slot has a pick. A pick that leaves one
+       open is saved and starts nothing.
+     exodus video picks <runId> --redo face:<who> --note "<what to change>"
+       Four new paid pictures for one face or room.
+
   4. exodus video storyboard <runId>
      The scene cards: what each scene says and the picture it will look like.
 
@@ -128,6 +138,12 @@ The whole loop, in order:
        A format that quotes its video requests stops before a prepared paid
        request, even on a One-shot run. Review its exact requests and prices here,
        then approve those same requests with --request-quote <reviewSha256>.
+
+     A format with a pilot clip makes one clip after this approval and stops
+     again before the others. status prints the pilot's scene, whether its
+     clip was made, and every check that failed or could not run. Redo it
+     with retry-clip; approve again to make the other clips.
+     A One-shot run makes every clip without stopping.
 
   7. exodus video status <runId>
      Where the run is and how each scene's clip turned out. If the storyboard
@@ -166,7 +182,8 @@ The whole loop, in order:
        hear on the recording keeps it from being approved.
 
      exodus video retry-clip <runId> --scene <n>
-       Redo ONE finished clip while the run waits for the cut. Everything
+       Redo ONE finished clip while the run waits for the cut, or redo the
+       pilot clip while the run waits after it. Everything
        else stays. A --note steers the motion, never the words. Add
        --voice-first when the words came out wrong: the line is recorded in
        the character's own voice first, then the clip is made to match it.
@@ -194,6 +211,8 @@ Usage:
   exodus video song <runId> [--json]
   exodus video song approve <runId> --master <masterSha256> [--json]
   exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "<statement>" [--from <s> --to <s>] [--json]
+  exodus video picks <runId> [--redo face:<who>|room:<place>] [--note "..."] [--json]
+  exodus video pick <runId> [--face <who>=<n>] [--voice <who>=<n|name|id>] [--room <place>=<n>] [--style <key>] [--move <who>=<x>,<y>] [--note "..."] [--json]
   exodus video storyboard <runId> [--json]
   exodus video approve <runId> [--approve-stale-cut] [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
@@ -218,8 +237,9 @@ Options:
   --file <cut.mp4>     Your finished cut (upload). MP4, MOV or WebM, up to 200MB
   --duration <sec>     How long your cut is, in seconds. Only needed when the
                        length can't be read off the file itself
-  --note "<text>"      How to steer one redo (retry-frame, retry-clip), or
-                       what a B-roll shot should show (broll add, broll move)
+  --note "<text>"      How to steer one redo (retry-frame, retry-clip, picks
+                       --redo), what a B-roll shot should show (broll add,
+                       broll move), or a note saved with your picks (pick)
   --line <id>          The script line a B-roll shot goes on (broll add,
                        broll move). exodus video broll <runId> lists the ids
   --node <nodeId>      Which scene-frames node holds the still (retry-frame;
@@ -247,6 +267,18 @@ Options:
   --clear <who>        Take a character's voice off again (voices). Repeatable
   --from <file.json>   A file of characters and voices, by name or ID (voices).
                        --set and --clear win over the same name in the file
+  --face <who>=<n>     The face to keep for a person (pick). <who> is the name
+                       the script uses, <n> the option picks printed. Repeat
+                       it once per person
+  --voice <who>=<v>    The voice for a person (pick): an option number, a
+                       catalog voice's name or an ElevenLabs voice ID.
+                       Repeatable
+  --room <place>=<n>   The room to keep for a place (pick). Repeatable
+  --style <key>        The director style (pick), when the run offers one
+  --move <who>=<x>,<y> Where a person stands on the blocking map, in metres
+                       (pick). Refused until a format has a blocking map
+  --redo <slot>        Four new paid pictures for face:<who> or room:<place>
+                       (picks). The second redo of the same slot needs --note
   --catalog            List the voices you can pick by name (voices). No run
                        needed. With a run, also the best few for each
                        character who speaks
@@ -443,6 +475,9 @@ Examples:
   exodus video retry-clip run_123 --scene 3 --note "keep the handshake in frame"
   exodus video retry-clip run_123 --scene 3 --voice-first
   exodus video revoice run_123 --all
+  exodus video picks run_123
+  exodus video pick run_123 --face STRATEGIST=2 --voice STRATEGIST=3 --room OFFICE=4
+  exodus video picks run_123 --redo face:STRATEGIST --note "older, greyer"
   exodus video voices run_123
   exodus video voices --catalog
   exodus video voices run_123 --catalog
@@ -494,6 +529,8 @@ const REVOICE_NOT_ON_THIS_SERVER =
   "was spent. It arrives with the next server update.";
 export const FINAL_PATH = "/api/v2/video/final";
 export const VOICES_PATH = "/api/v2/video/voices";
+// Stop 2: the picks a run drew before its storyboard (GET), a pick or a redo (POST).
+export const PICKS_PATH = "/api/v2/video/picks";
 export const ASSET_UPLOAD_URL_PATH = "/api/v2/workflows/asset-upload-url";
 export const ASSETS_PATH = "/api/v2/workflows/assets";
 
@@ -794,8 +831,11 @@ export interface VideoRun {
   status: string;
   isTerminal: boolean;
   error?: string;
-  pauseReason?: BuilderPauseReason;
+  /** Stop 4: "pilot" is the pilot clip's park, on the final-watch Video step but not the final watch. */
+  pauseReason?: BuilderPauseReason | "pilot";
   pausedNodeId?: string;
+  /** Stop 4: the scenes the pilot clip made, and its approval. Absent on every run without a pilot. */
+  pilot?: { sceneIndexes?: number[]; approvedAt?: number };
   /** A prepared paid operation is waiting for an exact-request approval, not a final-cut upload. */
   requestQuotePending?: boolean;
   /** The run's frozen sourceEditMap setting: its first cut keeps a measured map, and its pull reads the lineage. */
@@ -1020,7 +1060,13 @@ export type RunStop =
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
   | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string }
+  // Stop 4: the run stopped at its pilot clip and waits before the other clips.
+  // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
+  // filled by resolveStop from the scene rows; absent when they were not read.
+  | { at: "pilot"; nodeId?: string; sceneIndexes: number[]; silentScenes?: number[]; checks?: PilotCheck[] }
   | { at: "request-quote" }
+  // Stop 2: parked at the picks box, waiting for the member's picks.
+  | { at: "picks"; nodeId: string }
   | { at: "paused"; nodeId?: string; reason?: string }
   // #1687: a "repair" park rides the FAILED arm rather than a new one of its
   // own. A run parked for repair has a dead step in it — `wait` must exit
@@ -1062,6 +1108,86 @@ export type RunStop =
 export type ResolvedStop =
   | Exclude<RunStop, { at: "final-watch" }>
   | (Extract<RunStop, { at: "final-watch" }> & { cutAttached: boolean | null });
+
+/** Stop 4: what one pilot scene's checks found, in the words `status` prints. */
+export interface PilotCheck {
+  sceneIndex: number;
+  /** "made", "failed" (no clip to watch, `error` says why), or "making" (a redo is on its way). */
+  clip: "made" | "failed" | "making";
+  error?: string;
+  /**
+   * On a made clip, the word check: "no problem found", what it heard wrong, or why nothing was checked. Never "match":
+   * a route that does not transcribe leaves no finding either, so an empty list proves no match.
+   */
+  words?: string;
+  /** Each other check that failed on the clip, in its own words. Empty when none did. */
+  failed: string[];
+  /** Each check that could not run on the clip, in its own words. Empty when every check ran. */
+  skipped: string[];
+}
+
+/** The clip checks' word findings, all named "speech-…" by the clip check. */
+const SPEECH_CODE = /^speech-/;
+/** A check that could not run on the clip (clip-qc.ts *_CHECK_SKIPPED_WARN). */
+const SKIPPED_CODE = /-check-skipped$/;
+
+/**
+ * Stop 4: one pilot scene's check results, read off its clip row. `hasLine` is false for a scene the board gives no
+ * spoken line, where the word check has nothing to hear; unknown when the board was not read.
+ */
+export function pilotCheck(sceneIndex: number, row: NodeItem | undefined, hasLine?: boolean): PilotCheck {
+  if (!row) return { sceneIndex, clip: "failed", error: "No clip was made for this scene", failed: [], skipped: [] };
+  if (row.status === "failed") {
+    return { sceneIndex, clip: "failed", ...(row.error ? { error: row.error } : {}), failed: [], skipped: [] };
+  }
+  if (row.status !== "done") return { sceneIndex, clip: "making", failed: [], skipped: [] };
+  const findings = row.findings ?? [];
+  const speech = findings.filter((f) => SPEECH_CODE.test(f.code));
+  const wrong = speech.filter((f) => f.severity === "fail");
+  const speechSkipped = speech.find((f) => f.code === "speech-check-skipped");
+  const words = wrong.length
+    ? `no match: ${wrong[0].detail}${wrong.length > 1 ? ` (and ${wrong.length - 1} more)` : ""}`
+    : speechSkipped
+      ? `not checked: ${speechSkipped.detail}`
+      : hasLine === false
+        ? "no line to check"
+        : "no problem found";
+  const others = findings.filter((f) => !SPEECH_CODE.test(f.code));
+  const failed = others.filter((f) => f.severity === "fail").map((f) => f.detail);
+  const skipped = others.filter((f) => f.severity !== "fail" && SKIPPED_CODE.test(f.code)).map((f) => f.detail);
+  return { sceneIndex, clip: "made", words, failed, skipped };
+}
+
+/** Stop 4: the pilot scenes the run's board gives no spoken line. Empty when the board can't be read. */
+function pilotScenesWithoutLine(run: VideoRun, scenes: number[]): number[] {
+  const artifact = run.nodes
+    .flatMap((n) => n.outputs ?? [])
+    .find((a): a is Extract<ArtifactSubset, { type: "storyboard" }> => a.type === "storyboard");
+  let board: unknown = artifact?.storyboard;
+  if (board === undefined && typeof artifact?.storyboardJson === "string") {
+    try {
+      board = JSON.parse(artifact.storyboardJson);
+    } catch {
+      return [];
+    }
+  }
+  const boardScenes = (board as { scenes?: unknown } | undefined)?.scenes;
+  if (!Array.isArray(boardScenes)) return [];
+  return scenes.filter((n) => {
+    const scene = (boardScenes as GateSceneCard[]).find((b) => b.sceneIndex === n);
+    return scene !== undefined && !(scene.dialogue ?? []).some((d) => (d.line ?? "").trim().length > 0);
+  });
+}
+
+/** Stop 4: the pilot's scenes, from the run's record, else from the clips its parked step settled with. */
+function pilotScenesOf(run: VideoRun): number[] {
+  if (run.pilot?.sceneIndexes?.length) return [...run.pilot.sceneIndexes].sort((a, b) => a - b);
+  const parked = run.nodes.find((n) => n.nodeId === run.pausedNodeId);
+  const scenes = (parked?.outputs ?? []).flatMap((o) =>
+    o.type === "video" && typeof o.sceneIndex === "number" ? [o.sceneIndex] : [],
+  );
+  return [...new Set(scenes)].sort((a, b) => a - b);
+}
 
 const GATE_NODE_KINDS = new Set(["scene-frames", "storyboard"]);
 
@@ -1117,8 +1243,23 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(why ? { error: why } : {}),
       };
     }
+    // Stop 4: ahead of the builder-checkpoint reading below, which would call it
+    // a park that waits on someone and name no command.
+    if (run.pauseReason === "pilot") {
+      const sceneIndexes = pilotScenesOf(run);
+      const silentScenes = pilotScenesWithoutLine(run, sceneIndexes);
+      return {
+        at: "pilot",
+        ...(run.pausedNodeId ? { nodeId: run.pausedNodeId } : {}),
+        sceneIndexes,
+        ...(silentScenes.length ? { silentScenes } : {}),
+      };
+    }
     if (run.requestQuotePending === true) return { at: "request-quote" };
     const pausedNode = run.nodes.find((n) => n.nodeId === run.pausedNodeId);
+    if (pausedNode?.kind === "picks" && !parkedByBuilderCheckpoint(run)) {
+      return { at: "picks", nodeId: pausedNode.nodeId };
+    }
     if (pausedNode && parkedAtStoryboardGate(run, pausedNode)) {
       const held = heldReason(run);
       return {
@@ -1198,7 +1339,18 @@ export function scenesBeingRedone(run: VideoRun, items: NodeItem[]): number[] {
 export function resolveStop(
   stop: RunStop,
   cutAttached: boolean | null,
+  items?: NodeItem[] | null,
 ): ResolvedStop {
+  // Stop 4: the pilot's checks, off the same scene rows the grid prints.
+  if (stop.at === "pilot") {
+    if (!items) return stop;
+    const clipOf = (sceneIndex: number) =>
+      items.find(
+        (i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex && (!stop.nodeId || i.nodeId === stop.nodeId),
+      );
+    const hasLine = (n: number) => (stop.silentScenes?.includes(n) ? false : undefined);
+    return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
+  }
   if (stop.at !== "final-watch") return stop;
   return { ...stop, cutAttached };
 }
@@ -1215,10 +1367,11 @@ export async function resolveStopAtPark(
   runId: string,
   deps: Pick<VideoDeps, "get">,
 ): Promise<ResolvedStop> {
-  if (stop.at !== "final-watch") return stop;
+  if (stop.at !== "final-watch" && stop.at !== "pilot") return stop;
   const res = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);
   if (!res.ok) return resolveStop(stop, null);
-  return resolveStop(stop, hasAttachedCut((res.data as { items?: NodeItem[] }).items ?? []));
+  const items = (res.data as { items?: NodeItem[] }).items ?? [];
+  return resolveStop(stop, hasAttachedCut(items), items);
 }
 
 const STAGE_WORDS: Record<string, string> = {
@@ -1321,7 +1474,57 @@ function missingSceneLines(
   return lines;
 }
 
+/**
+ * Stop 4: the pilot's lines, in section-3 order: what was made, where to watch, what each check found, the two
+ * commands. A failed pilot says so and names its scene in the redo. Every failed or skipped check prints, so nothing
+ * about the clip is approved unseen.
+ */
+function pilotLines(stop: Extract<RunStop, { at: "pilot" }>, runId: string, runUrl: string): string[] {
+  const scenes = stop.sceneIndexes;
+  const checks = stop.checks ?? [];
+  const failedScenes = checks.filter((c) => c.clip === "failed").map((c) => c.sceneIndex);
+  const allMade = checks.length > 0 && checks.every((c) => c.clip === "made");
+  const which = scenes.length ? ` (${scenesPhrase(scenes)})` : "";
+  const headline = failedScenes.length
+    ? `Run ${runId}'s pilot clip failed (${scenesPhrase(failedScenes)}) and is waiting for you.`
+    : allMade
+      ? `Run ${runId} made its pilot clip${scenes.length > 1 ? "s" : ""}${which} and is waiting for you.`
+      : `Run ${runId} stopped at its pilot clip${which} and is waiting for you.`;
+  const lines = [headline, `Watch it here:        ${runUrl}`];
+  const one = checks.length === 1;
+  const label = (name: string, sceneIndex: number) =>
+    one ? `${name}:`.padEnd(22) : `${name}, scene ${sceneIndex}: `;
+  for (const c of checks) {
+    if (c.clip === "failed") {
+      lines.push(`${label("Clip failed", c.sceneIndex)}${c.error ?? "no clip was made"}`);
+      continue;
+    }
+    if (c.clip === "making") {
+      lines.push(`${label("Clip", c.sceneIndex)}still being made, not checked yet`);
+      continue;
+    }
+    lines.push(`${label("Word check", c.sceneIndex)}${c.words}`);
+    for (const detail of c.failed) lines.push(`${label("Check failed", c.sceneIndex)}${detail}`);
+    for (const detail of c.skipped) lines.push(`${label("Check skipped", c.sceneIndex)}${detail}`);
+  }
+  const redoScene = failedScenes[0] ?? scenes[0];
+  lines.push(
+    `Redo it:              exodus video retry-clip ${runId} --scene ${redoScene ?? "<n>"} --note "<what is wrong>"`,
+    `Make the other clips: exodus video approve ${runId}`,
+  );
+  return lines;
+}
+
 export function stopLines(stop: ResolvedStop, runId: string, runUrl: string): string[] {
+  if (stop.at === "picks") {
+    return [
+      "Parked: the run is waiting for your picks. Nothing is planned or filmed until every slot has one.",
+      `See them:   exodus video picks ${runId}`,
+      `Pick:       exodus video pick ${runId} --face <who>=<n> --voice <who>=<n> --room <place>=<n>`,
+      `Watch it here:   ${runUrl}`,
+    ];
+  }
+  if (stop.at === "pilot") return pilotLines(stop, runId, runUrl);
   if (stop.at === "request-quote") return [
     "Parked: final provider requests are prepared; the unapproved paid operations have not been sent.",
     `Review the exact requests and prices: exodus video quote ${runId}`,
@@ -4538,6 +4741,11 @@ export async function waitFlow(
       continue;
     }
     let items: NodeItem[] | null = null;
+    // Stop 4: the pilot's word check is on its scene row.
+    if (stop.at === "pilot") {
+      const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);
+      items = itemsRes.ok ? ((itemsRes.data as { items?: NodeItem[] }).items ?? []) : null;
+    }
     if (stop.at === "final-watch") {
       const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);
       items = itemsRes.ok ? ((itemsRes.data as { items?: NodeItem[] }).items ?? []) : null;
@@ -4552,7 +4760,7 @@ export async function waitFlow(
         continue;
       }
     }
-    const resolved = resolveStop(stop, items ? hasAttachedCut(items) : null);
+    const resolved = resolveStop(stop, items ? hasAttachedCut(items) : null, items);
     if (opts.json) {
       return {
         code: stop.at === "failed" ? 1 : 0,
@@ -4632,7 +4840,7 @@ export async function statusFlow(
   // #1704: one fact, read once, driving the guidance block, the footer and the
   // `hasFinal` field alike — the three used to be able to contradict each other.
   const hasFinal = hasAttachedCut(items);
-  const stop = resolveStop(classifyRun(run), hasFinal);
+  const stop = resolveStop(classifyRun(run), hasFinal, items);
 
   // #1902: what happened to a storyboard that failed. Read once, printed below
   // and reported in --json from the one node, so the screen and the machine
@@ -5271,6 +5479,283 @@ export async function approveFlow(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Stop 2: the picks (a format with picksStop parks before its storyboard)
+// ---------------------------------------------------------------------------
+
+/** One drawn face or room, as the picks route answers it. */
+export interface PicksPicture {
+  n: number;
+  model: string;
+  imageUrl?: string;
+}
+
+/** A director style card (picksStyleAndMap formats): its title and its four slots. */
+export interface PicksStyleCard {
+  title: string;
+  moves: string;
+  slots: { look: string; camera: string; staging: string; actors: string };
+}
+
+/**
+ * The picks route's answer. MIRROR of PicksView in convex/videoPicks.ts: this package ships on its own schedule, so
+ * the type is copied here rather than imported.
+ */
+export interface PicksView {
+  runId: string;
+  parked: boolean;
+  options: {
+    people: Array<{
+      who: string;
+      description: string;
+      lines: number;
+      faces: PicksPicture[];
+      voices: Array<{ n: number; voiceId: string; name: string; sampleUrl?: string }>;
+      faceRedos: number;
+    }>;
+    places: Array<{ place: string; word?: string; from: "script" | "terrain"; rooms: PicksPicture[]; roomRedos: number }>;
+    styles?: string[];
+    drawnAt: number;
+  } | null;
+  choice: {
+    faces: Array<{ who: string; n: number }>;
+    voices: Array<{ who: string; voiceId: string; label?: string; n?: number }>;
+    rooms: Array<{ place: string; n: number }>;
+    style?: string;
+    note?: string;
+  } | null;
+  open: string[];
+  pickedAt: number | null;
+  redoing: string | null;
+  /** Present when the run's format offers a director style: the card for each key in `options.styles`. */
+  styleCards?: Record<string, PicksStyleCard>;
+  /** Present on a format with the blocking map: why the map is not at this stop. */
+  mapNote?: string;
+}
+
+/** What a pick answers. MIRROR of PickReceipt in convex/videoPicks.ts. */
+export interface PickReceipt {
+  done: boolean;
+  open: string[];
+}
+
+/** A name the shell would split or expand, single-quoted for a command line. */
+function shellWord(word: string): string {
+  return /^[\w.:-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
+
+function placeName(place: { place: string; word?: string }): string {
+  return place.word ?? place.place;
+}
+
+/** The `exodus video pick` line for every open slot, each with `<n>` to fill in. */
+function pickCommand(runId: string, view: PicksView): string {
+  const parts = view.open.map((slot) => {
+    const [kind, ...rest] = slot.split(":");
+    const name = shellWord(rest.join(":"));
+    if (kind === "style") return "--style <key>";
+    return `--${kind} ${name}=<n>`;
+  });
+  return `exodus video pick ${runId} ${parts.join(" ")}`.trimEnd();
+}
+
+/** `exodus video picks`: one block per person and per place, a link per picture and per voice sample. */
+export function picksLines(view: PicksView, runId: string, runUrl: string): string[] {
+  const options = view.options;
+  if (!options) {
+    return [
+      `Run ${runId} has no picks to choose from yet. It draws them before its storyboard.`,
+      `Check back with: exodus video status ${runId}`,
+    ];
+  }
+  if (view.pickedAt !== null) {
+    const chosen = [
+      ...(view.choice?.faces ?? []).map((f) => `${f.who} face ${f.n}`),
+      ...(view.choice?.voices ?? []).map((v) => `${v.who} voice ${v.label ?? v.voiceId}`),
+      ...(view.choice?.rooms ?? []).map((r) => {
+        const place = options.places.find((p) => p.place === r.place);
+        return `${(place ? placeName(place) : r.place).toUpperCase()} room ${r.n}`;
+      }),
+      ...(view.choice?.style ? [`style ${view.choice.style}`] : []),
+    ];
+    return [
+      `Run ${runId} has its picks${chosen.length ? `: ${chosen.join(", ")}` : ""}.`,
+      `Follow it: exodus video status ${runId}`,
+    ];
+  }
+  if (view.redoing) {
+    return [
+      `Run ${runId} is drawing new options for ${view.redoing}.`,
+      `Check back with: exodus video picks ${runId}`,
+    ];
+  }
+  if (!view.parked) {
+    return [`Run ${runId} isn't waiting for picks right now.`, `See where it is: exodus video status ${runId}`];
+  }
+  const chosenFace = (who: string) => view.choice?.faces.find((f) => f.who === who)?.n;
+  const chosenVoice = (who: string) => view.choice?.voices.find((v) => v.who === who);
+  const chosenRoom = (place: string) => view.choice?.rooms.find((r) => r.place === place)?.n;
+  const mark = (yes: boolean) => (yes ? "  (picked)" : "");
+  const lines = [`Run ${runId} is waiting for your picks.`, `See the pictures and hear the voices:  ${runUrl}`, ""];
+  for (const person of options.people) {
+    lines.push(`${person.who}  (speaks ${person.lines} ${person.lines === 1 ? "line" : "lines"})`);
+    const modelWidth = Math.max(0, ...person.faces.map((f) => f.model.length));
+    for (const face of person.faces) {
+      lines.push(`  face ${face.n}  ${face.model.padEnd(modelWidth)}  ${face.imageUrl ?? "(no link yet)"}${mark(chosenFace(person.who) === face.n)}`);
+    }
+    if (person.voices.length === 0) {
+      lines.push("  voice: this run's video model casts the voice itself from the script, so there is none to pick.");
+    }
+    const nameWidth = Math.max(0, ...person.voices.map((v) => v.name.length));
+    const voice = chosenVoice(person.who);
+    for (const option of person.voices) {
+      lines.push(`  voice ${option.n}  ${option.name.padEnd(nameWidth)}  ${option.sampleUrl ?? "(no sample link)"}${mark(voice?.voiceId === option.voiceId)}`);
+    }
+    if (voice && !person.voices.some((o) => o.voiceId === voice.voiceId)) {
+      lines.push(`  voice: ${voice.label ?? voice.voiceId}  (picked)`);
+    }
+  }
+  for (const place of options.places) {
+    const from = place.from === "terrain" ? "  (the script names no place, so this is the format's own)" : "";
+    lines.push(`${placeName(place).toUpperCase()}${from}`);
+    lines.push(
+      `  ${place.rooms.map((room) => `room ${room.n}  ${room.imageUrl ?? "(no link yet)"}${mark(chosenRoom(place.place) === room.n)}`).join("   ")}`,
+    );
+  }
+  if (options.styles?.length) {
+    lines.push("STYLE");
+    const width = Math.max(...options.styles.map((key) => key.length));
+    for (const key of options.styles) {
+      const card = view.styleCards?.[key];
+      const about = card ? `${card.title}. ${card.slots.camera}` : "";
+      lines.push(`  ${key.padEnd(width)}  ${about}${mark(view.choice?.style === key)}`.trimEnd());
+    }
+  }
+  if (view.mapNote) lines.push("MAP", `  ${view.mapNote}`);
+  lines.push("");
+  if (view.choice) lines.push(`Still open: ${view.open.join(", ")}`);
+  lines.push(`Pick with:  ${pickCommand(runId, view)}`);
+  lines.push(`New options for one face or room:  exodus video picks ${runId} --redo face:<who> --note "<what to change>"`);
+  return lines;
+}
+
+export async function picksFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.get(`${PICKS_PATH}?runId=${encodeURIComponent(runId)}`);
+  if (!res.ok) return errorResult(res, json);
+  const view = res.data as PicksView;
+  if (json) return { code: 0, lines: [JSON.stringify(view, null, 2)] };
+  return { code: 0, lines: picksLines(view, runId, reviewUrl(deps.dashboardUrl, { _id: runId })) };
+}
+
+/** What `exodus video pick` sends. */
+export interface PickRequest {
+  faces: Array<{ who: string; n: number }>;
+  voices: Array<{ who: string; voice: string }>;
+  rooms: Array<{ place: string; n: number }>;
+  moves: Array<{ who: string; x: number; y: number }>;
+  style?: string;
+  note?: string;
+}
+
+/**
+ * Read `--face`, `--voice`, `--room`, `--move` (each repeatable), `--style` and `--note`. Each `<name>=<value>` splits
+ * on the last "=", so a name with one in it still reads.
+ */
+export function parsePickFlags(occurrences: FlagOccurrence[]): { ok: true; request: PickRequest } | { ok: false; line: string } {
+  const request: PickRequest = { faces: [], voices: [], rooms: [], moves: [] };
+  for (const { flag, value } of occurrences) {
+    if (!["face", "voice", "room", "move", "style", "note"].includes(flag)) continue;
+    if (value === undefined || !value.trim()) return { ok: false, line: `--${flag} needs a value.` };
+    if (flag === "style") {
+      request.style = value.trim();
+      continue;
+    }
+    if (flag === "note") {
+      request.note = value.trim();
+      continue;
+    }
+    const eq = value.lastIndexOf("=");
+    const name = eq > 0 ? value.slice(0, eq).trim() : "";
+    const picked = eq > 0 ? value.slice(eq + 1).trim() : "";
+    if (!name || !picked) {
+      const shape = flag === "move" ? "<who>=<x>,<y>" : flag === "voice" ? "<who>=<n|voice name|voice id>" : flag === "room" ? "<place>=<n>" : "<who>=<n>";
+      return { ok: false, line: `--${flag} must look like ${shape} (got "${value}").` };
+    }
+    if (flag === "voice") {
+      request.voices.push({ who: name, voice: picked });
+      continue;
+    }
+    if (flag === "move") {
+      const [x, y, ...extra] = picked.split(",").map((part) => Number(part.trim()));
+      if (extra.length > 0 || !Number.isFinite(x) || !Number.isFinite(y)) {
+        return { ok: false, line: `--move ${name} needs metres as <x>,<y>, for example --move ${shellWord(name)}=1.25,2 (got "${picked}").` };
+      }
+      request.moves.push({ who: name, x, y });
+      continue;
+    }
+    const n = Number(picked);
+    if (!Number.isInteger(n) || n < 1) {
+      return { ok: false, line: `--${flag} ${name}=${picked}: the option is a whole number from 1, as exodus video picks prints it.` };
+    }
+    if (flag === "face") request.faces.push({ who: name, n });
+    else request.rooms.push({ place: name, n });
+  }
+  const any = request.faces.length + request.voices.length + request.rooms.length + request.moves.length > 0 || request.style !== undefined;
+  if (!any) {
+    return { ok: false, line: "video pick needs at least one --face <who>=<n>, --voice <who>=<n>, --room <place>=<n> or --style <key>." };
+  }
+  return { ok: true, request };
+}
+
+export async function pickFlow(runId: string, request: PickRequest, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(PICKS_PATH, {
+    runId,
+    ...(request.faces.length ? { faces: request.faces } : {}),
+    ...(request.voices.length ? { voices: request.voices } : {}),
+    ...(request.rooms.length ? { rooms: request.rooms } : {}),
+    ...(request.moves.length ? { moves: request.moves } : {}),
+    ...(request.style !== undefined ? { style: request.style } : {}),
+    ...(request.note !== undefined ? { note: request.note } : {}),
+  });
+  if (!res.ok) return errorResult(res, json);
+  const receipt = res.data as PickReceipt;
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, ...receipt })] };
+  if (receipt.done) {
+    return {
+      code: 0,
+      lines: [`Picked. Run ${runId} goes on and plans its storyboard on your picks.`, `Follow it: exodus video status ${runId}`],
+    };
+  }
+  return {
+    code: 0,
+    lines: [
+      `Saved. Still open: ${receipt.open.join(", ")}.`,
+      "Nothing starts until every slot has a pick.",
+      `See the options: exodus video picks ${runId}`,
+    ],
+  };
+}
+
+export async function redoPicksFlow(
+  runId: string,
+  slot: string,
+  note: string | undefined,
+  json: boolean,
+  deps: VideoDeps,
+): Promise<FlowResult> {
+  const res = await deps.post(PICKS_PATH, { runId, redo: slot, ...(note !== undefined ? { note } : {}) });
+  if (!res.ok) return errorResult(res, json);
+  const data = res.data as { slot: string };
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, ...data })] };
+  return {
+    code: 0,
+    lines: [
+      `Drawing four new options for ${data.slot}. The other picks stay.`,
+      `See them when they are ready: exodus video picks ${runId}`,
+    ],
+  };
+}
+
 export async function flagFlow(
   runId: string,
   note: string,
@@ -5586,6 +6071,9 @@ export function planClipRedo(
     (row.status === "done" &&
       (row.flagged === true ||
         stop.at === "final-watch" ||
+        // Stop 4: the pilot clip is redone while the run waits after it. The
+        // server admits it (the pilot parks at the final-watch step).
+        (stop.at === "pilot" && stop.sceneIndexes.includes(target.sceneIndex)) ||
         // #2616: still parked at the final watch while the automatic redo lands.
         (stop.at === "running" && stop.autoRedoScenes !== undefined)));
   if (!redoable) {
@@ -7346,6 +7834,10 @@ const VALUE_FLAGS = new Set([
   "lyric",
   "rights",
   "request-quote",
+  "face",
+  "room",
+  "move",
+  "redo",
 ]);
 
 export function parsePositional(args = process.argv.slice(3)): string[] {
@@ -7434,6 +7926,8 @@ export async function run(
     "review",
     "song",
     "quote",
+    "picks",
+    "pick",
   ];
   // Not `=== true`: `--catalog` typed before the run id takes the id as its
   // value in `flags`, though the id still reaches `rest` as a positional.
@@ -7484,6 +7978,18 @@ export async function run(
     return printResult(await songListenFlow(runId, json, defaultDeps));
   }
   if (sub === "storyboard") return printResult(await storyboardFlow(runId, json, defaultDeps));
+  if (sub === "picks") {
+    // Not `=== true`: --redo always carries its slot as a value.
+    const redo = flagString(flags, "redo");
+    if (flags["redo"] !== undefined && !redo?.trim()) usage("video picks --redo needs face:<who> or room:<place>.");
+    if (redo) return printResult(await redoPicksFlow(runId, redo.trim(), flagString(flags, "note"), json, defaultDeps));
+    return printResult(await picksFlow(runId, json, defaultDeps));
+  }
+  if (sub === "pick") {
+    const plan = parsePickFlags(occurrences);
+    if (!plan.ok) usage(plan.line);
+    return printResult(await pickFlow(runId, plan.request, json, defaultDeps));
+  }
   if (sub === "director") {
     const choice = parseDirectorSwitch(rest[1]);
     if (!choice) usage(`video director needs on, off or follow: exodus video director ${runId} on`);

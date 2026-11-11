@@ -24,6 +24,7 @@ export declare const RUN_PATH = "/api/v2/workflow";
 export declare const ITEMS_PATH = "/api/v2/workflow/items";
 export declare const FINAL_PATH = "/api/v2/video/final";
 export declare const VOICES_PATH = "/api/v2/video/voices";
+export declare const PICKS_PATH = "/api/v2/video/picks";
 export declare const ASSET_UPLOAD_URL_PATH = "/api/v2/workflows/asset-upload-url";
 export declare const ASSETS_PATH = "/api/v2/workflows/assets";
 export interface ClipWord {
@@ -185,8 +186,12 @@ export interface VideoRun {
     status: string;
     isTerminal: boolean;
     error?: string;
-    pauseReason?: BuilderPauseReason;
+    pauseReason?: BuilderPauseReason | "pilot";
     pausedNodeId?: string;
+    pilot?: {
+        sceneIndexes?: number[];
+        approvedAt?: number;
+    };
     requestQuotePending?: boolean;
     sourceEditMap?: true;
     nodes: VideoRunNode[];
@@ -304,7 +309,16 @@ export type RunStop = {
     missingScenes?: MissingScene[];
     framesNodeId?: string;
 } | {
+    at: "pilot";
+    nodeId?: string;
+    sceneIndexes: number[];
+    silentScenes?: number[];
+    checks?: PilotCheck[];
+} | {
     at: "request-quote";
+} | {
+    at: "picks";
+    nodeId: string;
 } | {
     at: "paused";
     nodeId?: string;
@@ -327,10 +341,19 @@ export type ResolvedStop = Exclude<RunStop, {
 }> & {
     cutAttached: boolean | null;
 });
+export interface PilotCheck {
+    sceneIndex: number;
+    clip: "made" | "failed" | "making";
+    error?: string;
+    words?: string;
+    failed: string[];
+    skipped: string[];
+}
+export declare function pilotCheck(sceneIndex: number, row: NodeItem | undefined, hasLine?: boolean): PilotCheck;
 export declare function classifyRun(run: VideoRun): RunStop;
 export declare function hasAttachedCut(items: NodeItem[]): boolean;
 export declare function scenesBeingRedone(run: VideoRun, items: NodeItem[]): number[];
-export declare function resolveStop(stop: RunStop, cutAttached: boolean | null): ResolvedStop;
+export declare function resolveStop(stop: RunStop, cutAttached: boolean | null, items?: NodeItem[] | null): ResolvedStop;
 export declare function resolveStopAtPark(stop: RunStop, runId: string, deps: Pick<VideoDeps, "get">): Promise<ResolvedStop>;
 export declare function stageWord(stage: string): string;
 export declare function stepName(kind: string | undefined): string;
@@ -557,6 +580,108 @@ export declare function approveFlow(runId: string, opts: {
     acceptFindings?: boolean;
     requestQuoteHash?: string;
 }, deps: VideoDeps): Promise<FlowResult>;
+export interface PicksPicture {
+    n: number;
+    model: string;
+    imageUrl?: string;
+}
+export interface PicksStyleCard {
+    title: string;
+    moves: string;
+    slots: {
+        look: string;
+        camera: string;
+        staging: string;
+        actors: string;
+    };
+}
+export interface PicksView {
+    runId: string;
+    parked: boolean;
+    options: {
+        people: Array<{
+            who: string;
+            description: string;
+            lines: number;
+            faces: PicksPicture[];
+            voices: Array<{
+                n: number;
+                voiceId: string;
+                name: string;
+                sampleUrl?: string;
+            }>;
+            faceRedos: number;
+        }>;
+        places: Array<{
+            place: string;
+            word?: string;
+            from: "script" | "terrain";
+            rooms: PicksPicture[];
+            roomRedos: number;
+        }>;
+        styles?: string[];
+        drawnAt: number;
+    } | null;
+    choice: {
+        faces: Array<{
+            who: string;
+            n: number;
+        }>;
+        voices: Array<{
+            who: string;
+            voiceId: string;
+            label?: string;
+            n?: number;
+        }>;
+        rooms: Array<{
+            place: string;
+            n: number;
+        }>;
+        style?: string;
+        note?: string;
+    } | null;
+    open: string[];
+    pickedAt: number | null;
+    redoing: string | null;
+    styleCards?: Record<string, PicksStyleCard>;
+    mapNote?: string;
+}
+export interface PickReceipt {
+    done: boolean;
+    open: string[];
+}
+export declare function picksLines(view: PicksView, runId: string, runUrl: string): string[];
+export declare function picksFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export interface PickRequest {
+    faces: Array<{
+        who: string;
+        n: number;
+    }>;
+    voices: Array<{
+        who: string;
+        voice: string;
+    }>;
+    rooms: Array<{
+        place: string;
+        n: number;
+    }>;
+    moves: Array<{
+        who: string;
+        x: number;
+        y: number;
+    }>;
+    style?: string;
+    note?: string;
+}
+export declare function parsePickFlags(occurrences: FlagOccurrence[]): {
+    ok: true;
+    request: PickRequest;
+} | {
+    ok: false;
+    line: string;
+};
+export declare function pickFlow(runId: string, request: PickRequest, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function redoPicksFlow(runId: string, slot: string, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function flagFlow(runId: string, note: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function retryFrameFlow(runId: string, nodeId: string | undefined, sceneIndex: number, note: string | undefined, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare const BROLL_EDIT_STALE_MS: number;

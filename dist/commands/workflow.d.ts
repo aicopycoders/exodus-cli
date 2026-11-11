@@ -6,7 +6,7 @@ import { type RunDeliverySummary } from "../lib/runVerdict.js";
 import { type Channel } from "../lib/channel.js";
 import { type VoiceMap } from "./video.js";
 export declare const helpText: string;
-export type WorkflowNodeKind = "brief" | "brief-form" | "asset" | "bot" | "primer" | "image" | "image-rig" | "rig" | "storyboard" | "reference" | "scene-frames" | "video" | "voiceover" | "output" | "call" | "show-set" | "show-cast" | "show-voices" | "product-truth" | "transform" | "formatter" | "splitter" | "collector" | "checkpoint" | "prompt";
+export type WorkflowNodeKind = "brief" | "brief-form" | "asset" | "bot" | "primer" | "image" | "image-rig" | "rig" | "storyboard" | "reference" | "scene-frames" | "video" | "voiceover" | "output" | "call" | "show-set" | "show-cast" | "show-voices" | "product-truth" | "transform" | "formatter" | "splitter" | "collector" | "checkpoint" | "prompt" | "picks";
 export type WorkflowSlotState = "locked" | "auto" | "ask" | "inferred";
 export interface WorkflowSlot {
     id: string;
@@ -388,7 +388,7 @@ export interface WorkflowRunSession {
     title: string;
     botSlug: string;
 }
-export type WorkflowPauseReason = "taste" | "repair" | "slots" | "call" | "checkpoint";
+export type WorkflowPauseReason = "taste" | "repair" | "slots" | "call" | "checkpoint" | "pilot";
 export interface WorkflowPendingSlot {
     id: string;
     label?: string;
@@ -459,7 +459,7 @@ export interface WorkflowRun {
     provenance?: RunProvenance;
     pauseAhead?: {
         nodeId: string;
-        after: "frames" | "storyboard";
+        after: "frames" | "storyboard" | "picks" | "pilot";
         selfApproves?: true;
     };
 }

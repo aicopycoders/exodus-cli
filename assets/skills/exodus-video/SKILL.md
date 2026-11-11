@@ -203,26 +203,26 @@ Today a run goes from the script straight to the storyboard. Run this stop
 only when `status` says the run is waiting for picks.
 
 1. `exodus video picks <runId>` lists, for each person, four faces and the
-   voices; for each place, four rooms; on a microdrama, the camera styles and
-   a map in metres. Each face, room and voice sample has its own link. Show it
-   all with the run page link.
-2. Ask for one face and one voice per person, one room per place, and on a
-   microdrama a style. Send the answers as:
+   voices; four rooms for the set; the camera styles, when the run offers them.
+   Each face, room and voice sample has its own link. Show it all with the run
+   page link.
+2. Ask for one face and one voice per person, one room, and a style when
+   one is offered. Send the answers as:
 
    ```
    exodus video pick <runId> --face <who>=<n> --voice <who>=<n|voice name|voice id> \
-     --room <place>=<n> [--style <key>] [--move <who>=<x>,<y>] [--note "<text>"]
+     --room <place>=<n> [--style <key>] [--note "<text>"]
    ```
 
-   `<who>` is the name the script uses. `--face`, `--voice` and `--room`
-   repeat once per person or place. `--style` (the camera style) and `--move`
-   are for the microdrama; `--move` takes metres on the printed map. The run goes on only
-   when every slot has a pick. A pick that leaves a slot open prints the open
+   `<who>` is the name the script uses. `--face` and `--voice` repeat once
+   per person. `--style` (the camera style) is for the
+   microdrama. The run goes on only when every slot has a pick. A pick that leaves a slot open prints the open
    slots: ask for those.
 3. "Show me other faces": `exodus video picks <runId> --redo face:<who> --note
-   "<what to change>"`, or `room:<place>` for rooms. It draws four new
-   pictures. The CLI prints no price for them: say so and wait for their yes.
-   The second redo of a slot needs the note.
+   "<what to change>"`, or `room:<place>` for rooms. It draws four new paid
+   pictures. The CLI prints no price for them: say so, never guess one, and run
+   it only after their yes. The second redo of a slot needs the note, and a
+   third is refused: ask them to pick from what is shown.
 
 When `picks` answers that the server does not support it yet, the run has no
 picks stop: go to stop 3. When it answers `Unknown subcommand: "picks"`, this
@@ -264,8 +264,10 @@ Today approving the storyboard makes every clip, and the next stop is the end.
 With the pilot stop, the run makes one clip after the storyboard, checks it and
 parks. `status` then says it "made its pilot clip (scene <n>)" and whether the
 words heard match. On UGC and the authority yapper the pilot is two clips, one
-talking and one listening in silence. Show the pilot on the run page and the
-words line, then ask: keep it, or redo it.
+talking and one listening in silence. Show the pilot on the run page, the
+words line and every "Check failed" or "Check skipped" line, then ask: keep
+it, or redo it. When `status` says the pilot clip failed, there is nothing to
+keep: offer the redo it prints, which names the scene.
 
 - Keep it: `exodus video approve <runId>` makes the other clips, the expensive
   part. The CLI prints no price for it: say so, and approve on their yes.
@@ -481,6 +483,13 @@ The other template flags (`--input-mode`, `--structure`, `--reference`,
 **From the storyboard on.**
 
 ```operator-guide
+exodus video picks <runId>                                a format with a picks stop parks before the storyboard:
+                                                          the faces, voices and rooms it drew, one link each
+exodus video pick <runId> --face <who>=<n> --voice <who>=<n> --room <place>=<n>
+                                                          pick one of each; nothing is planned until every slot has one
+exodus video picks <runId> --redo face:<who>|room:<place> --note "…"
+                                                          four new paid pictures for one face or room;
+                                                          only after the member's yes
 exodus video storyboard <runId>                           read the scene cards
 exodus video voices <runId>                               who speaks and with whose voice
 exodus video voices <runId> --set <character>=<voiceId>   give a character a voice

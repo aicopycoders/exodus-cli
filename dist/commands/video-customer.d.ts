@@ -1,4 +1,4 @@
-export type CustomerRunStage = "waiting" | "planning" | "drawing" | "filming" | "editing" | "review" | "ready" | "failed" | "cancelled";
+export type CustomerRunStage = "waiting" | "planning" | "picking" | "drawing" | "filming" | "editing" | "review" | "pilot" | "ready" | "failed" | "cancelled";
 export interface CustomerRunScene {
     sceneIndex: number;
     line: string | null;

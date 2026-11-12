@@ -9,6 +9,7 @@ export declare const SWIPES_PATH = "/api/v2/video/swipes";
 export declare const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 export declare const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export declare const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
+export declare const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
@@ -216,10 +217,20 @@ export interface SavedSheetRow {
     options: Array<{
         id: string;
         label: string;
+        pictureUrl?: string;
+        sampleUrl?: string;
     }> | null;
     optionsCostUsd: number | null;
     usedBy: string | null;
     readOnly: boolean;
+    optionsStatus?: {
+        making: boolean;
+        sentence: string;
+        spentUsd?: number;
+        asksLeft?: number;
+        failed?: boolean;
+        noneYet?: boolean;
+    };
 }
 export interface SavedSheet {
     swipeId: string;
@@ -388,6 +399,16 @@ export type SwipePlan = {
     swipeId: string;
     opts: SwipeOpts;
 } | {
+    kind: "sheet-people";
+    swipeId: string;
+    count: number | null;
+    maxUsd: number | null;
+    opts: SwipeOpts;
+} | {
+    kind: "sheet-voices";
+    swipeId: string;
+    opts: SwipeOpts;
+} | {
     kind: "run";
     sheetFile: string;
     retryRefused: boolean;
@@ -399,6 +420,7 @@ export declare function parseSwipeMode(value: string): ServerMode | null;
 export declare function parseCloseness(value: string): number | null;
 export declare function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]): SwipePlan;
 export declare const SHEET_ROW_ID: RegExp;
+export declare const SHEET_PEOPLE_MOST = 8;
 export interface ChoiceWords {
     who: string;
     flag: (name: string) => string;
@@ -484,6 +506,8 @@ export declare function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, dep
 export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function priceLines(price: SwipePrice, dashboardUrl: string): string[];
 export declare function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare function swipeSheetPeopleFlow(swipeId: string, count: number | null, maxUsd: number | null, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     runId: string;

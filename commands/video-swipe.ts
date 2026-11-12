@@ -35,6 +35,8 @@ export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 /** The price of a swipe's video before the yes (COP-265 part 6): GET ?id= answers { price, dashboardUrl }. Free. */
 export const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
+/** COP-265 part 7: POST { swipeId, row, count?, yes? } asks for a row's options: new people (paid) or voices (free). */
+export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 /** The brand's swipe library (convex/http.ts), the same free read `exodus genesis --list-swipes` makes. */
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
@@ -171,10 +173,13 @@ export interface SavedSheetRow {
   value: string | number | boolean | null;
   from: SheetFrom | null;
   why: string | null;
-  options: Array<{ id: string; label: string }> | null;
+  /** Each a name; a person made for the member also has their picture's address, a voice its sample's address. */
+  options: Array<{ id: string; label: string; pictureUrl?: string; sampleUrl?: string }> | null;
   optionsCostUsd: number | null;
   usedBy: string | null;
   readOnly: boolean;
+  /** Where an ask for the row's options stands (COP-265 part 7); absent from older servers. */
+  optionsStatus?: { making: boolean; sentence: string; spentUsd?: number; asksLeft?: number; failed?: boolean; noneYet?: boolean };
 }
 
 /** A swipe's saved sheet (video/lib/sheet.ts SheetView), kept on the server; no dashboard page shows it yet. */
@@ -348,6 +353,8 @@ export type SwipePlan =
   | { kind: "sheet"; swipeId: string; opts: SwipeOpts }
   | { kind: "sheet-set"; swipeId: string; picks: Record<string, string | null>; opts: SwipeOpts }
   | { kind: "sheet-price"; swipeId: string; opts: SwipeOpts }
+  | { kind: "sheet-people"; swipeId: string; count: number | null; maxUsd: number | null; opts: SwipeOpts }
+  | { kind: "sheet-voices"; swipeId: string; opts: SwipeOpts }
   | { kind: "run"; sheetFile: string; retryRefused: boolean; status: boolean; persona: string | null; opts: SwipeOpts };
 
 const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet"];
@@ -523,29 +530,80 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
 export const SHEET_ROW_ID = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 const SHEET_SET_LINE = 'exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...]';
 const SHEET_PRICE_LINE = "exodus video swipe sheet price <swipeId>";
+const SHEET_PEOPLE_LINE = "exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]";
+
+/** The most people one ask may make: the server's own (video/lib/picks.ts SHEET_PEOPLE_MOST_PER_ASK). */
+export const SHEET_PEOPLE_MOST = 8;
 
 /**
- * `swipe sheet <swipeId>`, `swipe sheet set <swipeId> <row>=<value> ...` and `swipe sheet price <swipeId>`. `words`
- * are the positional words after `sheet`. A row given with nothing after its `=` is cleared. All three are free, so a
- * paid step's flag is refused.
+ * `swipe sheet <swipeId>`, `swipe sheet set <swipeId> <row>=<value> ...`, `swipe sheet price <swipeId>`, and COP-265
+ * part 7's `swipe sheet people <swipeId>` (new people to pick from: paid, so the price comes first and --yes makes
+ * them) and `swipe sheet voices <swipeId>` (voices to hear: free). `words` are the positional words after `sheet`. A
+ * row given with nothing after its `=` is cleared. Only `people` takes a paid step's flags (--count, --yes, --max-usd,
+ * --wait); every other flag is refused.
  */
 function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOpts): SwipePlan {
   const usage = (line: string): SwipePlan => ({ kind: "usage", line });
-  // It buys nothing and takes no other verb's choice: such a flag is refused, never quietly dropped.
   const typedFlag = (names: readonly string[]) =>
     occurrences.find((o) => names.some((name) => o.flag === name || o.flag === `no-${name}`))?.flag;
+  // A switch's own on/off word (`--json true`) is not a word of the command.
+  const switchWords = new Set(
+    occurrences.filter((o) => ["json", "yes", "wait"].includes(o.flag) && o.value !== undefined).map((o) => o.value as string),
+  );
+  const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
+  if (given[0] === "people") {
+    // --max-usd is the start's too (part 6); here it carries the most the people's price said.
+    const other = typedFlag([
+      ...FIND_PAID_FLAGS.filter((flag) => flag !== "yes" && flag !== "wait"),
+      ...FIND_OTHER_FLAGS.filter((flag) => flag !== "max-usd"),
+      "brand",
+      "limit",
+    ]);
+    if (other) return usage(`video swipe sheet people takes no --${other}. Its flags: --count, --yes, --max-usd, --wait, --json.`);
+    const [, swipeId, ...extra] = given;
+    if (!swipeId) return usage(`video swipe sheet people needs a swipe id: ${SHEET_PEOPLE_LINE}`);
+    if (extra.length > 0) return usage(`video swipe sheet people takes one swipe id (got "${extra[0]}"): ${SHEET_PEOPLE_LINE}`);
+    const typed = occurrences.filter((o) => o.flag === "count").at(-1);
+    let count: number | null = null;
+    if (typed) {
+      const n = typed.value !== undefined && /^\d+$/.test(typed.value.trim()) ? Number(typed.value.trim()) : Number.NaN;
+      if (!(n >= 1 && n <= SHEET_PEOPLE_MOST)) return usage(`video swipe sheet people --count takes 1 to ${SHEET_PEOPLE_MOST} (got "${typed.value ?? ""}").`);
+      count = n;
+    }
+    if (opts.wait && !opts.yes) return usage("video swipe sheet people --wait waits for people being made: give it with --yes, after the price.");
+    // The yes is to a figure: the most the price said, which the server works out again and holds the yes to.
+    const most = occurrences.filter((o) => o.flag === "max-usd").at(-1);
+    let maxUsd: number | null = null;
+    if (most) {
+      const n = most.value !== undefined && /^\d+(\.\d+)?$/.test(most.value.trim()) ? Number(most.value.trim()) : Number.NaN;
+      if (!Number.isFinite(n)) return usage(`video swipe sheet people --max-usd takes the price's most in dollars, such as 0.95 (got "${most.value ?? ""}").`);
+      maxUsd = n;
+    }
+    if (opts.yes && maxUsd === null) {
+      return usage("video swipe sheet people --yes needs --max-usd <n>, the most the price said. Run it without --yes first to read the price.");
+    }
+    if (maxUsd !== null && !opts.yes) return usage("video swipe sheet people --max-usd goes with --yes, after the price.");
+    return { kind: "sheet-people", swipeId, count, maxUsd, opts };
+  }
+  // --count is the people's alone; --max-usd, which the start takes too, is refused below as on part 6's free verbs.
+  const peopleOnly = typedFlag(["count"]);
+  if (peopleOnly) return usage(`Only video swipe sheet people takes --${peopleOnly}.`);
+  // The rest buys nothing and takes no other verb's choice: such a flag is refused, never quietly dropped.
   const paid = typedFlag(FIND_PAID_FLAGS);
   if (paid) return usage(`video swipe sheet is free and buys nothing, so it takes no --${paid}. Its only flag is --json.`);
   const other = typedFlag([...FIND_OTHER_FLAGS, "brand", "limit"]);
   if (other) return usage(`video swipe sheet takes no --${other}. Its only flag is --json.`);
-  // A switch's own on/off word (`--json true`) is not a word of the command.
-  const switchWords = new Set(occurrences.filter((o) => o.flag === "json" && o.value !== undefined).map((o) => o.value as string));
-  const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
   if (given[0] === "price") {
     const [, swipeId, ...extra] = given;
     if (!swipeId) return usage(`video swipe sheet price needs a swipe id: ${SHEET_PRICE_LINE}`);
     if (extra.length > 0) return usage(`video swipe sheet price takes one swipe id (got "${extra[0]}"): ${SHEET_PRICE_LINE}`);
     return { kind: "sheet-price", swipeId, opts };
+  }
+  if (given[0] === "voices") {
+    const [, swipeId, ...extra] = given;
+    if (!swipeId) return usage("video swipe sheet voices needs a swipe id: exodus video swipe sheet voices <swipeId> [--json]");
+    if (extra.length > 0) return usage(`video swipe sheet voices takes one swipe id (got "${extra[0]}").`);
+    return { kind: "sheet-voices", swipeId, opts };
   }
   if (given[0] !== "set") {
     const [swipeId, ...extra] = given;
@@ -1603,6 +1661,36 @@ function sheetOf(data: unknown): { sheet: SavedSheet; dashboardUrl: string } | n
   return { sheet: data.sheet as unknown as SavedSheet, dashboardUrl: typeof data.dashboardUrl === "string" ? data.dashboardUrl : "" };
 }
 
+/**
+ * A row's options as the member reads them. A person made for them is shown with their picture's address, a voice
+ * with its sample's address, one a line; plain options on one line. COP-265 part 7: and where the ask for them stands.
+ * A sheet read prints the rows alone: the offers to make people or list voices are said only when the member asks.
+ */
+function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipeId: string): string[] {
+  const lines: string[] = [];
+  if (row.options === null) return lines;
+  const options = row.options;
+  const addressed = options.some((option) => option.pictureUrl || option.sampleUrl);
+  if (addressed) {
+    // People and voices made on the member's ask (COP-265 part 7): one a line, with the address to look at or hear.
+    for (const option of options) {
+      const address = option.pictureUrl ? `picture: ${option.pictureUrl}` : option.sampleUrl ? `sample: ${option.sampleUrl}` : "";
+      lines.push(`    ${option.id}: ${option.label}${address ? `  ${address}` : ""}`);
+    }
+  } else if (options.length > 0 || !row.optionsStatus) {
+    const cost = row.optionsCostUsd ? ` (showing them costs ${usd(row.optionsCostUsd)})` : "";
+    // A row whose options follow the row above it (a place's looks) has none until that row has a value. A row whose
+    // options are made on an ask says where the ask stands instead (below).
+    const none = above ? `none until ${above.label.toLowerCase().replace(/^the /, "a ")} is set` : "none";
+    const shown = options.length > 0 ? options.map((option) => `${option.id} (${option.label})`).join(", ") : none;
+    lines.push(`    options${cost}: ${shown}`);
+  }
+  if (row.optionsStatus?.sentence) lines.push(`    ${row.optionsStatus.sentence}`);
+  // Before the first ask for people, the free way to the price (COP-265 part 7); no cost is printed before it is said.
+  if (row.id === "who" && row.optionsStatus?.noneYet) lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
+  return lines;
+}
+
 /** A swipe's sheet as the member reads it: each section and row, where its value comes from and why, and what reads it. */
 export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
   const { swipeId } = sheet;
@@ -1621,18 +1709,13 @@ export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
   for (const section of sheet.sections) {
     lines.push("", section.label);
     for (const row of section.rows) {
-      const value = row.value === null ? "not set" : String(row.value);
+      // A pick by number (a person or a voice made for the member) is shown with the name of what it picks.
+      const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
+      const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : String(row.value);
       lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
       if (row.from) lines.push(`    ${FROM_WORDS[row.from]}${row.why ? `: ${row.why}` : ""}`);
       else if (row.why) lines.push(`    ${row.why}`);
-      if (row.options) {
-        const cost = row.optionsCostUsd ? ` (showing them costs ${usd(row.optionsCostUsd)})` : "";
-        // A row whose options follow the row above it (a place's looks) has none until that row has a value.
-        const above = section.rows[section.rows.indexOf(row) - 1];
-        const none = above ? `none until ${above.label.toLowerCase().replace(/^the /, "a ")} is set` : "none";
-        const shown = row.options.length > 0 ? row.options.map((option) => `${option.id} (${option.label})`).join(", ") : none;
-        lines.push(`    options${cost}: ${shown}`);
-      }
+      lines.push(...optionLines(row, section.rows[section.rows.indexOf(row) - 1], swipeId));
       lines.push(`    ${row.usedBy ? `read by: ${row.usedBy}` : "no step reads it yet"}`);
     }
   }
@@ -1840,6 +1923,127 @@ async function startNeedsYes(
   };
 }
 
+// ── Options asked for on the sheet (COP-265 part 7) ──────────────────────────────────────────────────────────────
+
+/** The server's answer to an ask for options (convex/videoSheet.ts OptionsAnswer, with the sheet's page). */
+interface OptionsAnswer {
+  row: "who" | "voice";
+  started?: boolean;
+  price?: { count: number; mostUsd: number; lines: string[] };
+  refusal?: string | null;
+  ids?: string[];
+  listed?: number;
+  sheet: SavedSheet;
+  dashboardUrl: string;
+}
+
+function optionsAnswerOf(data: unknown): OptionsAnswer | null {
+  const read = sheetOf(data);
+  if (!read || !isRecord(data) || (data.row !== "who" && data.row !== "voice")) return null;
+  return { ...(data as unknown as OptionsAnswer), sheet: read.sheet, dashboardUrl: read.dashboardUrl };
+}
+
+const rowOfSheet = (sheet: SavedSheet, id: string) => sheet.sections.flatMap((section) => section.rows).find((row) => row.id === id);
+
+/** People made, one a line: the number to pick them by, their name and who they are, and their picture's address. */
+function peopleLines(sheet: SavedSheet): string[] {
+  const row = rowOfSheet(sheet, "who");
+  return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}${option.pictureUrl ? `  picture: ${option.pictureUrl}` : ""}`);
+}
+
+/** How long --wait waits for people: eight people, each a cast call and a face Kie may take 10 minutes on, twice. */
+const PEOPLE_WAIT_POLLS = (45 * 60_000) / POLL_MS;
+
+/**
+ * `exodus video swipe sheet people <swipeId> [--count n] [--yes] [--wait]`: new people to pick from for the person
+ * row, each one short text call on the member's model key and one face picture on their Kie key. Without --yes it
+ * says the price and what it buys, and nothing is made or paid. With it the server makes them in the background;
+ * --wait waits until they are made and shows each with their picture's address.
+ */
+/** The most as the price says it: rounded up to the cent, so no line says less than the price showed. */
+const mostShown = (mostUsd: number) => (Math.ceil(Math.round(mostUsd * 100_000) / 1000) / 100).toFixed(2);
+
+export async function swipeSheetPeopleFlow(
+  swipeId: string,
+  count: number | null,
+  maxUsd: number | null,
+  opts: SwipeRunOptions,
+  deps: VideoDeps,
+): Promise<FlowResult> {
+  const again = `exodus video swipe sheet people ${swipeId}${count !== null ? ` --count ${count}` : ""}`;
+  let res: ApiResponse<unknown>;
+  try {
+    res = await deps.post(SWIPE_SHEET_OPTIONS_PATH, {
+      swipeId,
+      row: "who",
+      ...(count !== null ? { count } : {}),
+      ...(opts.yes ? { yes: true } : {}),
+      ...(maxUsd !== null ? { mostUsd: maxUsd } : {}),
+    });
+  } catch (err) {
+    const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
+    // A yes that got no answer may have started the people: the sheet says, so they are never asked for twice.
+    const look = opts.yes ? `Whether they are being made is not known. Read the sheet before asking again: exodus video swipe sheet ${swipeId}` : "Nothing was made.";
+    return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, error, started: opts.yes ? "unknown" : false })] : [error, look] };
+  }
+  if (!res.ok) {
+    if (res.status === 404) return swipeError(res, opts.json);
+    const error = swipeErrorLine(res);
+    const refused = res.status >= 400 && res.status < 500;
+    const look = refused ? "Nothing was made." : `Whether they are being made is not known. Read the sheet before asking again: exodus video swipe sheet ${swipeId}`;
+    return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, status: res.status, error, started: refused ? false : "unknown" })] : [error, look] };
+  }
+  const answer = optionsAnswerOf(res.data);
+  if (!answer?.price) return failed(`The server's answer about these people could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);
+  if (!answer.started) {
+    if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, started: false, price: answer.price, refusal: answer.refusal ?? null })] };
+    // The figure the yes carries is the price's most, rounded up to the cent as the price prints it.
+    const most = mostShown(answer.price.mostUsd);
+    const next = answer.refusal
+      ? [answer.refusal]
+      : [`Make them (paid, on your keys, at most $${most}): ${again} --yes --max-usd ${most}`];
+    return { code: 0, lines: [...answer.price.lines, "Nothing was made or paid yet.", ...next] };
+  }
+  const ids = answer.ids ?? [];
+  const head = [
+    `Making ${ids.length === 1 ? "1 new person" : `${ids.length} new people`}, numbers ${ids.join(", ")}, at most $${mostShown(answer.price.mostUsd)} on your keys.`,
+  ];
+  if (!opts.wait) {
+    const lines = [...head, `See them as they are made: exodus video swipe sheet ${swipeId}`, `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`];
+    return { code: 0, lines: opts.json ? [JSON.stringify({ ok: true, started: true, ids, price: answer.price, sheet: answer.sheet, dashboardUrl: answer.dashboardUrl })] : lines };
+  }
+  const out = progress(opts);
+  for (const line of head) out.say(line);
+  const ended = await poll<{ sheet: SavedSheet; dashboardUrl: string } | { refused: ApiResponse<unknown> }>(
+    () => deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`),
+    (read) => {
+      if (!read.ok) return { done: { refused: read } };
+      const sheet = sheetOf(read.data);
+      if (!sheet) return null;
+      return rowOfSheet(sheet.sheet, "who")?.optionsStatus?.making === true ? null : { done: sheet };
+    },
+    PEOPLE_WAIT_POLLS,
+    deps,
+  );
+  const stillGoing = `They may still be made: exodus video swipe sheet ${swipeId}`;
+  if ("lost" in ended) return failed(`${LOST} ${stillGoing}`, opts.json);
+  if ("timedOut" in ended) return failed(`The people are still being made. ${stillGoing}`, opts.json);
+  if ("refused" in ended.done) return waitRefused(ended.done.refused, stillGoing, opts.json);
+  const { sheet, dashboardUrl } = ended.done;
+  const status = rowOfSheet(sheet, "who")?.optionsStatus;
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, started: true, ids, status: status ?? null, sheet, dashboardUrl })] };
+  const people = peopleLines(sheet);
+  return {
+    // An ask that made no one or stopped before it finished ends the wait as a failure.
+    code: status?.failed ? 1 : 0,
+    lines: [
+      ...out.kept,
+      ...(status?.sentence ? [status.sentence] : []),
+      ...(people.length > 0 ? ["People to pick from:", ...people, `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`] : []),
+    ],
+  };
+}
+
 /**
  * Why a start held to `maxUsd` cannot be sent: this server has no price before the yes (an older server, which ignores
  * maxUsd), or the CLI could not reach it to ask. Null when the server can hold the start to the price.
@@ -1852,6 +2056,25 @@ async function maxUsdUnsupported(swipeId: string, maxUsd: number, deps: VideoDep
   } catch {
     return `The server could not be asked whether it holds a start to a price, ${cannot}`;
   }
+}
+
+/** `exodus video swipe sheet voices <swipeId>`: the catalog voices on the member's ElevenLabs account that fit the person, then their own voices. Free. */
+export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(SWIPE_SHEET_OPTIONS_PATH, { swipeId, row: "voice" });
+  if (!res.ok) return swipeError(res, opts.json);
+  const answer = optionsAnswerOf(res.data);
+  if (!answer) return failed(`The server's answer about the voices could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);
+  const row = rowOfSheet(answer.sheet, "voice");
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, voices: row?.options ?? [], status: row?.optionsStatus ?? null, sheet: answer.sheet, dashboardUrl: answer.dashboardUrl })] };
+  const voices = (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}${option.sampleUrl ? `  sample: ${option.sampleUrl}` : ""}`);
+  return {
+    code: 0,
+    lines: [
+      ...(row?.optionsStatus?.sentence ? [row.optionsStatus.sentence] : []),
+      ...voices,
+      ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
+    ],
+  };
 }
 
 // ── The start ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -4096,6 +4319,10 @@ export async function runSwipePlan(
       return swipeSheetSetFlow(plan.swipeId, plan.picks, opts, deps);
     case "sheet-price":
       return swipeSheetPriceFlow(plan.swipeId, opts, deps);
+    case "sheet-people":
+      return swipeSheetPeopleFlow(plan.swipeId, plan.count, plan.maxUsd, opts, deps);
+    case "sheet-voices":
+      return swipeSheetVoicesFlow(plan.swipeId, opts, deps);
     case "run":
       return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
   }

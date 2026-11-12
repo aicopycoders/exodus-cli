@@ -257,6 +257,8 @@ Usage:
   exodus video swipe sheet <swipeId> [--json]
   exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...] [--json]
   exodus video swipe sheet price <swipeId> [--json]
+  exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
+  exodus video swipe sheet voices <swipeId> [--json]
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull)
@@ -582,6 +584,15 @@ to set. swipe sheet price <swipeId> is free: the price of the video at the
 sheet's rows and at each size and takes, with the most it can cost. swipe
 start --max-usd <n> holds the start to the most a price showed: a start that
 can now cost more is refused, and nothing is started.
+swipe sheet people is paid, on the member's own keys: new people to pick from
+for the person row, each one or two short text calls on their model key and one
+face picture on their Kie key. Without --yes it says the price and what it buys
+and makes nothing; --yes --max-usd <the price's most> makes them (--count 1 to
+8, 4 by default), --wait waits for them. Each is shown with their picture's
+address; who=<n> picks one, and the video is then filmed with that person and
+that face. swipe sheet voices is free: the catalog voices on the member's
+ElevenLabs account that fit the person, then their own voices, each with its
+sample's address; voice=<n> picks one, and the video is filmed in it.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
@@ -8267,6 +8278,8 @@ const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
 const WRITE_VALUE_FLAGS = new Set(["kind"]);
 /** Value flags of `video swipe start` alone (COP-265: the most the price showed), read the same way. */
 const START_VALUE_FLAGS = new Set(["max-usd"]);
+/** COP-265 part 7: --count and --max-usd take a value only on `swipe sheet people`. */
+const SHEET_PEOPLE_VALUE_FLAGS = new Set(["count", "max-usd"]);
 
 export function parsePositional(args = process.argv.slice(3)): string[] {
   const read = (valueFlags: ReadonlySet<string>): string[] => {
@@ -8292,6 +8305,8 @@ export function parsePositional(args = process.argv.slice(3)): string[] {
   if (asWrite[0] === "swipe" && asWrite[1] === "write") return asWrite;
   const asStart = read(START_VALUE_FLAGS);
   if (asStart[0] === "swipe" && asStart[1] === "start") return asStart;
+  const asPeople = read(SHEET_PEOPLE_VALUE_FLAGS);
+  if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && asPeople[2] === "people") return asPeople;
   return read(new Set());
 }
 

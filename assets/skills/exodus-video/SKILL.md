@@ -713,6 +713,12 @@ for the next video. `who` picks the person filmed, in the row's own form, as
 `filmed`, `pose`, `prop`, `moves`, `place`, `look`, `time`, `placeNote`: how
 and where it is filmed, each with its default's reason; set one only when the
 member asks (`time=dusk`). `notes` end every take's prompt.
+`hook` is take 1's opening action, `off` or a level from 1 to 5 (2 is the
+usual), and `hookKind` its kind (`any`, or one the row lists), each with
+its default's reason; set one only when the member asks (`hook=3`,
+`hook=off`). With the hook on, the board asks the hook director for the
+opening: one text call on the member's model key, which the price names among
+what it leaves out.
 With each sheet, show its price: `exodus video swipe sheet price <swipeId>`
 (free) prints it at the sheet's rows, with the most it can cost and one line
 of what it leaves out. A 480p draft or the first take only is a row the
@@ -721,6 +727,18 @@ price again after a set. The first take only is a cheap check of the method
 and the size, not of the final person: the whole video after it is a second
 start, paid on its own (`takes=all`, then `swipe start <swipeId> --again`),
 and it casts the person and draws the pictures again. Say so before that yes.
+
+Offer people or voices to pick from only when the member asks for options.
+People are paid on the member's keys: run `exodus video swipe sheet people
+<swipeId> --count <n>` first (no `--yes`), show the price it prints word for
+word, and after their yes run the line it prints (`--yes --max-usd <n>`, the
+most the price said). Do not add `--wait`: it can wait up to 45 minutes. Read
+the sheet a few minutes later (`exodus video swipe sheet <swipeId>`) and show
+each person's name and picture address. Voices are free: `exodus video swipe
+sheet voices <swipeId>` lists them, each with a sample to hear. A pick is a set
+(`who=<n>`, `voice=<n>`), and the video is filmed with that person, their face
+and that voice. If the server says these choices are not switched on yet, say
+so and go on with the sheet as it is.
 
 For each video, in the listed order, run steps 1 and 2; step 3 comes once
 every video has started:
@@ -1025,6 +1043,11 @@ exodus video swipe sheet <swipeId>                        the saved sheet the se
                                                           no dashboard page shows it yet
 exodus video swipe sheet set <swipeId> <row>=<value> ...  change rows of the saved sheet, all or none; <row>= clears one (free)
 exodus video swipe sheet price <swipeId>                  the video's price at the saved sheet's rows and at each size and takes (free)
+exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>]
+                                                          new people to pick from (paid on the member's keys: the
+                                                          price first, --yes with its most makes them); who=<n> picks one
+exodus video swipe sheet voices <swipeId>                 the account's voices that fit the person, then the member's
+                                                          own, each with a sample (free); voice=<n> picks one
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file
 ```
 

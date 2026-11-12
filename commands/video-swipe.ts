@@ -185,6 +185,8 @@ export interface SavedSheet {
   sections: Array<{ id: string; label: string; rows: SavedSheetRow[] }>;
   /** When the kind has a sheet but this member may not start the kind: the start's own sentence. Absent from older servers. */
   startRefusal?: string;
+  /** Only in the answer to a set: what it changed beside the rows it named. */
+  notice?: string;
 }
 
 /** One size and takes of a swipe's video, priced (convex/videoSheet.ts SheetPriceRow), or why it has no price. */
@@ -1622,9 +1624,14 @@ export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
       const value = row.value === null ? "not set" : String(row.value);
       lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
       if (row.from) lines.push(`    ${FROM_WORDS[row.from]}${row.why ? `: ${row.why}` : ""}`);
+      else if (row.why) lines.push(`    ${row.why}`);
       if (row.options) {
         const cost = row.optionsCostUsd ? ` (showing them costs ${usd(row.optionsCostUsd)})` : "";
-        lines.push(`    options${cost}: ${row.options.map((option) => `${option.id} (${option.label})`).join(", ")}`);
+        // A row whose options follow the row above it (a place's looks) has none until that row has a value.
+        const above = section.rows[section.rows.indexOf(row) - 1];
+        const none = above ? `none until ${above.label.toLowerCase().replace(/^the /, "a ")} is set` : "none";
+        const shown = row.options.length > 0 ? row.options.map((option) => `${option.id} (${option.label})`).join(", ") : none;
+        lines.push(`    options${cost}: ${shown}`);
       }
       lines.push(`    ${row.usedBy ? `read by: ${row.usedBy}` : "no step reads it yet"}`);
     }
@@ -1684,6 +1691,7 @@ export async function swipeSheetSetFlow(
   const set = Object.keys(picks).filter((row) => picks[row] !== null);
   const cleared = Object.keys(picks).filter((row) => picks[row] === null);
   const said = [...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []), ...(cleared.length > 0 ? [`Cleared ${cleared.join(", ")}.`] : [])];
+  if (read.sheet.notice) said.push(read.sheet.notice);
   return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
 }
 

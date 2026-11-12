@@ -236,6 +236,7 @@ export interface SavedSheet {
         rows: SavedSheetRow[];
     }>;
     startRefusal?: string;
+    notice?: string;
 }
 export type SwipePriceRow = {
     size: string;

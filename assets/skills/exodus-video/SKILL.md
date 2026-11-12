@@ -708,7 +708,11 @@ not that yes: set it with `exodus video swipe sheet set <swipeId>
 notes="<words>"` (free; `<row>=` clears a row), say the change in one line,
 and ask the yes again. Say a row marked "no step reads it yet" as saved, not
 used. The start copies the saved sheet into the video; a change after it is
-for the next video.
+for the next video. `who` picks the person filmed, in the row's own form, as
+`who="a white woman in her 30s, grey hoodie"`; unset, the script decides.
+`filmed`, `pose`, `prop`, `moves`, `place`, `look`, `time`, `placeNote`: how
+and where it is filmed, each with its default's reason; set one only when the
+member asks (`time=dusk`). `notes` end every take's prompt.
 With each sheet, show its price: `exodus video swipe sheet price <swipeId>`
 (free) prints it at the sheet's rows, with the most it can cost and one line
 of what it leaves out. A 480p draft or the first take only is a row the

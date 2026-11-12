@@ -6793,7 +6793,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (finish && (finish.captions || finish.cards || endLayers) && !stagedText) {
     if (hasFilter("subtitles")) {
       ass = "edit.ass";
-      const cap = sourceAd?.captions ?? null;
+      const cap = sourceAd?.captions ?? manifest.sheetCaptions ?? null;
       const screens = captionsBeforeEndCard(!finish.captions
         ? []
         : finish.captionsByLine

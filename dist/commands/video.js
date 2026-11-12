@@ -205,10 +205,11 @@ Usage:
   exodus video swipe show <swipeId> [--json]
   exodus video swipe list [--json]
   exodus video swipe find [--brand "<name>"] [--limit <n>] [--json]
-  exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--yes] [--wait] [--json]
+  exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--max-usd <n>] [--yes] [--wait] [--json]
   exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
   exodus video swipe sheet <swipeId> [--json]
   exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...] [--json]
+  exodus video swipe sheet price <swipeId> [--json]
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull)
@@ -445,7 +446,8 @@ the brand's version, then start the video on the kind the swipe wrote. Four
 steps cost money: swipe (the breakdown, on the team's keys), swipe template
 and swipe write (on your own Anthropic or OpenRouter key) and swipe start (the
 run's storyboard and pictures). Without --yes each one sends nothing and says
-what it buys and who pays. The CLI prints no price for any of them.
+what it buys and who pays. The CLI prints no price for any of them, but for
+swipe start of a kind whose saved sheet has one.
   --file <ad.mp4>      The ad as a video file: MP4, MOV, M4V or WebM, up to
                        300 MB (swipe)
   --url <link>         A link to the ad: Meta Ad Library, TikTok, Instagram or
@@ -484,7 +486,7 @@ what it buys and who pays. The CLI prints no price for any of them.
   --full               What the breakdown read from the ad (swipe status): each
                        shot with its cut times, a-roll or cutaway, framing,
                        camera and description; the script with who says each
-                       line; and the cast. No pictures
+                       line; the cast; and how it is filmed. No pictures
   --look <slug>        The new look (swipe write --mode new-look)
   --script <file>      Your own script (swipe write --mode their-format)
   --kind <kind>        A kind of ad in place of the one the template picked
@@ -529,7 +531,10 @@ saved sheet yet. Each row says its value, where it comes from and why, and
 which step reads it. swipe sheet set <swipeId> <row>=<value> changes rows, all
 or none; <row>= clears one. The start copies the saved sheet into the video; a
 change after it is for the next video. A kind of ad with no sheet has nothing
-to set.
+to set. swipe sheet price <swipeId> is free: the price of the video at the
+sheet's rows and at each size and takes, with the most it can cost. swipe
+start --max-usd <n> holds the start to the most a price showed: a start that
+can now cost more is refused, and nothing is started.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
@@ -6102,6 +6107,7 @@ const VALUE_FLAGS = new Set([
 ]);
 const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
 const WRITE_VALUE_FLAGS = new Set(["kind"]);
+const START_VALUE_FLAGS = new Set(["max-usd"]);
 export function parsePositional(args = process.argv.slice(3)) {
     const read = (valueFlags) => {
         const out = [];
@@ -6127,6 +6133,9 @@ export function parsePositional(args = process.argv.slice(3)) {
     const asWrite = read(WRITE_VALUE_FLAGS);
     if (asWrite[0] === "swipe" && asWrite[1] === "write")
         return asWrite;
+    const asStart = read(START_VALUE_FLAGS);
+    if (asStart[0] === "swipe" && asStart[1] === "start")
+        return asStart;
     return read(new Set());
 }
 function flagString(flags, name) {

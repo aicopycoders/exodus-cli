@@ -8,6 +8,7 @@ export declare const SWIPE_PRODUCTS_PATH = "/api/v2/video/swipe-products";
 export declare const SWIPES_PATH = "/api/v2/video/swipes";
 export declare const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 export declare const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
+export declare const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
@@ -58,7 +59,77 @@ export interface SwipeFull {
             text: string;
         }>;
     };
+    version?: string;
+    filming?: SwipeFilming;
     warnings: string[];
+}
+export interface SwipeFilming {
+    filmedBy?: string;
+    movement?: string;
+    cuts?: string;
+    cutsPerMinute?: number;
+    framing?: string;
+    places?: string;
+    placeList?: Array<{
+        setting?: string;
+        line: string;
+    }>;
+    placeLine?: string;
+    props?: string[];
+    light?: string;
+    lightSource?: string;
+    body?: string;
+    captions?: {
+        amount?: string;
+        style?: string;
+        position?: string;
+        caps?: boolean;
+    };
+    inserts?: Array<{
+        part: string;
+        at: number;
+        secondsOn?: number;
+        where?: string;
+        widthPct?: number;
+        words?: string;
+    }>;
+    brollShare?: string;
+    wordsPerSecond?: number;
+    firstSeconds?: string;
+    hookBuilt?: string;
+    endCard?: string;
+    measuredStillPct?: number;
+    cameraHeight?: string;
+    cameraTilt?: string;
+    pose?: string;
+    moves?: Array<{
+        move: string;
+        at: number;
+        to?: number;
+    }>;
+    held?: Array<{
+        thing: string;
+        hands?: string;
+        product?: boolean;
+        wholeAd: boolean;
+        from?: number;
+        to?: number;
+    }>;
+    handActions?: Array<{
+        does: string;
+        things?: string;
+        product?: boolean;
+        from: number;
+        to: number;
+    }>;
+    personLook?: {
+        hair?: string;
+        hairColour?: string;
+        skinTone?: string;
+        build?: string;
+        glasses?: string;
+        facialHair?: string;
+    };
 }
 export interface SwipeTemplateView {
     kind: {
@@ -166,6 +237,49 @@ export interface SavedSheet {
     }>;
     startRefusal?: string;
 }
+export type SwipePriceRow = {
+    size: string;
+    takes: "all" | "first";
+    filmedTakes: number;
+    costUsd: number;
+    maxUsd: number;
+    lines: Array<{
+        what: string;
+        usd: number;
+    }>;
+    startRefusal?: string;
+} | {
+    size: string;
+    takes: "all" | "first";
+    why: string;
+};
+export type SwipePrice = {
+    swipeId: string;
+    kind: {
+        key: string;
+        label: string;
+    } | null;
+    priced: true;
+    sizeChoices: boolean;
+    scriptTakes: number;
+    picked: Extract<SwipePriceRow, {
+        costUsd: number;
+    }>;
+    options: SwipePriceRow[];
+    notes: string[];
+    leavesOut: string;
+    startRefusals: string[];
+    heldBy: string | null;
+    approximate: true;
+} | {
+    swipeId: string;
+    kind: {
+        key: string;
+        label: string;
+    } | null;
+    priced: false;
+    why: string;
+};
 type ServerMode = "whole" | "hook" | "their-format" | "new-look";
 export declare const SWIPE_MODES: ReadonlyArray<{
     flag: string;
@@ -211,6 +325,7 @@ export interface StartAsk {
     title?: string;
     music: boolean;
     oneShot: boolean;
+    maxUsd?: number;
 }
 export interface SwipeOpts {
     json: boolean;
@@ -268,6 +383,10 @@ export type SwipePlan = {
     picks: Record<string, string | null>;
     opts: SwipeOpts;
 } | {
+    kind: "sheet-price";
+    swipeId: string;
+    opts: SwipeOpts;
+} | {
     kind: "run";
     sheetFile: string;
     retryRefused: boolean;
@@ -313,11 +432,12 @@ export interface SwipeRunOptions extends SwipeOpts {
 export declare function swipeBreakdownFlow(source: SwipeSource, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps, full?: boolean): Promise<FlowResult>;
 export declare function fullLines(data: Record<string, unknown>): string[];
+export declare function filmingLines(filming: SwipeFilming | undefined, version?: string): string[];
 export declare function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeProductsFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const FIND_READ = 200;
 export declare const FIND_PAID_FLAGS: readonly ["yes", "wait", "file", "url", "ad", "again"];
-export declare const FIND_OTHER_FLAGS: readonly ["one-shot", "music", "mode", "closeness", "product", "look", "script", "style", "title", "sheet", "full", "status", "persona", "retry-refused", "kind"];
+export declare const FIND_OTHER_FLAGS: readonly ["one-shot", "music", "mode", "closeness", "product", "look", "script", "style", "title", "sheet", "full", "status", "persona", "retry-refused", "kind", "max-usd"];
 export declare const FIND_KIND_LINE = "The kind of an ad is known only after it is read.";
 export declare const FIND_EMPTY_LIBRARY = "The swipe library has no ads yet for this brand.";
 export interface FindAsk {
@@ -361,6 +481,8 @@ export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise
 export declare function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[];
 export declare function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare function priceLines(price: SwipePrice, dashboardUrl: string): string[];
+export declare function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     runId: string;

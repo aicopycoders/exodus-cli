@@ -575,7 +575,7 @@ Send this in one message, in this order, then stop and wait:
 > **How many:** <n> videos = <a> ads × <p> personas:
 > - Video 1: <ad> × <persona>
 > - Video 2: <ad> × <persona>
-> **Cost:** the CLI prints no price for a swipe.
+> **Cost:** no price before the write; a kind with a saved sheet gets its price after it.
 > **My picks:** <one line, with the reason>. **It buys:** <n> scripts and <n>
 > whole videos, on your keys. Say go, or change a row. (Above 6 videos, end
 > with "Say yes to <n> videos, or change a row." instead.)
@@ -621,8 +621,9 @@ The rows:
   picture of the room, a cut-out of the product and one take for each 15 or
   25 seconds of script, on the member's Kie key, and text calls on their
   model key; it needs their ElevenLabs key and their Kie key. Its price is
-  the server's estimate, shown only where the CLI prints one; for a swipe it
-  prints none today.
+  the server's estimate, known once the swipe is written: `exodus video swipe
+  sheet price <swipeId>` (free) prints it at 720p or a 480p draft, the whole
+  video or the first take only, each with the most it can cost.
 - **The saved sheet** (a kind that has one; One-take UGC today). The server
   keeps one for each swipe of such a kind, made after its write. For such a
   video this sheet's yes covers the write only, and **It buys:** says so:
@@ -659,8 +660,10 @@ The rows:
   characters counting as one today. Show the multiplication, as in "4 videos
   = 2 ads × 2 personas". Above 6 videos, say the count and ask for the yes on
   that count in so many words: "That is 8 videos. Say yes to 8 videos."
-- **Cost.** The CLI prints no price for a swipe, so the sheet says exactly
-  that: no number, no range, no guess. The Director block of `exodus video
+- **Cost.** Before the write the CLI prints no price for a swipe, so the
+  sheet says exactly that: no number, no range, no guess. A kind with a saved
+  sheet (One-take UGC today) gets its price after the write, with its saved
+  sheet (step 4). The Director block of `exodus video
   status` prints "Spent: $… of $12.00": the $12.00 is the Director's limit
   for its redos on that video, not a price and not a ceiling for the first
   pass. Never quote it as the cost.
@@ -706,6 +709,14 @@ notes="<words>"` (free; `<row>=` clears a row), say the change in one line,
 and ask the yes again. Say a row marked "no step reads it yet" as saved, not
 used. The start copies the saved sheet into the video; a change after it is
 for the next video.
+With each sheet, show its price: `exodus video swipe sheet price <swipeId>`
+(free) prints it at the sheet's rows, with the most it can cost and one line
+of what it leaves out. A 480p draft or the first take only is a row the
+member sets (`size=480p`, `takes=first`) when the price lists them; read the
+price again after a set. The first take only is a cheap check of the method
+and the size, not of the final person: the whole video after it is a second
+start, paid on its own (`takes=all`, then `swipe start <swipeId> --again`),
+and it casts the person and draws the pictures again. Say so before that yes.
 
 For each video, in the listed order, run steps 1 and 2; step 3 comes once
 every video has started:
@@ -730,8 +741,11 @@ every video has started:
    swipe id it printed for that video.
 2. `exodus video swipe start <swipeId> --one-shot --yes`, without
    `--one-shot` when the member chose to stop at the storyboard, and with
-   `--music` when they chose music. Give the member the `Watch it:` link at
-   once. Then go on to the next video.
+   `--music` when they chose music. For a kind with a saved sheet whose price
+   printed a number, add `--max-usd <n>` with the "at most" it showed: a
+   start that can now cost more is refused, and nothing is started. No
+   number printed: no `--max-usd`, and never a guessed one. Give the member the
+   `Watch it:` link at once. Then go on to the next video.
 3. When every video has started, follow each run with `exodus video status
    <runId>` and do what it prints. A one-shot run that waits for a cut goes
    to "End: watch and approve" (pull, cut, upload, the run page). A run that
@@ -920,10 +934,11 @@ noted only.
 ### Step by step: a yes before each paid step
 
 For a member who asks for stops. Four steps cost money, and the CLI prints no
-price for any of them. Run each one first without `--yes`: it sends nothing
-and prints what the step buys and who pays. Tell the member both, say the CLI
-prints no price, never guess one, and run the same line with `--yes` only
-after their yes.
+price for any of them but the start of a kind with a saved sheet. Run each
+one first without `--yes`: it sends nothing and prints what the step buys and
+who pays. Tell the member both, and the price when it prints one, else say
+the CLI prints no price; never guess one, and run the same line with `--yes`
+only after their yes.
 
 1. **Get the ad.** One of a video file, a link (Meta Ad Library, TikTok,
    Instagram or YouTube), or a video ad in the brand's swipe library by the
@@ -935,9 +950,16 @@ after their yes.
    Once it is done, `exodus video swipe status <breakdownId> --full` prints
    what Exodus read from the ad: each shot with its cut times, a-roll or
    cutaway, framing, camera and description, then the script with who says
-   each line, then the cast. It is free. Show the member the shot list and
-   the script before the template, so they can say whether Exodus read their
-   ad right.
+   each line, then the cast, then how it is filmed. It is free. Show the
+   member the shot list and the script before the template, so they can say
+   whether Exodus read their ad right. In "How it is filmed", every line but
+   Measured, Cuts and Words is the video model's reading by eye, and it is
+   often wrong: in Exodus's own checks the camera height was right 2 times
+   in 9. Cuts is counted, but it includes jump cuts the video model saw.
+   Give the by-eye lines as what Exodus thinks it saw, never as fact, and
+   ask the member to check any that matters against the ad. Measured says
+   only that most of the part of the frame it could read stood still; it
+   does not prove the phone was put down.
 2. **The template.** `exodus video swipe template <breakdownId>`, paid on the
    member's own Anthropic or OpenRouter key. It prints the kind of ad and the
    look the ad matched, and why. A template made before costs nothing. Show
@@ -971,7 +993,9 @@ after their yes.
    one time before this start, as in step 4 (`exodus video swipe sheet
    <swipeId>`, free), in the same message as what the start buys and who
    pays (the line without `--yes`). On this path the saved sheet's yes is
-   the start's yes: ask once, then run the line with `--yes`. A reply that
+   the start's yes: ask once, then run the line with `--yes` and the
+   `--max-usd <n>` that line printed (its price's "at most"): a start that
+   can now cost more is refused, and nothing is started. A reply that
    only changes a row is not that yes.
 6. **Then** stop 3 (the storyboard) and the end, as above.
 
@@ -981,7 +1005,7 @@ after their yes.
 exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId> [--yes] [--wait]
                                                           break the ad down (team's keys); one read before costs nothing
 exodus video swipe status <breakdownId> [--wait] [--full] where the breakdown stands, step by step;
-                                                          --full adds what it read: shots, script, cast
+                                                          --full adds what it read: shots, script, cast, filming
 exodus video swipe template <breakdownId> [--yes]         the kind of ad and look it matched (member's key)
 exodus video swipe products                               the brand's products and their ids
 exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closeness <step>] [--look <slug>] [--script <file>] [--kind <kind>] [--yes]
@@ -990,12 +1014,13 @@ exodus video swipe show <swipeId>                         one swipe again
 exodus video swipe list                                   the brand's newest swipes, each with when it was written and its product;
                                                           a refused one shows what it cost
 exodus video swipe find [--brand "<name>"] [--limit <n>]  video ads in the swipe library to offer as options (free); no kind, no results
-exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--yes] [--wait]
+exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--max-usd <n>] [--yes] [--wait]
                                                           start the run on the kind the swipe wrote; --again for a
                                                           second, paid video of a swipe that already has one
 exodus video swipe sheet <swipeId>                        the saved sheet the server keeps for a swipe (free);
                                                           no dashboard page shows it yet
 exodus video swipe sheet set <swipeId> <row>=<value> ...  change rows of the saved sheet, all or none; <row>= clears one (free)
+exodus video swipe sheet price <swipeId>                  the video's price at the saved sheet's rows and at each size and takes (free)
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file
 ```
 

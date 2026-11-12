@@ -7,7 +7,8 @@
  * Four steps cost money: the breakdown (the team's keys), the template and the write (the member's own Anthropic or
  * OpenRouter key) and the start (the run's storyboard and pictures, and with --one-shot the rest of the video). The
  * CLI knows no price for any of them, so each one asks for --yes and, without it, sends nothing and says what the
- * step buys and who pays. The template and the write take minutes: the server answers at once with a job, and the
+ * step buys and who pays; the start also says its price for a kind whose saved sheet has one (`swipe sheet price`,
+ * COP-265). The template and the write take minutes: the server answers at once with a job, and the
  * CLI polls it until the work is done or says why it stopped.
  *
  * The answers mirror convex/http.ts's swipe routes. This package ships on its own schedule, so the shapes are
@@ -32,6 +33,8 @@ export const SWIPES_PATH = "/api/v2/video/swipes";
 export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 /** A swipe's saved sheet (COP-265): GET ?id= reads it, POST { swipeId, picks } sets rows of it. */
 export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
+/** The price of a swipe's video before the yes (COP-265 part 6): GET ?id= answers { price, dashboardUrl }. Free. */
+export const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 /** The brand's swipe library (convex/http.ts), the same free read `exodus genesis --list-swipes` makes. */
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
@@ -68,7 +71,45 @@ export interface SwipeFull {
     cast: Array<{ characterId: string; name: string; embodiment: "on-screen" | "voice-only" | "behind-camera"; look: string; voice: string }>;
     script: Array<{ lineId: string; speakerId: string | null; start: number; end: number; text: string }>;
   };
+  /** The breakdown's format version: "1.0", "1.1" or "1.2". */
+  version?: string;
+  /** How the ad is filmed (format 1.1, more fields in 1.2); absent from a breakdown of 1.0. */
+  filming?: SwipeFilming;
   warnings: string[];
+}
+
+/**
+ * The filming block as `?full=1` sends it (src/lib/video-breakdown/schema.ts, FilmingSchema), the fields the CLI
+ * prints. Every field is optional: one that is missing was not read. The lists' values are printed as they come.
+ */
+export interface SwipeFilming {
+  filmedBy?: string;
+  movement?: string;
+  cuts?: string;
+  cutsPerMinute?: number;
+  framing?: string;
+  places?: string;
+  placeList?: Array<{ setting?: string; line: string }>;
+  placeLine?: string;
+  props?: string[];
+  light?: string;
+  lightSource?: string;
+  body?: string;
+  captions?: { amount?: string; style?: string; position?: string; caps?: boolean };
+  inserts?: Array<{ part: string; at: number; secondsOn?: number; where?: string; widthPct?: number; words?: string }>;
+  brollShare?: string;
+  wordsPerSecond?: number;
+  firstSeconds?: string;
+  hookBuilt?: string;
+  endCard?: string;
+  measuredStillPct?: number;
+  cameraHeight?: string;
+  cameraTilt?: string;
+  pose?: string;
+  moves?: Array<{ move: string; at: number; to?: number }>;
+  held?: Array<{ thing: string; hands?: string; product?: boolean; wholeAd: boolean; from?: number; to?: number }>;
+  handActions?: Array<{ does: string; things?: string; product?: boolean; from: number; to: number }>;
+  personLook?: { hair?: string; hairColour?: string; skinTone?: string; build?: string; glasses?: string; facialHair?: string };
 }
 
 export interface SwipeTemplateView {
@@ -145,6 +186,41 @@ export interface SavedSheet {
   /** When the kind has a sheet but this member may not start the kind: the start's own sentence. Absent from older servers. */
   startRefusal?: string;
 }
+
+/** One size and takes of a swipe's video, priced (convex/videoSheet.ts SheetPriceRow), or why it has no price. */
+export type SwipePriceRow =
+  | {
+      size: string;
+      takes: "all" | "first";
+      filmedTakes: number;
+      costUsd: number;
+      maxUsd: number;
+      lines: Array<{ what: string; usd: number }>;
+      /** The start would refuse this one, in its own sentence (a video tester's daily cap). */
+      startRefusal?: string;
+    }
+  | { size: string; takes: "all" | "first"; why: string };
+
+/** The price of a swipe's video before the yes, as GET /api/v2/video/swipe-sheet-price sends it (convex/videoSheet.ts SheetPrice). */
+export type SwipePrice =
+  | {
+      swipeId: string;
+      kind: { key: string; label: string } | null;
+      priced: true;
+      /** Whether this server offers 480p and the first take only; false: the options are the kind's own film alone. */
+      sizeChoices: boolean;
+      scriptTakes: number;
+      picked: Extract<SwipePriceRow, { costUsd: number }>;
+      options: SwipePriceRow[];
+      notes: string[];
+      leavesOut: string;
+      /** Why a start now would be refused whatever the size, in the start's own sentences. */
+      startRefusals: string[];
+      /** The swipe's video, when it has one. */
+      heldBy: string | null;
+      approximate: true;
+    }
+  | { swipeId: string; kind: { key: string; label: string } | null; priced: false; why: string };
 
 // ── The dashboard's words (src/app/(dashboard)/video/_components/swipe-door-model.ts) ─────────────────────────────
 
@@ -246,6 +322,8 @@ export interface StartAsk {
   title?: string;
   music: boolean;
   oneShot: boolean;
+  /** COP-265 part 6: the most the price before the yes showed; the server refuses a start that can now cost more. */
+  maxUsd?: number;
 }
 
 export interface SwipeOpts {
@@ -267,6 +345,7 @@ export type SwipePlan =
   | { kind: "start"; swipeId: string; ask: StartAsk; again: boolean; opts: SwipeOpts }
   | { kind: "sheet"; swipeId: string; opts: SwipeOpts }
   | { kind: "sheet-set"; swipeId: string; picks: Record<string, string | null>; opts: SwipeOpts }
+  | { kind: "sheet-price"; swipeId: string; opts: SwipeOpts }
   | { kind: "run"; sheetFile: string; retryRefused: boolean; status: boolean; persona: string | null; opts: SwipeOpts };
 
 const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet"];
@@ -415,7 +494,14 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
   if (verb === "start") {
     const start = startChoicesOf({ style: value("style"), title: value("title"), music: on("music"), oneShot: on("one-shot") }, CLI_WORDS.start);
     if ("problem" in start) return usage(start.problem);
-    return { kind: "start", swipeId: id, ask: start.ask, again: on("again"), opts };
+    // COP-265 part 6: the most the price before the yes showed, which the start is held to.
+    const most = value("max-usd");
+    if (most === null) return usage("video swipe start --max-usd needs the most the price showed, such as 4.89.");
+    if (most !== undefined && !/^\d+(\.\d{1,2})?$/.test(most.trim())) {
+      return usage(`video swipe start --max-usd takes a dollar amount, such as 4.89 (got "${most}").`);
+    }
+    const ask = most === undefined ? start.ask : { ...start.ask, maxUsd: Number(most.trim()) };
+    return { kind: "start", swipeId: id, ask, again: on("again"), opts };
   }
 
   // write
@@ -434,10 +520,12 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
 /** A row's id as the server takes it: a copy of video/lib/sheetSections.ts SHEET_ROW_ID, held equal by a test. */
 export const SHEET_ROW_ID = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 const SHEET_SET_LINE = 'exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...]';
+const SHEET_PRICE_LINE = "exodus video swipe sheet price <swipeId>";
 
 /**
- * `swipe sheet <swipeId>` and `swipe sheet set <swipeId> <row>=<value> ...`. `words` are the positional words after
- * `sheet`. A row given with nothing after its `=` is cleared. Both are free, so a paid step's flag is refused.
+ * `swipe sheet <swipeId>`, `swipe sheet set <swipeId> <row>=<value> ...` and `swipe sheet price <swipeId>`. `words`
+ * are the positional words after `sheet`. A row given with nothing after its `=` is cleared. All three are free, so a
+ * paid step's flag is refused.
  */
 function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOpts): SwipePlan {
   const usage = (line: string): SwipePlan => ({ kind: "usage", line });
@@ -451,6 +539,12 @@ function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOp
   // A switch's own on/off word (`--json true`) is not a word of the command.
   const switchWords = new Set(occurrences.filter((o) => o.flag === "json" && o.value !== undefined).map((o) => o.value as string));
   const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
+  if (given[0] === "price") {
+    const [, swipeId, ...extra] = given;
+    if (!swipeId) return usage(`video swipe sheet price needs a swipe id: ${SHEET_PRICE_LINE}`);
+    if (extra.length > 0) return usage(`video swipe sheet price takes one swipe id (got "${extra[0]}"): ${SHEET_PRICE_LINE}`);
+    return { kind: "sheet-price", swipeId, opts };
+  }
   if (given[0] !== "set") {
     const [swipeId, ...extra] = given;
     if (!swipeId) return usage("video swipe sheet needs a swipe id: exodus video swipe sheet <swipeId>");
@@ -924,9 +1018,113 @@ export function fullLines(data: Record<string, unknown>): string[] {
     lines.push(`  ${member.name || member.characterId} (${member.characterId}), ${EMBODIMENT[member.embodiment] ?? member.embodiment}`);
     lines.push(`      Look: ${member.look}`, `      Voice: ${member.voice}`);
   }
+  lines.push("", ...filmingLines(full.filming, full.version));
   if (full.warnings.length > 0) lines.push("", "What it was not sure about:", ...full.warnings.map((warning) => `  - ${warning}`));
   return lines;
 }
+
+const atSec = (sec: number) => `${sec.toFixed(1)} s`;
+const fromTo = (from: number | undefined, to: number | undefined) =>
+  from !== undefined && to !== undefined ? seconds(from, to) : from !== undefined ? `from ${atSec(from)}` : to !== undefined ? `to ${atSec(to)}` : "";
+/** The parts that are there, joined: an absent or empty part is left out. */
+const joinParts = (parts: Array<string | false | undefined | null>, by = ", ") => parts.filter((p): p is string => typeof p === "string" && p !== "").join(by);
+/** A text on one line: each line break, with the spaces around it, becomes " / ". */
+const oneLine = (text: string) => text.trim().replace(/\s*\n\s*/g, " / ");
+const productWord = (product: boolean | undefined) => (product === true ? "the product" : product === false ? "not the product" : "");
+
+/**
+ * The filming block as plain lines: first one line that says which lines are the video model's reading by eye
+ * (`BY_EYE`), then one line a subject, each field only when the breakdown read it: who holds the
+ * camera and whether it stands still (and how that was found), its height and tilt, the pose and the moves with
+ * their times, what is held and what the hands do, the person, the places, the light, the captions, what is laid
+ * over the picture, the pace, the opening and the ending. A breakdown of 1.0 has no block and says so in one line.
+ */
+export function filmingLines(filming: SwipeFilming | undefined, version?: string): string[] {
+  if (!filming || Object.keys(filming).length === 0) {
+    return [
+      version === "1.0"
+        ? "How it is filmed: this breakdown does not say (it is of version 1.0, made before Exodus read how an ad is filmed)."
+        : "How it is filmed: nothing was read.",
+    ];
+  }
+  const f = filming;
+  const out: string[] = [];
+  // Every value on one line: a card's words can hold a line break.
+  const line = (label: string, text: string) => {
+    if (text !== "") out.push(`  ${label}: ${oneLine(text)}`);
+  };
+  line("Camera", f.filmedBy ?? "");
+  line(
+    "Measured",
+    f.measuredStillPct !== undefined
+      ? `in ${f.measuredStillPct}% of the moments the measure settled in the talking shots, most of the part of the frame it could read stood still and no larger part slid together (this does not prove the phone was put down: a still layer over most of the frame reads the same)`
+      : "",
+  );
+  line("Camera height", f.cameraHeight ?? "");
+  line("Camera tilt", f.cameraTilt ?? "");
+  line("Camera movement", f.movement ?? "");
+  line("Framing", f.framing ?? "");
+  line("Pose", joinParts([f.pose, f.body && `body: ${f.body}`], "; "));
+  line("Moves", (f.moves ?? []).map((m) => `${m.move} ${m.to !== undefined ? seconds(m.at, m.to) : `at ${atSec(m.at)}`}`).join("; "));
+  line(
+    "Holds",
+    (f.held ?? [])
+      .map((h) => `${h.thing} (${joinParts([h.hands && `${h.hands} ${h.hands === "one" ? "hand" : "hands"}`, productWord(h.product), h.wholeAd ? "the whole ad" : fromTo(h.from, h.to)])})`)
+      .join("; "),
+  );
+  line(
+    "Hands",
+    (f.handActions ?? []).map((a) => `${seconds(a.from, a.to)} ${a.does}${a.things ? `, with ${a.things}` : ""}${a.product === undefined ? "" : ` (${productWord(a.product)})`}`).join("; "),
+  );
+  const p = f.personLook ?? {};
+  line(
+    "The person",
+    joinParts([
+      p.hair &&
+        (p.hair === "bald" || p.hair === "shaved"
+          ? `${p.hair} head`
+          : p.hair === "covered"
+            ? (p.hairColour ? `${p.hairColour} hair, covered` : "hair covered")
+            : `${joinParts([p.hair, p.hairColour], " ")} hair`),
+      p.hair === undefined && p.hairColour && `${p.hairColour} hair`,
+      p.skinTone && `${p.skinTone} skin`,
+      p.build && `${p.build} build`,
+      p.glasses && (p.glasses === "none" ? "no glasses" : p.glasses),
+      p.facialHair && (p.facialHair === "none" ? "no facial hair" : p.facialHair),
+    ]),
+  );
+  const placeList = (f.placeList ?? []).map((place) => joinParts([place.setting, place.line], ": ")).join("; ");
+  if (placeList) line(`Places${f.places ? ` (${f.places})` : ""}`, placeList);
+  else line("Places", f.places ?? "");
+  line("Main place", f.placeLine ?? "");
+  line("In view", (f.props ?? []).join(", "));
+  line("Light", joinParts([f.light, f.lightSource && `from ${f.lightSource}`]));
+  const c = f.captions;
+  line("Captions", c ? joinParts([c.amount, c.style, c.position, c.caps === undefined ? "" : c.caps ? "in capitals" : "not in capitals"], "; ") : "");
+  if ((f.inserts ?? []).length > 0) {
+    out.push("  Laid over the picture:");
+    for (const i of f.inserts ?? []) {
+      const when = i.secondsOn !== undefined ? `${atSec(i.at)} for ${atSec(i.secondsOn)}` : atSec(i.at);
+      out.push(`    ${when}  ${joinParts([i.part, i.where, i.widthPct !== undefined && `${i.widthPct}% wide`])}${i.words ? `: ${oneLine(i.words)}` : ""}`);
+    }
+  }
+  const perMinute = f.cutsPerMinute !== undefined ? `${f.cutsPerMinute} a minute` : "";
+  line("Cuts", f.cuts ? `${f.cuts}${perMinute ? ` (${perMinute})` : ""}` : perMinute);
+  line("B-roll", f.brollShare ?? "");
+  line("Words", f.wordsPerSecond !== undefined ? `${f.wordsPerSecond} a second` : "");
+  line("First seconds", f.firstSeconds ?? "");
+  line("How the hook is built", f.hookBuilt ?? "");
+  line("How it ends", f.endCard ?? "");
+  return ["How it is filmed:", ...(out.length > 0 ? [BY_EYE, ...out] : ["  Nothing was read."])];
+}
+
+/**
+ * Which lines of the filming block are the video model's reading by eye: all but the measured one and the two that
+ * code counts (src/lib/video-breakdown/schema.ts). Cuts is counted by code, but the count holds the jump cuts the
+ * model saw inside a shot (assemble.ts, unlistedCuts), so the line says so. Said once above the block, so a
+ * "Camera: selfie" read by eye is not taken for a fact beside the measured line.
+ */
+const BY_EYE = "  (The video model's reading by eye, not proven: every line but Measured, taken from the frames; Words, counted by code; and Cuts, counted by code with the jump cuts the video model saw.)";
 
 // ── The template ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1049,6 +1247,7 @@ export const FIND_OTHER_FLAGS = [
   "persona",
   "retry-refused",
   "kind",
+  "max-usd",
 ] as const;
 const TEXT_MAX = 400;
 
@@ -1476,6 +1675,7 @@ export async function swipeSheetSetFlow(
     const error = swipeErrorLine(res);
     const refused = res.status >= 400 && res.status < 500;
     if (opts.json) return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, saved: refused ? false : "unknown" })] };
+    if (refused && /Nothing was (set|saved)\.$/.test(error)) return { code: 1, lines: [error] };
     return { code: 1, lines: [error, refused ? "Nothing was saved." : readAgain] };
   }
   const read = sheetOf(res.data);
@@ -1485,6 +1685,165 @@ export async function swipeSheetSetFlow(
   const cleared = Object.keys(picks).filter((row) => picks[row] === null);
   const said = [...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []), ...(cleared.length > 0 ? [`Cleared ${cleared.join(", ")}.`] : [])];
   return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
+}
+
+// ── The price before the yes (COP-265 part 6) ───────────────────────────────────────────────────────────────────
+
+function priceOf(data: unknown): { price: SwipePrice; dashboardUrl: string } | null {
+  if (!isRecord(data) || !isRecord(data.price) || typeof data.price.priced !== "boolean") return null;
+  const price = data.price as unknown as SwipePrice;
+  if (price.priced && (!isRecord(price.picked) || !Array.isArray(price.options))) return null;
+  return { price, dashboardUrl: typeof data.dashboardUrl === "string" ? data.dashboardUrl : "" };
+}
+
+type PricedSwipe = Extract<SwipePrice, { priced: true }>;
+
+/** A line's dollars: whole cents as cents, a half cent kept (Kie bills a credit as half a cent). */
+const lineUsd = (value: number) => (Math.abs(value * 100 - Math.round(value * 100)) < 1e-6 ? usd(value) : `$${value.toFixed(3)}`);
+
+/** What one combination films, in the member's words. */
+function filmWords(row: { size: string; takes: "all" | "first" }, scriptTakes: number): string {
+  if (row.takes === "first" && scriptTakes > 1) return `${row.size}, the first take only`;
+  return `${row.size}, ${scriptTakes === 1 ? "its one take" : `all ${scriptTakes} takes`}`;
+}
+
+/** One combination's price, or why it has none, and the start's refusal of it. */
+function priceWords(row: SwipePriceRow): string {
+  if ("why" in row) return `no price: ${row.why}`;
+  return `about ${usd(row.costUsd)}, at most ${usd(row.maxUsd)}${row.startRefusal ? `. The start refuses it: ${row.startRefusal}` : ""}`;
+}
+
+/** The options worth a line: a script of one take has no first take apart from the whole, so that row is left out. */
+function distinctOptions(price: PricedSwipe): SwipePriceRow[] {
+  return price.scriptTakes > 1 ? price.options : price.options.filter((row) => row.takes === "all");
+}
+
+/** Whether an option the start would take costs less than the sheet's rows. */
+function cheaperOption(price: PricedSwipe): boolean {
+  return price.options.some((row) => !("why" in row) && !row.startRefusal && row.costUsd < price.picked.costUsd);
+}
+
+/** The price at the sheet's rows, as the start's paid-step text and `sheet price` both say it. */
+function pickedPriceLine(price: PricedSwipe): string {
+  return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${filmWords(price.picked, price.scriptTakes)}, as the swipe's sheet stands)`;
+}
+
+/** How to change the size and the takes, named from the answer's own options. */
+function changeLine(price: PricedSwipe): string {
+  if (!price.sizeChoices) return "This server offers the kind's own size and every take for now: 480p and the first take only are not switched on.";
+  const rows = distinctOptions(price);
+  const sizes = [...new Set(rows.map((row) => row.size))];
+  const takes = [...new Set(rows.map((row) => row.takes))];
+  const parts = [`size=<${sizes.join(" or ")}>`, ...(takes.length > 1 ? [`takes=<${takes.join(" or ")}>`] : [])];
+  return `Change it (free): exodus video swipe sheet set ${price.swipeId} ${parts.join(" ")}. The start films what the sheet says then.`;
+}
+
+/**
+ * What "at most" means, said once. The worker's limits count per storyboard (scout ugc-one-take-steps.ts): a change
+ * asked for after the takes are filmed (a new voice, the storyboard made again) is a new request and is paid on top.
+ */
+const AT_MOST =
+  "At most: every take and every picture ordered twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
+
+/** Why the start would be refused whatever the size, and the video the swipe already has (a fact, said once). */
+function refusalLines(price: PricedSwipe): string[] {
+  return [
+    ...price.startRefusals.map((why) => `The start would be refused now: ${why}`),
+    ...(price.heldBy ? [`This swipe already has a video, run ${price.heldBy}: a start makes a second, paid video only with --again.`] : []),
+  ];
+}
+
+/** A swipe's price as the member reads it. */
+export function priceLines(price: SwipePrice, dashboardUrl: string): string[] {
+  const page = dashboardUrl ? [`The swipe on the dashboard: ${dashboardUrl}`] : [];
+  if (!price.priced) return [`No price for the video of swipe ${price.swipeId}: ${price.why}`, ...page];
+  const lines = [
+    `The video of swipe ${price.swipeId}${price.kind ? `, ${price.kind.label} (${price.kind.key})` : ""}, before the yes:`,
+    `Price: ${pickedPriceLine(price)}.`,
+    ...(price.picked.startRefusal ? [`The start refuses it: ${price.picked.startRefusal}`] : []),
+    ...price.picked.lines.map((line) => `  ${line.what}: ${lineUsd(line.usd)}`),
+    "",
+    ...(price.sizeChoices ? ["Each size:", ...distinctOptions(price).map((row) => `  ${filmWords(row, price.scriptTakes)}: ${priceWords(row)}`), ""] : []),
+    ...price.notes,
+    price.leavesOut,
+    AT_MOST,
+    ...refusalLines(price),
+    changeLine(price),
+    ...page,
+  ];
+  return lines.filter((line, i) => !(line === "" && lines[i - 1] === ""));
+}
+
+/** `exodus video swipe sheet price <swipeId>`: the price of the swipe's video before the yes. Free. */
+export async function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
+  if (!res.ok) return swipeError(res, opts.json);
+  const read = priceOf(res.data);
+  if (!read) return failed("The server's answer about this price could not be read.", opts.json);
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
+  return { code: 0, lines: priceLines(read.price, read.dashboardUrl) };
+}
+
+/**
+ * The start's paid-step text: what it buys, who pays, and, for a kind whose saved sheet has a price, the whole video's
+ * price, when it is paid, and the line to run on the member's yes. That line carries the most shown (--max-usd), so the
+ * server refuses a start that can now cost more (the sheet changed since). The price is a free read; when it cannot be
+ * had (an older server, a refusal, no connection), the text says the CLI prints none, as before. Nothing is started
+ * either way.
+ */
+async function startNeedsYes(
+  swipeId: string,
+  step: PaidStep,
+  json: boolean,
+  again: boolean,
+  choice: string[],
+  deps: VideoDeps,
+): Promise<FlowResult> {
+  let price: SwipePrice | null = null;
+  try {
+    const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
+    price = res.ok ? (priceOf(res.data)?.price ?? null) : null;
+  } catch {
+    price = null;
+  }
+  if (!price?.priced) return needsYesResult(step, json, choice);
+  const { buys, paidBy } = PAID[step];
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: false, needsYes: true, buys, paidBy, price })] };
+  const when = step === "start-one-shot"
+    ? "paid from the start: the whole video is made with no stop"
+    : "paid once the storyboard is approved: the run stops there first";
+  return {
+    code: 0,
+    lines: [
+      "This step costs money, so nothing was sent.",
+      ...choice,
+      `It buys: ${buys}`,
+      `Who pays: ${paidBy}`,
+      `The whole video's price: ${pickedPriceLine(price)}, ${when}.`,
+      ...(price.picked.startRefusal ? [`The start refuses it: ${price.picked.startRefusal}`] : []),
+      price.leavesOut,
+      AT_MOST,
+      ...price.startRefusals.map((why) => `The start would be refused now: ${why}`),
+      // With --again the second video is what was asked for, and the choice line above says so.
+      ...(price.heldBy && !again ? [`This swipe already has a video, run ${price.heldBy}: this start is refused, and a second, paid video needs --again.`] : []),
+      ...(cheaperOption(price) ? [`For less, set the sheet first (free): exodus video swipe sheet price ${swipeId} lists each size.`] : []),
+      `Ask the member. On their yes, run the same command with --yes --max-usd ${price.picked.maxUsd.toFixed(2)}: the start is refused if it can now cost more.`,
+    ],
+  };
+}
+
+/**
+ * Why a start held to `maxUsd` cannot be sent: this server has no price before the yes (an older server, which ignores
+ * maxUsd), or the CLI could not reach it to ask. Null when the server can hold the start to the price.
+ */
+async function maxUsdUnsupported(swipeId: string, maxUsd: number, deps: VideoDeps): Promise<string | null> {
+  const cannot = `so it can't hold this start to ${usd(maxUsd)}, and nothing was started.`;
+  try {
+    const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
+    return missingRouteLine(res, "exodus video swipe start --max-usd") ? `This server has no price before the yes, ${cannot}` : null;
+  } catch {
+    return `The server could not be asked whether it holds a start to a price, ${cannot}`;
+  }
 }
 
 // ── The start ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1514,11 +1873,20 @@ export async function swipeStartFlow(
 ): Promise<FlowResult> {
   const { json } = opts;
   if (!opts.yes) {
-    return needsYesResult(
+    return startNeedsYes(
+      swipeId,
       ask.oneShot ? "start-one-shot" : "start",
       json,
+      again,
       again ? ["With --again: a second video from this swipe, even if it already has one. It is paid on its own."] : [],
+      deps,
     );
+  }
+  // COP-265 part 6: a server without the price before the yes ignores maxUsd and would start the video unheld, so a
+  // start held to a price first asks the price's route (a free read) and starts nothing where it is missing.
+  if (ask.maxUsd !== undefined) {
+    const unheld = await maxUsdUnsupported(swipeId, ask.maxUsd, deps);
+    if (unheld) return failed(unheld, json);
   }
   const res = await deps.post(SWIPE_RUNS_PATH, {
     swipeId,
@@ -1528,6 +1896,7 @@ export async function swipeStartFlow(
     // Guided unless --one-shot, as the dashboard sends it.
     ...(ask.oneShot ? {} : { reviewStoryboard: true }),
     ...(again ? { again: true } : {}),
+    ...(ask.maxUsd !== undefined ? { maxUsd: ask.maxUsd } : {}),
   });
   const held = alreadyStartedOf(res);
   if (held) {
@@ -3717,6 +4086,8 @@ export async function runSwipePlan(
       return swipeSheetReadFlow(plan.swipeId, opts, deps);
     case "sheet-set":
       return swipeSheetSetFlow(plan.swipeId, plan.picks, opts, deps);
+    case "sheet-price":
+      return swipeSheetPriceFlow(plan.swipeId, opts, deps);
     case "run":
       return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
   }

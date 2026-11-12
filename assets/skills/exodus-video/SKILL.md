@@ -609,6 +609,20 @@ The rows:
   be made as is refused before the write is paid, with the kinds it can be
   made as: offer those, or leave this path for "From one sentence to a
   film", with the ad's words from `status --full`.
+- **One-take UGC** (`--kind ugc-one-take`): one person talks to the camera,
+  each 15 or 25 seconds of the script filmed as one long take. It is open to
+  admins only for now: for anyone else the CLI refuses it, so don't offer it
+  to them. Use it when
+  the member asks for a one-take UGC video or names Luke's UGC method, and
+  then the sheet's first line says the swipe makes one-take UGC. When the ad
+  is one person talking to the camera, you may name it as one option beside
+  the kind the swipe makes; never choose it unasked. On an ad it can't be
+  made from, the write refuses it and says why. It buys a face photo, a
+  picture of the room, a cut-out of the product and one take for each 15 or
+  25 seconds of script, on the member's Kie key, and text calls on their
+  model key; it needs their ElevenLabs key and their Kie key. Its price is
+  the server's estimate, shown only where the CLI prints one; for a swipe it
+  prints none today.
 - **Persona.** Offer the three saved personas that fit the ad best, each with
   a short reason, then "show all <N>" (every persona not marked
   `[archived]`). Several may be picked: one video for each.

@@ -75,9 +75,26 @@ const PUNCH_IN =
 /**
  * pacePass: the finished cut plays at `speed`, picture and sound, and every
  * second piece of the spine is a centre crop scaled up by `zoom`, a small zoom
- * step at each cut.
+ * step at each cut. The manifest's paceSpeed, within PACE_SPEED_RANGE, plays
+ * it at its own speed instead.
  */
 export const PACE_PASS = { speed: 1.12, zoom: 1.07 };
+export const PACE_SPEED_RANGE = { min: 1.02, max: 1.25 };
+const paceSpeedOk = (v) => Number.isFinite(v) && v >= PACE_SPEED_RANGE.min && v <= PACE_SPEED_RANGE.max;
+
+/**
+ * The pace record's note for a paceSpeed the cut does not use (pacePass off,
+ * or not a speed in PACE_SPEED_RANGE), or null. The worker calls it too, for a
+ * run's stored paceSpeed that never reached the manifest.
+ */
+export function paceSpeedNote(finishing) {
+  if (!isObject(finishing) || finishing.paceSpeed === undefined) return null;
+  const v = finishing.paceSpeed;
+  const shown = typeof v === "number" ? String(v) : JSON.stringify(v);
+  if (finishing.pacePass !== true) return `paceSpeed ${shown} is read only with pacePass, which is off, so it was not used`;
+  return paceSpeedOk(v) ? null
+    : `paceSpeed ${shown} is not a speed from ${PACE_SPEED_RANGE.min} to ${PACE_SPEED_RANGE.max}, so it was not used`;
+}
 const PACE_ZOOM =
   `scale=${even(WIDTH * PACE_PASS.zoom)}:${even(HEIGHT * PACE_PASS.zoom)},crop=${WIDTH}:${HEIGHT},setsar=1`;
 const floorFrame = (t) => Math.floor(t * FPS + 1e-6) / FPS;
@@ -243,6 +260,7 @@ export function finishingOf(manifest) {
     ...(f.talkTrim === true ? { talkTrim: true } : {}),
     ...(on.captions && f.captionsByLine === true && f.captionColours === true ? { captionColours: true } : {}),
     ...(f.pacePass === true ? { pacePass: true } : {}),
+    ...(f.pacePass === true && paceSpeedOk(f.paceSpeed) ? { paceSpeed: f.paceSpeed } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -1500,15 +1518,15 @@ function markPunchIns(spine, sameShot) {
 
 const sameSpeaker = (prev, seg) => Boolean(prev.lastSpeaker && seg.firstSpeaker === prev.lastSpeaker);
 
-/** pacePass: every second piece of the spine zooms, where no punch-in does already. Answers the cut's note. */
-export function paceZooms(spine) {
+/** pacePass: every second piece of the spine zooms, where no punch-in does already. Answers the cut's note, which names `speed`. */
+export function paceZooms(spine, speed) {
   let zoomed = 0;
   spine.forEach((seg, k) => {
     if (k % 2 === 0 || seg.punchIn) return;
     seg.paceZoom = true;
     zoomed += 1;
   });
-  return `pacePass: the cut plays at ${PACE_PASS.speed}x and ${zoomed} piece${zoomed === 1 ? "" : "s"} zoom ${PACE_PASS.zoom}x`;
+  return `pacePass: the cut plays at ${speed}x and ${zoomed} piece${zoomed === 1 ? "" : "s"} zoom ${PACE_PASS.zoom}x`;
 }
 
 /** cutPace: two pieces of one take, back to back. */
@@ -6678,6 +6696,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   // The finishing settings' part of the render: the speed, the burned
   // captions and cards, and where the mix goes before its loudness pass.
   const notes = [...(timeline.notes ?? [])];
+  const unusedSpeed = paceSpeedNote(manifest.finishing);
+  if (unusedSpeed) notes.push(unusedSpeed);
   if (finish?.captionColours && stagedText) notes.push("captionColours: the text stage draws these captions, so they stay one colour");
   const pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
   // Template clocks are always real time, including runs with no action windows.
@@ -6688,9 +6708,10 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const paced = finish?.pacePass === true && !template && !timeline.wholeVoice && !protectedMotion && !timeline.mapped &&
     manifest.templateMotion?.enabled !== true;
   if (finish?.pacePass && !paced) notes.push("this cut keeps a real-time clock, so pacePass did not speed it up or zoom it");
-  if (paced) notes.push(paceZooms(timeline.spine));
+  const paceSpeed = finish?.paceSpeed ?? PACE_PASS.speed;
+  if (paced) notes.push(paceZooms(timeline.spine, paceSpeed));
   const speed = paced
-    ? PACE_PASS.speed
+    ? paceSpeed
     : finish?.cutPace && !template && !timeline.wholeVoice && !protectedMotion ? speedFor(pictureSec, finish.targetSeconds) : 1;
   if (finish?.cutPace && (template || protectedMotion)) notes.push("template/action/listening/ending clocks remain real time; cutPace does not accelerate the cut");
   if (timeline.sourceMap) {

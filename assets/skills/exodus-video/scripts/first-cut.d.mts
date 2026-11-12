@@ -263,6 +263,8 @@ export interface CutPace {
     /** The numbers the pace was checked at: PACE_BARS, or the format's own. */
     paceCheck?: { minWps: number; maxWps: number; minGapSec: number; maxGapSec: number; beatMaxSec: number; hookMaxGapSec: number };
     nameCheck?: true;
+    /** With pacePass, the speed the cut played at in place of 1.12. */
+    paceSpeed?: number;
   };
   /** `limited`: limitPeaks' limiter ran after the loudness pass. */
   loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true };
@@ -502,6 +504,9 @@ export function scenesWithNoClip(options: {
   skip: Set<number>;
   exists?: (file: string | null) => boolean;
 }): number[];
+
+/** The pace record's note for a paceSpeed the cut does not use (pacePass off, or out of range), or null. */
+export function paceSpeedNote(finishing: { pacePass?: unknown; paceSpeed?: unknown } | null | undefined): string | null;
 
 /** #3424: the sentence-gap cut, which scout's scribe.ts sentenceGapCuts mirrors. */
 export function sentenceGapCuts(

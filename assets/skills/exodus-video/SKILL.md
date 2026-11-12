@@ -623,6 +623,11 @@ The rows:
   model key; it needs their ElevenLabs key and their Kie key. Its price is
   the server's estimate, shown only where the CLI prints one; for a swipe it
   prints none today.
+- **The saved sheet** (a kind that has one; One-take UGC today). The server
+  keeps one for each swipe of such a kind, made after its write. For such a
+  video this sheet's yes covers the write only, and **It buys:** says so:
+  "<n> scripts now; each video after your yes on its saved sheet". The
+  saved sheet and its yes come in step 4.
 - **Persona.** Offer the three saved personas that fit the ad best, each with
   a short reason, then "show all <N>" (every persona not marked
   `[archived]`). Several may be picked: one video for each.
@@ -687,8 +692,23 @@ no music. With more than one product and none named, ask that one row first.
 
 The yes covers the writes and the starts, and the bot calls when step 5
 applies; nothing else. The breakdown and the template are once per ad, and
-are done already. For each video, in the listed order, run steps 1 and 2;
-step 3 comes once every video has started:
+are done already.
+
+**The saved sheet** changes this for a kind that has one (One-take UGC
+today): the yes of step 3 covers its writes, and its starts wait for one more
+yes. Run step 1 for every such video first. Then read each one's saved sheet
+with `exodus video swipe sheet <swipeId>` (free) and show them one time,
+together in one message: their rows, and the swipe's dashboard page each
+prints (that page does not show the saved sheet yet). Ask one yes for all
+their starts, then run step 2 for each. A reply that only changes a row is
+not that yes: set it with `exodus video swipe sheet set <swipeId>
+notes="<words>"` (free; `<row>=` clears a row), say the change in one line,
+and ask the yes again. Say a row marked "no step reads it yet" as saved, not
+used. The start copies the saved sheet into the video; a change after it is
+for the next video.
+
+For each video, in the listed order, run steps 1 and 2; step 3 comes once
+every video has started:
 
 1. `exodus video swipe write <breakdownId> --product <id> --mode whole-ad
    --closeness <n> --yes`. A mode set from a note changes the line:
@@ -705,8 +725,9 @@ step 3 comes once every video has started:
    read them yet."
    The write's last line says "Start the video (paid; ask first)": the
    sheet's yes was that ask, so start now, with the line below, not the
-   write's own, which leaves out `--one-shot`. Note the swipe id it printed
-   for that video.
+   write's own, which leaves out `--one-shot`. For a kind with a saved
+   sheet, that ask is the saved sheet's yes instead: start after it. Note the
+   swipe id it printed for that video.
 2. `exodus video swipe start <swipeId> --one-shot --yes`, without
    `--one-shot` when the member chose to stop at the storyboard, and with
    `--music` when they chose music. Give the member the `Watch it:` link at
@@ -946,6 +967,12 @@ after their yes.
    it buys the whole video with no stop: ask before passing it. `--wait` waits until the run needs the
    member. A swipe that already has a video is refused, with its run; a
    second video from it needs `--again` and the member's yes to a second video.
+   For a kind with a saved sheet (One-take UGC today), show the saved sheet
+   one time before this start, as in step 4 (`exodus video swipe sheet
+   <swipeId>`, free), in the same message as what the start buys and who
+   pays (the line without `--yes`). On this path the saved sheet's yes is
+   the start's yes: ask once, then run the line with `--yes`. A reply that
+   only changes a row is not that yes.
 6. **Then** stop 3 (the storyboard) and the end, as above.
 
 ### Every swipe command
@@ -966,6 +993,9 @@ exodus video swipe find [--brand "<name>"] [--limit <n>]  video ads in the swipe
 exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--yes] [--wait]
                                                           start the run on the kind the swipe wrote; --again for a
                                                           second, paid video of a swipe that already has one
+exodus video swipe sheet <swipeId>                        the saved sheet the server keeps for a swipe (free);
+                                                          no dashboard page shows it yet
+exodus video swipe sheet set <swipeId> <row>=<value> ...  change rows of the saved sheet, all or none; <row>= clears one (free)
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file
 ```
 

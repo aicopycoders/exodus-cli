@@ -7,6 +7,7 @@ export declare const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
 export declare const SWIPE_PRODUCTS_PATH = "/api/v2/video/swipe-products";
 export declare const SWIPES_PATH = "/api/v2/video/swipes";
 export declare const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
+export declare const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
@@ -134,6 +135,37 @@ export interface SwipeListRow {
         name: string;
     } | null;
 }
+export type SheetFrom = "you" | "their-ad" | "kind";
+export interface SavedSheetRow {
+    id: string;
+    label: string;
+    value: string | number | boolean | null;
+    from: SheetFrom | null;
+    why: string | null;
+    options: Array<{
+        id: string;
+        label: string;
+    }> | null;
+    optionsCostUsd: number | null;
+    usedBy: string | null;
+    readOnly: boolean;
+}
+export interface SavedSheet {
+    swipeId: string;
+    kind: {
+        key: string;
+        label: string;
+    } | null;
+    run: {
+        id: string;
+    } | null;
+    sections: Array<{
+        id: string;
+        label: string;
+        rows: SavedSheetRow[];
+    }>;
+    startRefusal?: string;
+}
 type ServerMode = "whole" | "hook" | "their-format" | "new-look";
 export declare const SWIPE_MODES: ReadonlyArray<{
     flag: string;
@@ -227,6 +259,15 @@ export type SwipePlan = {
     again: boolean;
     opts: SwipeOpts;
 } | {
+    kind: "sheet";
+    swipeId: string;
+    opts: SwipeOpts;
+} | {
+    kind: "sheet-set";
+    swipeId: string;
+    picks: Record<string, string | null>;
+    opts: SwipeOpts;
+} | {
     kind: "run";
     sheetFile: string;
     retryRefused: boolean;
@@ -237,6 +278,7 @@ export type SwipePlan = {
 export declare function parseSwipeMode(value: string): ServerMode | null;
 export declare function parseCloseness(value: string): number | null;
 export declare function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]): SwipePlan;
+export declare const SHEET_ROW_ID: RegExp;
 export interface ChoiceWords {
     who: string;
     flag: (name: string) => string;
@@ -316,6 +358,9 @@ export declare function swipeFindFlow(ask: FindAsk, opts: SwipeOpts, deps: Video
 export declare function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[];
+export declare function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     runId: string;

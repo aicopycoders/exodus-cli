@@ -10,7 +10,7 @@ import {
   rmSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const exodusDir = dirname(dirname(fileURLToPath(import.meta.url))); // exodus/
 const repoRoot = dirname(exodusDir);
@@ -145,3 +145,44 @@ if (offenders.length > 0) {
 }
 
 console.log("bundle-assets: leak-check passed");
+
+// ── Kit text check: a kit's prompt text stays on the server ───────────────
+// The check of video/lib/__tests__/kits-not-shipped.test.ts, without the test
+// runner, on what this package ships: no sentence of the kit text
+// (video/lib/kits/index.ts lists its files) in any file npm packs, that is the
+// paths package.json "files" names (the built dist/ and the assets/ above)
+// plus package.json and README. It runs in the monorepo, known by the check or
+// by the kit list being there, whether or not the skills are; there a missing
+// check or a missing kit list stops the pack instead of turning the check off.
+// The public release repo has neither: scripts/sync-public-cli.sh bundles and
+// checks the assets in the monorepo, then checks what it copied there before it
+// commits.
+const kitGuard = join(repoRoot, "scripts", "kit-text.mjs");
+const kitIndex = join(repoRoot, "video", "lib", "kits", "index.ts");
+if (existsSync(kitGuard) || existsSync(kitIndex)) {
+  let describeHit, result;
+  try {
+    const guard = await import(pathToFileURL(kitGuard).href);
+    describeHit = guard.describeHit;
+    result = guard.packedKitText(repoRoot);
+  } catch (error) {
+    console.error(`bundle-assets: the kit text check could not run: ${error?.message ?? error}`);
+    process.exit(1);
+  }
+  const { sentences, files, hits } = result;
+  if (hits.length > 0) {
+    console.error("bundle-assets: kit prompt text found in files this package ships:");
+    for (const hit of hits) console.error("  " + describeHit(hit));
+    console.error(
+      "bundle-assets: kit text stays on the server. Take the sentences above out of those files, then pack again."
+    );
+    process.exit(1);
+  }
+  console.log(
+    `bundle-assets: kit text check passed (${sentences} sentences, ${files} files the package ships)`
+  );
+} else {
+  console.log(
+    "bundle-assets: kit text check skipped: no kit sources here (the assets were checked when they were bundled in the monorepo)"
+  );
+}

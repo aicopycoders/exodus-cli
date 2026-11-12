@@ -30,6 +30,8 @@ export const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
 export const SWIPE_PRODUCTS_PATH = "/api/v2/video/swipe-products";
 export const SWIPES_PATH = "/api/v2/video/swipes";
 export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
+/** A swipe's saved sheet (COP-265): GET ?id= reads it, POST { swipeId, picks } sets rows of it. */
+export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 /** The brand's swipe library (convex/http.ts), the same free read `exodus genesis --list-swipes` makes. */
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
@@ -116,6 +118,32 @@ export interface SwipeListRow {
   costUsd?: number | null;
   /** The product it was written for; null once deleted, absent from older servers. */
   product?: { id: string; name: string } | null;
+}
+
+/** Who set a sheet row's value (video/lib/sheet.ts SheetFrom). */
+export type SheetFrom = "you" | "their-ad" | "kind";
+
+/** One row of a swipe's saved sheet, as GET /api/v2/video/swipe-sheet sends it (video/lib/sheet.ts SheetRowView). */
+export interface SavedSheetRow {
+  id: string;
+  label: string;
+  value: string | number | boolean | null;
+  from: SheetFrom | null;
+  why: string | null;
+  options: Array<{ id: string; label: string }> | null;
+  optionsCostUsd: number | null;
+  usedBy: string | null;
+  readOnly: boolean;
+}
+
+/** A swipe's saved sheet (video/lib/sheet.ts SheetView), kept on the server; no dashboard page shows it yet. */
+export interface SavedSheet {
+  swipeId: string;
+  kind: { key: string; label: string } | null;
+  run: { id: string } | null;
+  sections: Array<{ id: string; label: string; rows: SavedSheetRow[] }>;
+  /** When the kind has a sheet but this member may not start the kind: the start's own sentence. Absent from older servers. */
+  startRefusal?: string;
 }
 
 // ── The dashboard's words (src/app/(dashboard)/video/_components/swipe-door-model.ts) ─────────────────────────────
@@ -237,9 +265,11 @@ export type SwipePlan =
   | { kind: "list"; opts: SwipeOpts }
   | { kind: "find"; ask: FindAsk; opts: SwipeOpts }
   | { kind: "start"; swipeId: string; ask: StartAsk; again: boolean; opts: SwipeOpts }
+  | { kind: "sheet"; swipeId: string; opts: SwipeOpts }
+  | { kind: "sheet-set"; swipeId: string; picks: Record<string, string | null>; opts: SwipeOpts }
   | { kind: "run"; sheetFile: string; retryRefused: boolean; status: boolean; persona: string | null; opts: SwipeOpts };
 
-const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find"];
+const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet"];
 
 /** --mode's word: whole-ad, hook-only, their-format or new-look. */
 export function parseSwipeMode(value: string): ServerMode | null {
@@ -374,6 +404,7 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
     }
     return { kind: "run", sheetFile: sheet.trim(), retryRefused: on("retry-refused"), status: on("status"), persona: persona?.trim() ?? null, opts };
   }
+  if (verb === "sheet") return planSheet(rest.slice(1), occurrences, opts);
   if (!id) {
     const named = verb === "show" || verb === "start" ? "swipeId" : "breakdownId";
     return usage(`video swipe ${verb} needs a ${named === "swipeId" ? "swipe" : "breakdown"} id: exodus video swipe ${verb} <${named}>`);
@@ -398,6 +429,49 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
   const kind = value("kind");
   if (kind === null || (kind !== undefined && !kind.trim())) return usage(`video swipe write --kind needs the key of a kind of ad. ${KIND_CHECKED}`);
   return { kind: "write", breakdownId: id, ask: { productId: product.trim(), ...write.ask, ...(kind !== undefined ? { kind: kind.trim() } : {}) }, opts };
+}
+
+/** A row's id as the server takes it: a copy of video/lib/sheetSections.ts SHEET_ROW_ID, held equal by a test. */
+export const SHEET_ROW_ID = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
+const SHEET_SET_LINE = 'exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...]';
+
+/**
+ * `swipe sheet <swipeId>` and `swipe sheet set <swipeId> <row>=<value> ...`. `words` are the positional words after
+ * `sheet`. A row given with nothing after its `=` is cleared. Both are free, so a paid step's flag is refused.
+ */
+function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOpts): SwipePlan {
+  const usage = (line: string): SwipePlan => ({ kind: "usage", line });
+  // It buys nothing and takes no other verb's choice: such a flag is refused, never quietly dropped.
+  const typedFlag = (names: readonly string[]) =>
+    occurrences.find((o) => names.some((name) => o.flag === name || o.flag === `no-${name}`))?.flag;
+  const paid = typedFlag(FIND_PAID_FLAGS);
+  if (paid) return usage(`video swipe sheet is free and buys nothing, so it takes no --${paid}. Its only flag is --json.`);
+  const other = typedFlag([...FIND_OTHER_FLAGS, "brand", "limit"]);
+  if (other) return usage(`video swipe sheet takes no --${other}. Its only flag is --json.`);
+  // A switch's own on/off word (`--json true`) is not a word of the command.
+  const switchWords = new Set(occurrences.filter((o) => o.flag === "json" && o.value !== undefined).map((o) => o.value as string));
+  const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
+  if (given[0] !== "set") {
+    const [swipeId, ...extra] = given;
+    if (!swipeId) return usage("video swipe sheet needs a swipe id: exodus video swipe sheet <swipeId>");
+    if (extra.length > 0) return usage(`video swipe sheet takes one swipe id (got "${extra[0]}"). To change a row: ${SHEET_SET_LINE}`);
+    return { kind: "sheet", swipeId, opts };
+  }
+  const [, swipeId, ...pairs] = given;
+  if (!swipeId || swipeId.includes("=")) return usage(`video swipe sheet set needs a swipe id first: ${SHEET_SET_LINE}`);
+  if (pairs.length === 0) return usage(`video swipe sheet set needs a row and its value, such as notes="<your words>": ${SHEET_SET_LINE}`);
+  const picks: Record<string, string | null> = {};
+  for (const pair of pairs) {
+    const at = pair.indexOf("=");
+    const row = at === -1 ? pair : pair.slice(0, at);
+    if (at === -1 || !SHEET_ROW_ID.test(row)) {
+      return usage(`video swipe sheet set takes <row>=<value>, not "${pair}". A row given as <row>= is cleared.`);
+    }
+    if (Object.prototype.hasOwnProperty.call(picks, row)) return usage(`video swipe sheet set names "${row}" twice. Give each row once.`);
+    const value = pair.slice(at + 1);
+    picks[row] = value === "" ? null : value;
+  }
+  return { kind: "sheet-set", swipeId, picks, opts };
 }
 
 /** How a named kind is checked, said wherever a kind is asked for. */
@@ -1317,6 +1391,100 @@ export async function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<F
       ].join("  ");
     }),
   };
+}
+
+// ── The saved sheet (COP-265) ─────────────────────────────────────────────────────────────────────────────────────
+
+const FROM_WORDS: Record<SheetFrom, string> = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad" };
+
+function sheetOf(data: unknown): { sheet: SavedSheet; dashboardUrl: string } | null {
+  if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections)) return null;
+  return { sheet: data.sheet as unknown as SavedSheet, dashboardUrl: typeof data.dashboardUrl === "string" ? data.dashboardUrl : "" };
+}
+
+/** A swipe's sheet as the member reads it: each section and row, where its value comes from and why, and what reads it. */
+export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
+  const { swipeId } = sheet;
+  const page = dashboardUrl ? [`The swipe on the dashboard: ${dashboardUrl}`] : [];
+  if (sheet.sections.length === 0) {
+    // A member the kind's switch keeps out is told why, in the start's words; only a kind with none "has no sheet".
+    const none =
+      sheet.startRefusal ??
+      (sheet.kind
+        ? `${sheet.kind.label} (${sheet.kind.key}) has no sheet: swipe ${swipeId} has nothing to set.`
+        : `Swipe ${swipeId} has no sheet: nothing to set.`);
+    return [none, ...(sheet.run ? [`Its video: run ${sheet.run.id}.`] : []), ...page];
+  }
+  const rows = sheet.sections.flatMap((section) => section.rows);
+  const lines = [`The sheet of swipe ${swipeId}${sheet.kind ? `, ${sheet.kind.label} (${sheet.kind.key})` : ""}:`];
+  for (const section of sheet.sections) {
+    lines.push("", section.label);
+    for (const row of section.rows) {
+      const value = row.value === null ? "not set" : String(row.value);
+      lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
+      if (row.from) lines.push(`    ${FROM_WORDS[row.from]}${row.why ? `: ${row.why}` : ""}`);
+      if (row.options) {
+        const cost = row.optionsCostUsd ? ` (showing them costs ${usd(row.optionsCostUsd)})` : "";
+        lines.push(`    options${cost}: ${row.options.map((option) => `${option.id} (${option.label})`).join(", ")}`);
+      }
+      lines.push(`    ${row.usedBy ? `read by: ${row.usedBy}` : "no step reads it yet"}`);
+    }
+  }
+  const settable = rows.filter((row) => !row.readOnly).map((row) => row.id);
+  lines.push("");
+  if (settable.length > 0) {
+    lines.push(`Change a row (free): exodus video swipe sheet set ${swipeId} <row>=<value>, or <row>= to clear it. Rows you can set: ${settable.join(", ")}.`);
+  }
+  lines.push(
+    ...page,
+    sheet.run
+      ? `Its video, run ${sheet.run.id}, keeps the sheet as it was at its start. A change now is for the next video.`
+      : "Starting the video copies this sheet into it; a change after the start is for the next video.",
+  );
+  return lines;
+}
+
+/** `exodus video swipe sheet <swipeId>`: the swipe's saved sheet, saved on the server. Free. */
+export async function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`);
+  if (!res.ok) return swipeError(res, opts.json);
+  const read = sheetOf(res.data);
+  if (!read) return failed("The server's answer about this sheet could not be read.", opts.json);
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
+  return { code: 0, lines: sheetLines(read.sheet, read.dashboardUrl) };
+}
+
+/** `exodus video swipe sheet set <swipeId> <row>=<value> ...`: sets rows of the saved sheet, all or none. Free. */
+export async function swipeSheetSetFlow(
+  swipeId: string,
+  picks: Record<string, string | null>,
+  opts: SwipeOpts,
+  deps: VideoDeps,
+): Promise<FlowResult> {
+  // Whether the set landed is known only when the server answered it: a refusal (4xx) saved nothing; a lost
+  // connection or a server error (5xx) may have saved it or not, so the sheet is read again to know.
+  const readAgain = `Whether it was saved is not known. Read the sheet again: exodus video swipe sheet ${swipeId}`;
+  let res: ApiResponse<unknown>;
+  try {
+    res = await deps.post(SWIPE_SHEET_PATH, { swipeId, picks });
+  } catch (err) {
+    const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
+    return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, error, saved: "unknown" })] : [error, readAgain] };
+  }
+  if (!res.ok) {
+    if (res.status === 404) return swipeError(res, opts.json);
+    const error = swipeErrorLine(res);
+    const refused = res.status >= 400 && res.status < 500;
+    if (opts.json) return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, saved: refused ? false : "unknown" })] };
+    return { code: 1, lines: [error, refused ? "Nothing was saved." : readAgain] };
+  }
+  const read = sheetOf(res.data);
+  if (!read) return failed("The sheet was saved, but the server's answer could not be read: exodus video swipe sheet " + swipeId, opts.json);
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, ...read })] };
+  const set = Object.keys(picks).filter((row) => picks[row] !== null);
+  const cleared = Object.keys(picks).filter((row) => picks[row] === null);
+  const said = [...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []), ...(cleared.length > 0 ? [`Cleared ${cleared.join(", ")}.`] : [])];
+  return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
 }
 
 // ── The start ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -3545,6 +3713,10 @@ export async function runSwipePlan(
       return swipeFindFlow(plan.ask, opts, deps);
     case "start":
       return swipeStartFlow(plan.swipeId, plan.ask, opts, deps, plan.again);
+    case "sheet":
+      return swipeSheetReadFlow(plan.swipeId, opts, deps);
+    case "sheet-set":
+      return swipeSheetSetFlow(plan.swipeId, plan.picks, opts, deps);
     case "run":
       return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
   }

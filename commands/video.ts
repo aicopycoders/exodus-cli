@@ -254,6 +254,8 @@ Usage:
   exodus video swipe find [--brand "<name>"] [--limit <n>] [--json]
   exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--yes] [--wait] [--json]
   exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
+  exodus video swipe sheet <swipeId> [--json]
+  exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...] [--json]
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull)
@@ -568,6 +570,13 @@ library when it holds fewer), keeping the video ads with a file, newest
 collected first. Its counts are of the ads it looked through. It holds no
 results and no kind, so it ranks by neither; the kind of an ad is known only
 after it is read. It takes no other verb's flags.
+swipe sheet is free too: the saved sheet, the choices the server keeps for a
+written swipe, and the swipe's page on the dashboard, which does not show the
+saved sheet yet. Each row says its value, where it comes from and why, and
+which step reads it. swipe sheet set <swipeId> <row>=<value> changes rows, all
+or none; <row>= clears one. The start copies the saved sheet into the video; a
+change after it is for the next video. A kind of ad with no sheet has nothing
+to set.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe

@@ -12,6 +12,7 @@ export const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
 export const SWIPE_PRODUCTS_PATH = "/api/v2/video/swipe-products";
 export const SWIPES_PATH = "/api/v2/video/swipes";
 export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
+export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export const SWIPE_MODES = [
     { flag: "whole-ad", mode: "whole", label: "Whole ad", helper: "Every part of their ad, rewritten for your brand." },
@@ -74,7 +75,7 @@ export function needsYesResult(step, json, choice = []) {
         ],
     };
 }
-const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find"];
+const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet"];
 export function parseSwipeMode(value) {
     return SWIPE_MODES.find((m) => m.flag === value.trim().toLowerCase())?.mode ?? null;
 }
@@ -200,6 +201,8 @@ export function planSwipeCommand(rest, occurrences) {
         }
         return { kind: "run", sheetFile: sheet.trim(), retryRefused: on("retry-refused"), status: on("status"), persona: persona?.trim() ?? null, opts };
     }
+    if (verb === "sheet")
+        return planSheet(rest.slice(1), occurrences, opts);
     if (!id) {
         const named = verb === "show" || verb === "start" ? "swipeId" : "breakdownId";
         return usage(`video swipe ${verb} needs a ${named === "swipeId" ? "swipe" : "breakdown"} id: exodus video swipe ${verb} <${named}>`);
@@ -226,6 +229,46 @@ export function planSwipeCommand(rest, occurrences) {
     if (kind === null || (kind !== undefined && !kind.trim()))
         return usage(`video swipe write --kind needs the key of a kind of ad. ${KIND_CHECKED}`);
     return { kind: "write", breakdownId: id, ask: { productId: product.trim(), ...write.ask, ...(kind !== undefined ? { kind: kind.trim() } : {}) }, opts };
+}
+export const SHEET_ROW_ID = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
+const SHEET_SET_LINE = 'exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...]';
+function planSheet(words, occurrences, opts) {
+    const usage = (line) => ({ kind: "usage", line });
+    const typedFlag = (names) => occurrences.find((o) => names.some((name) => o.flag === name || o.flag === `no-${name}`))?.flag;
+    const paid = typedFlag(FIND_PAID_FLAGS);
+    if (paid)
+        return usage(`video swipe sheet is free and buys nothing, so it takes no --${paid}. Its only flag is --json.`);
+    const other = typedFlag([...FIND_OTHER_FLAGS, "brand", "limit"]);
+    if (other)
+        return usage(`video swipe sheet takes no --${other}. Its only flag is --json.`);
+    const switchWords = new Set(occurrences.filter((o) => o.flag === "json" && o.value !== undefined).map((o) => o.value));
+    const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
+    if (given[0] !== "set") {
+        const [swipeId, ...extra] = given;
+        if (!swipeId)
+            return usage("video swipe sheet needs a swipe id: exodus video swipe sheet <swipeId>");
+        if (extra.length > 0)
+            return usage(`video swipe sheet takes one swipe id (got "${extra[0]}"). To change a row: ${SHEET_SET_LINE}`);
+        return { kind: "sheet", swipeId, opts };
+    }
+    const [, swipeId, ...pairs] = given;
+    if (!swipeId || swipeId.includes("="))
+        return usage(`video swipe sheet set needs a swipe id first: ${SHEET_SET_LINE}`);
+    if (pairs.length === 0)
+        return usage(`video swipe sheet set needs a row and its value, such as notes="<your words>": ${SHEET_SET_LINE}`);
+    const picks = {};
+    for (const pair of pairs) {
+        const at = pair.indexOf("=");
+        const row = at === -1 ? pair : pair.slice(0, at);
+        if (at === -1 || !SHEET_ROW_ID.test(row)) {
+            return usage(`video swipe sheet set takes <row>=<value>, not "${pair}". A row given as <row>= is cleared.`);
+        }
+        if (Object.prototype.hasOwnProperty.call(picks, row))
+            return usage(`video swipe sheet set names "${row}" twice. Give each row once.`);
+        const value = pair.slice(at + 1);
+        picks[row] = value === "" ? null : value;
+    }
+    return { kind: "sheet-set", swipeId, picks, opts };
 }
 const KIND_CHECKED = "A kind this ad can't be made as is refused, with the kinds it can be made as, before the write is paid.";
 const templateKindLine = (template, kind) => kind ? `Kind of ad: ${template.kind.label}, the template's pick; the write uses ${kind}, the sheet's kind.` : `Kind of ad: ${template.kind.label}.`;
@@ -989,6 +1032,88 @@ export async function swipeListFlow(opts, deps) {
             ].join("  ");
         }),
     };
+}
+const FROM_WORDS = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad" };
+function sheetOf(data) {
+    if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections))
+        return null;
+    return { sheet: data.sheet, dashboardUrl: typeof data.dashboardUrl === "string" ? data.dashboardUrl : "" };
+}
+export function sheetLines(sheet, dashboardUrl) {
+    const { swipeId } = sheet;
+    const page = dashboardUrl ? [`The swipe on the dashboard: ${dashboardUrl}`] : [];
+    if (sheet.sections.length === 0) {
+        const none = sheet.startRefusal ??
+            (sheet.kind
+                ? `${sheet.kind.label} (${sheet.kind.key}) has no sheet: swipe ${swipeId} has nothing to set.`
+                : `Swipe ${swipeId} has no sheet: nothing to set.`);
+        return [none, ...(sheet.run ? [`Its video: run ${sheet.run.id}.`] : []), ...page];
+    }
+    const rows = sheet.sections.flatMap((section) => section.rows);
+    const lines = [`The sheet of swipe ${swipeId}${sheet.kind ? `, ${sheet.kind.label} (${sheet.kind.key})` : ""}:`];
+    for (const section of sheet.sections) {
+        lines.push("", section.label);
+        for (const row of section.rows) {
+            const value = row.value === null ? "not set" : String(row.value);
+            lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
+            if (row.from)
+                lines.push(`    ${FROM_WORDS[row.from]}${row.why ? `: ${row.why}` : ""}`);
+            if (row.options) {
+                const cost = row.optionsCostUsd ? ` (showing them costs ${usd(row.optionsCostUsd)})` : "";
+                lines.push(`    options${cost}: ${row.options.map((option) => `${option.id} (${option.label})`).join(", ")}`);
+            }
+            lines.push(`    ${row.usedBy ? `read by: ${row.usedBy}` : "no step reads it yet"}`);
+        }
+    }
+    const settable = rows.filter((row) => !row.readOnly).map((row) => row.id);
+    lines.push("");
+    if (settable.length > 0) {
+        lines.push(`Change a row (free): exodus video swipe sheet set ${swipeId} <row>=<value>, or <row>= to clear it. Rows you can set: ${settable.join(", ")}.`);
+    }
+    lines.push(...page, sheet.run
+        ? `Its video, run ${sheet.run.id}, keeps the sheet as it was at its start. A change now is for the next video.`
+        : "Starting the video copies this sheet into it; a change after the start is for the next video.");
+    return lines;
+}
+export async function swipeSheetReadFlow(swipeId, opts, deps) {
+    const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`);
+    if (!res.ok)
+        return swipeError(res, opts.json);
+    const read = sheetOf(res.data);
+    if (!read)
+        return failed("The server's answer about this sheet could not be read.", opts.json);
+    if (opts.json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
+    return { code: 0, lines: sheetLines(read.sheet, read.dashboardUrl) };
+}
+export async function swipeSheetSetFlow(swipeId, picks, opts, deps) {
+    const readAgain = `Whether it was saved is not known. Read the sheet again: exodus video swipe sheet ${swipeId}`;
+    let res;
+    try {
+        res = await deps.post(SWIPE_SHEET_PATH, { swipeId, picks });
+    }
+    catch (err) {
+        const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
+        return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, error, saved: "unknown" })] : [error, readAgain] };
+    }
+    if (!res.ok) {
+        if (res.status === 404)
+            return swipeError(res, opts.json);
+        const error = swipeErrorLine(res);
+        const refused = res.status >= 400 && res.status < 500;
+        if (opts.json)
+            return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, saved: refused ? false : "unknown" })] };
+        return { code: 1, lines: [error, refused ? "Nothing was saved." : readAgain] };
+    }
+    const read = sheetOf(res.data);
+    if (!read)
+        return failed("The sheet was saved, but the server's answer could not be read: exodus video swipe sheet " + swipeId, opts.json);
+    if (opts.json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, ...read })] };
+    const set = Object.keys(picks).filter((row) => picks[row] !== null);
+    const cleared = Object.keys(picks).filter((row) => picks[row] === null);
+    const said = [...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []), ...(cleared.length > 0 ? [`Cleared ${cleared.join(", ")}.`] : [])];
+    return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
 }
 export const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export function alreadyStartedOf(res) {
@@ -2774,6 +2899,10 @@ export async function runSwipePlan(plan, deps, onProgressLine) {
             return swipeFindFlow(plan.ask, opts, deps);
         case "start":
             return swipeStartFlow(plan.swipeId, plan.ask, opts, deps, plan.again);
+        case "sheet":
+            return swipeSheetReadFlow(plan.swipeId, opts, deps);
+        case "sheet-set":
+            return swipeSheetSetFlow(plan.swipeId, plan.picks, opts, deps);
         case "run":
             return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
     }

@@ -1349,7 +1349,8 @@ under it:
   made again with `retry-clip`, or kept as it is with `exodus video keep
   <runId> --scene <n>` or on the video's page (the link it prints). Keeping
   the last one starts the cut.
-  A One-take take held for its words is named under `Held:` with its own
+  A One-take take held for its words, or for a product label that came out
+  backwards and could not be fixed, is named under `Held:` with its own
   sentence, every reason it was held for (`stop.heldTakes` in `--json`). It
   cannot be made again on its own, so no `retry-clip` is offered. Show the user the sentence
   and ask them to watch the take. With their yes, `exodus video keep <runId>

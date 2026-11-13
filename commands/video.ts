@@ -948,6 +948,11 @@ export interface VideoRunNode {
   warning?: string;
   /** #1902: what happened when this step failed, in words a member can read. */
   planFailure?: PlanFailureRecord;
+  /**
+   * COP-295: the failed step's own mark (scout member-stop.ts, workflowNodeRuns.memberStop): the sentence a member
+   * reads, and whether a retry can help. Absent on a step that did not mark its stop, and from older servers.
+   */
+  memberStop?: MemberStopMark;
   /** #1902: there is a rejected draft on file that this caller may read. The
    *  server sends it to entitled callers only, and sends NOTHING otherwise — an
    *  absence here is a plain absence, never "there is something you may not
@@ -966,6 +971,12 @@ export interface VideoRunNode {
   /** #3088: why each of those scenes is being redone, as a clause that reads
    *  after "because". Absent alongside `autoRedoScenes`, and on older backends. */
   autoRedoReasons?: AutoRedoReason[];
+}
+
+/** COP-295: a failed step's member sentence, and whether a retry of that step can go another way. */
+export interface MemberStopMark {
+  sentence: string;
+  retry: boolean;
 }
 
 export interface AutoRedoReason {
@@ -1276,6 +1287,8 @@ export type RunStop =
       nodeId?: string;
       step?: string;
       workerStopped?: true;
+      /** COP-295: the dead step's own mark; `retry: false` means `exodus workflow repair <run> retry` cannot pass. */
+      memberStop?: MemberStopMark;
     }
   | { at: "finished"; status: string };
 
@@ -1420,7 +1433,9 @@ export function classifyRun(run: VideoRun): RunStop {
     // made nothing and explains nothing. Read the dead step out of the node
     // list instead, and report the failure it actually is.
     if (run.pauseReason === "repair") {
-      const deadNode = run.nodes.find((n) => n.status === "failed");
+      // COP-295: a step that said a retry cannot pass speaks for the run, whichever step failed first.
+      const deadNode =
+        run.nodes.find((n) => n.status === "failed" && n.memberStop?.retry === false) ?? run.nodes.find((n) => n.status === "failed");
       const why = deadNode?.error ?? run.error;
       return {
         at: "failed",
@@ -1428,6 +1443,7 @@ export function classifyRun(run: VideoRun): RunStop {
         nodeId: deadNode?.nodeId ?? run.pausedNodeId,
         ...(deadNode?.kind ? { step: deadNode.kind } : {}),
         ...(why ? { error: why } : {}),
+        ...(deadNode?.memberStop ? { memberStop: deadNode.memberStop } : {}),
       };
     }
     // Stop 4: ahead of the builder-checkpoint reading below, which would call it
@@ -1882,6 +1898,15 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
           "Start a fresh run to get this ad made.",
           `Open the run:        ${runUrl}`,
         ];
+      }
+      // COP-295: a step that marked its stop says why in the member's words, and a retry it said cannot pass is
+      // never offered: the server would run it and stop the same way.
+      if (stop.memberStop) {
+        const lines = [`${stepName(stop.step)} stopped: ${stop.memberStop.sentence}`];
+        if (stop.error && stop.error !== stop.memberStop.sentence) lines.push(`What the step said: ${stop.error}`);
+        return stop.memberStop.retry
+          ? [...lines, `Try that step again: exodus workflow repair ${runId} retry`, `Or open the run:     ${runUrl}`]
+          : [...lines, `Open the run: ${runUrl}`];
       }
       return [
         `${stepName(stop.step)} failed${stop.error ? `: ${stop.error}` : "."}`,

@@ -35,7 +35,9 @@ export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 /** The price of a swipe's video before the yes (COP-265 part 6): GET ?id= answers { price, dashboardUrl }. Free. */
 export const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
-/** COP-265 part 7: POST { swipeId, row, count?, yes? } asks for a row's options: new people (paid) or voices (free). */
+/**
+ * COP-265 part 7: POST { swipeId, row, count?, yes? } asks for a row's options: new people (paid) or voices (one read of the voice list on the member's ElevenLabs key; no speech is made).
+ */
 export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 /**
  * U6: what every call to the sheet's routes adds to its address, to say this CLI prints the source "recommended"
@@ -196,6 +198,8 @@ export interface SavedSheetRow {
   optionsStatus?: { making: boolean; sentence: string; spentUsd?: number; asksLeft?: number; failed?: boolean; noneYet?: boolean };
   /** U6: the row's closed value for none and its words (the prop: "none", nothing in the hand); absent from older servers. */
   none?: { value: string; label: string };
+  /** COP-285: the id of the option the row recommends (the person's voice); absent when none, and from older servers. */
+  recommended?: string;
 }
 
 /** A swipe's saved sheet (video/lib/sheet.ts SheetView), kept on the server; no dashboard page shows it yet. */
@@ -554,7 +558,7 @@ export const SHEET_PEOPLE_MOST = 8;
 /**
  * `swipe sheet <swipeId>`, `swipe sheet set <swipeId> <row>=<value> ...`, `swipe sheet price <swipeId>`, and COP-265
  * part 7's `swipe sheet people <swipeId>` (new people to pick from: paid, so the price comes first and --yes makes
- * them) and `swipe sheet voices <swipeId>` (voices to hear: free). `words` are the positional words after `sheet`. A
+ * them) and `swipe sheet voices <swipeId>` (voices to hear: one read of the voice list on the member's ElevenLabs key; no speech is made). `words` are the positional words after `sheet`. A
  * row given with nothing after its `=` is cleared. Only `people` takes a paid step's flags (--count, --yes, --max-usd,
  * --wait); every other flag is refused.
  */
@@ -1735,6 +1739,8 @@ function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipe
   if (row.optionsStatus?.sentence) lines.push(`    ${row.optionsStatus.sentence}`);
   // Before the first ask for people, the free way to the price (COP-265 part 7); no cost is printed before it is said.
   if (row.id === "who" && row.optionsStatus?.noneYet) lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
+  // COP-285: a voice row with no voice (none picked, none recommended) says how to list the voices for the person.
+  if (row.id === "voice" && row.value === null) lines.push(`    List the voices: exodus video swipe sheet voices ${swipeId}`);
   return lines;
 }
 
@@ -2123,7 +2129,28 @@ async function maxUsdUnsupported(swipeId: string, maxUsd: number, deps: VideoDep
   }
 }
 
-/** `exodus video swipe sheet voices <swipeId>`: the catalog voices on the member's ElevenLabs account that fit the person, then their own voices. Free. */
+/**
+ * COP-285: which voice the sheet recommends, from the row's own fields: the recommended value with its reason and that a
+ * start with no pick films it; the member's own pick over it; or the reason none is recommended. Nothing from a server
+ * that sends neither.
+ */
+function recommendedVoiceLines(row: SavedSheetRow): string[] {
+  const labelOf = (id: string) => row.options?.find((option) => option.id === id)?.label ?? id;
+  if (row.from === "recommended" && typeof row.value === "number") {
+    return [`Recommended: ${row.value} (${labelOf(String(row.value))}).${row.why ? ` ${row.why}` : ""} A start with no pick films it.`];
+  }
+  if (row.recommended !== undefined && row.from === "you" && row.value !== null) {
+    const picked = String(row.value) === row.recommended ? "You picked it, so a start films it." : `You picked ${row.value}, so a start films your pick.`;
+    return [`Recommended: ${row.recommended} (${labelOf(row.recommended)}). ${picked}`];
+  }
+  return row.value === null && row.why ? [row.why] : [];
+}
+
+/**
+ * `exodus video swipe sheet voices <swipeId>`: the voices on the member's ElevenLabs account that fit the person, best
+ * fit first, and the one the sheet recommends. One read of the voice list on the member's ElevenLabs key; no speech is
+ * made.
+ */
 export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
   const res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, row: "voice" });
   if (!res.ok) return swipeError(res, opts.json);
@@ -2137,6 +2164,7 @@ export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, dep
     lines: [
       ...(row?.optionsStatus?.sentence ? [row.optionsStatus.sentence] : []),
       ...voices,
+      ...(row ? recommendedVoiceLines(row) : []),
       ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
     ],
   };

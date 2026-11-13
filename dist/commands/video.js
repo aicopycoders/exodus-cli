@@ -843,7 +843,7 @@ export function classifyRun(run) {
         if (isWorkerStoppedPark(run))
             return { at: "failed", repair: true, workerStopped: true };
         if (run.pauseReason === "repair") {
-            const deadNode = run.nodes.find((n) => n.status === "failed");
+            const deadNode = run.nodes.find((n) => n.status === "failed" && n.memberStop?.retry === false) ?? run.nodes.find((n) => n.status === "failed");
             const why = deadNode?.error ?? run.error;
             return {
                 at: "failed",
@@ -851,6 +851,7 @@ export function classifyRun(run) {
                 nodeId: deadNode?.nodeId ?? run.pausedNodeId,
                 ...(deadNode?.kind ? { step: deadNode.kind } : {}),
                 ...(why ? { error: why } : {}),
+                ...(deadNode?.memberStop ? { memberStop: deadNode.memberStop } : {}),
             };
         }
         if (run.pauseReason === "pilot") {
@@ -1168,6 +1169,14 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                     "Start a fresh run to get this ad made.",
                     `Open the run:        ${runUrl}`,
                 ];
+            }
+            if (stop.memberStop) {
+                const lines = [`${stepName(stop.step)} stopped: ${stop.memberStop.sentence}`];
+                if (stop.error && stop.error !== stop.memberStop.sentence)
+                    lines.push(`What the step said: ${stop.error}`);
+                return stop.memberStop.retry
+                    ? [...lines, `Try that step again: exodus workflow repair ${runId} retry`, `Or open the run:     ${runUrl}`]
+                    : [...lines, `Open the run: ${runUrl}`];
             }
             return [
                 `${stepName(stop.step)} failed${stop.error ? `: ${stop.error}` : "."}`,

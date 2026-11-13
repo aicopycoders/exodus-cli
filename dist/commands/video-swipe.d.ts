@@ -242,6 +242,7 @@ export interface SavedSheetRow {
         value: string;
         label: string;
     };
+    recommended?: string;
 }
 export interface SavedSheet {
     swipeId: string;

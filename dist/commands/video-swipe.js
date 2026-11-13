@@ -1224,6 +1224,8 @@ function optionLines(row, above, swipeId) {
         lines.push(`    ${row.optionsStatus.sentence}`);
     if (row.id === "who" && row.optionsStatus?.noneYet)
         lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
+    if (row.id === "voice" && row.value === null)
+        lines.push(`    List the voices: exodus video swipe sheet voices ${swipeId}`);
     return lines;
 }
 export function sheetLines(sheet, dashboardUrl) {
@@ -1531,6 +1533,17 @@ async function maxUsdUnsupported(swipeId, maxUsd, deps) {
         return `The server could not be asked whether it holds a start to a price, ${cannot}`;
     }
 }
+function recommendedVoiceLines(row) {
+    const labelOf = (id) => row.options?.find((option) => option.id === id)?.label ?? id;
+    if (row.from === "recommended" && typeof row.value === "number") {
+        return [`Recommended: ${row.value} (${labelOf(String(row.value))}).${row.why ? ` ${row.why}` : ""} A start with no pick films it.`];
+    }
+    if (row.recommended !== undefined && row.from === "you" && row.value !== null) {
+        const picked = String(row.value) === row.recommended ? "You picked it, so a start films it." : `You picked ${row.value}, so a start films your pick.`;
+        return [`Recommended: ${row.recommended} (${labelOf(row.recommended)}). ${picked}`];
+    }
+    return row.value === null && row.why ? [row.why] : [];
+}
 export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
     const res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, row: "voice" });
     if (!res.ok)
@@ -1547,6 +1560,7 @@ export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
         lines: [
             ...(row?.optionsStatus?.sentence ? [row.optionsStatus.sentence] : []),
             ...voices,
+            ...(row ? recommendedVoiceLines(row) : []),
             ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
         ],
     };

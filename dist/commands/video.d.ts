@@ -155,11 +155,16 @@ export interface VideoRunNode {
     error?: string;
     warning?: string;
     planFailure?: PlanFailureRecord;
+    memberStop?: MemberStopMark;
     hasRejectedDraft?: boolean;
     outputs?: ArtifactSubset[];
     missingScenes?: MissingScene[];
     autoRedoScenes?: number[];
     autoRedoReasons?: AutoRedoReason[];
+}
+export interface MemberStopMark {
+    sentence: string;
+    retry: boolean;
 }
 export interface AutoRedoReason {
     sceneIndex: number;
@@ -347,6 +352,7 @@ export type RunStop = {
     nodeId?: string;
     step?: string;
     workerStopped?: true;
+    memberStop?: MemberStopMark;
 } | {
     at: "finished";
     status: string;

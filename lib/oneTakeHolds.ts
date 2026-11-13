@@ -3,7 +3,8 @@
 // equal.
 
 /**
- * The findings the One-take video step writes on a take it kept and held for its words. Such a take holds the run's
+ * The findings the One-take video step writes on a take it kept and held for its words or (COP-282,
+ * "one-take-label-held") for a mirrored label it did not flip, as a flip would turn the room around. Such a take holds the run's
  * cut until a person keeps it as it is; it cannot be made again on its own (`retry-clip` is refused on its run).
  */
 export const ONE_TAKE_HOLD_CODES: readonly string[] = [
@@ -11,4 +12,5 @@ export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-number-word-missing",
   "one-take-kept-paid-take",
   "one-take-words-unchecked",
+  "one-take-label-held",
 ];

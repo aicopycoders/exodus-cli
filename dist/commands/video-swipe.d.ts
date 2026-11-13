@@ -10,6 +10,7 @@ export declare const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 export declare const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export declare const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 export declare const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
+export declare const SHEET_SOURCES_QUERY = "sources=recommended";
 export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
@@ -213,7 +214,7 @@ export interface SwipeListRow {
         name: string;
     } | null;
 }
-export type SheetFrom = "you" | "their-ad" | "kind";
+export type SheetFrom = "you" | "their-ad" | "kind" | "recommended";
 export interface SavedSheetRow {
     id: string;
     label: string;
@@ -236,6 +237,10 @@ export interface SavedSheetRow {
         asksLeft?: number;
         failed?: boolean;
         noneYet?: boolean;
+    };
+    none?: {
+        value: string;
+        label: string;
     };
 }
 export interface SavedSheet {

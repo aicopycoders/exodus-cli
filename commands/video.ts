@@ -5398,10 +5398,11 @@ export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
 
 /**
  * Local night fix F2(b): the findings of a one-take take's label check (scout ugc-one-take-label.ts
- * ONE_TAKE_LABEL_FLIPPED_CODE, ONE_TAKE_LABEL_UNSURE_CODE): a take flipped because its label came out mirrored, and a
- * label the check could not read. Each detail is one plain sentence for the member.
+ * ONE_TAKE_LABEL_FLIPPED_CODE, ONE_TAKE_LABEL_UNSURE_CODE, and COP-282's ONE_TAKE_LABEL_HELD_CODE): a take flipped
+ * because its label came out mirrored, a label the check could not read or that got no answer, and a take held unflipped
+ * because a flip would mirror the room against the other takes. Each detail is one plain sentence for the member.
  */
-export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure"] as const;
+export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held"] as const;
 
 /** The one-take findings `video status` prints as their plain sentence alone, with no code before it. */
 const ONE_TAKE_PLAIN_FINDING_CODES: readonly string[] = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES];

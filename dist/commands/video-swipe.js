@@ -15,6 +15,7 @@ export const SWIPE_RUNS_PATH = "/api/v2/video/swipe-runs";
 export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
+export const SHEET_SOURCES_QUERY = "sources=recommended";
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export const SWIPE_MODES = [
     { flag: "whole-ad", mode: "whole", label: "Whole ad", helper: "Every part of their ad, rewritten for your brand." },
@@ -1195,7 +1196,7 @@ export async function swipeListFlow(opts, deps) {
         }),
     };
 }
-const FROM_WORDS = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad" };
+const FROM_WORDS = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad", recommended: "recommended" };
 function sheetOf(data) {
     if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections))
         return null;
@@ -1241,10 +1242,12 @@ export function sheetLines(sheet, dashboardUrl) {
         lines.push("", section.label);
         for (const row of section.rows) {
             const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
-            const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : String(row.value);
+            const none = row.none && row.value === row.none.value ? row.none : undefined;
+            const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : none ? `${row.value} (${none.label})` : String(row.value);
             lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
-            if (row.from)
-                lines.push(`    ${FROM_WORDS[row.from]}${row.why ? `: ${row.why}` : ""}`);
+            const fromWords = row.from && Object.prototype.hasOwnProperty.call(FROM_WORDS, row.from) ? FROM_WORDS[row.from] : null;
+            if (fromWords)
+                lines.push(`    ${fromWords}${row.why ? `: ${row.why}` : ""}`);
             else if (row.why)
                 lines.push(`    ${row.why}`);
             lines.push(...optionLines(row, section.rows[section.rows.indexOf(row) - 1], swipeId));
@@ -1262,7 +1265,7 @@ export function sheetLines(sheet, dashboardUrl) {
     return lines;
 }
 export async function swipeSheetReadFlow(swipeId, opts, deps) {
-    const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`);
+    const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`);
     if (!res.ok)
         return swipeError(res, opts.json);
     const read = sheetOf(res.data);
@@ -1276,7 +1279,7 @@ export async function swipeSheetSetFlow(swipeId, picks, opts, deps) {
     const readAgain = `Whether it was saved is not known. Read the sheet again: exodus video swipe sheet ${swipeId}`;
     let res;
     try {
-        res = await deps.post(SWIPE_SHEET_PATH, { swipeId, picks });
+        res = await deps.post(`${SWIPE_SHEET_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, picks });
     }
     catch (err) {
         const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
@@ -1300,7 +1303,20 @@ export async function swipeSheetSetFlow(swipeId, picks, opts, deps) {
         return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, ...read })] };
     const set = Object.keys(picks).filter((row) => picks[row] !== null);
     const cleared = Object.keys(picks).filter((row) => picks[row] === null);
-    const said = [...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []), ...(cleared.length > 0 ? [`Cleared ${cleared.join(", ")}.`] : [])];
+    const rowsNow = read.sheet.sections.flatMap((section) => section.rows);
+    const backToDefault = (id) => {
+        const row = rowsNow.find((candidate) => candidate.id === id);
+        return row?.none && row.value !== null && row.from !== "you" ? row : undefined;
+    };
+    const plainCleared = cleared.filter((id) => !backToDefault(id));
+    const said = [
+        ...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []),
+        ...(plainCleared.length > 0 ? [`Cleared ${plainCleared.join(", ")}.`] : []),
+        ...cleared.flatMap((id) => {
+            const row = backToDefault(id);
+            return row?.none ? [`Cleared ${id}, so it is back to its default, ${String(row.value)}; for ${row.none.label}, set ${id}=${row.none.value}.`] : [];
+        }),
+    ];
     if (read.sheet.notice)
         said.push(read.sheet.notice);
     return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
@@ -1432,7 +1448,7 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
     const again = `exodus video swipe sheet people ${swipeId}${count !== null ? ` --count ${count}` : ""}`;
     let res;
     try {
-        res = await deps.post(SWIPE_SHEET_OPTIONS_PATH, {
+        res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, {
             swipeId,
             row: "who",
             ...(count !== null ? { count } : {}),
@@ -1476,7 +1492,7 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
     const out = progress(opts);
     for (const line of head)
         out.say(line);
-    const ended = await poll(() => deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`), (read) => {
+    const ended = await poll(() => deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`), (read) => {
         if (!read.ok)
             return { done: { refused: read } };
         const sheet = sheetOf(read.data);
@@ -1516,7 +1532,7 @@ async function maxUsdUnsupported(swipeId, maxUsd, deps) {
     }
 }
 export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
-    const res = await deps.post(SWIPE_SHEET_OPTIONS_PATH, { swipeId, row: "voice" });
+    const res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, row: "voice" });
     if (!res.ok)
         return swipeError(res, opts.json);
     const answer = optionsAnswerOf(res.data);

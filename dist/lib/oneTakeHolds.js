@@ -3,4 +3,5 @@ export const ONE_TAKE_HOLD_CODES = [
     "one-take-number-word-missing",
     "one-take-kept-paid-take",
     "one-take-words-unchecked",
+    "one-take-label-held",
 ];

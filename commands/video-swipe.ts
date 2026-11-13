@@ -37,6 +37,11 @@ export const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 /** COP-265 part 7: POST { swipeId, row, count?, yes? } asks for a row's options: new people (paid) or voices (free). */
 export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
+/**
+ * U6: what every call to the sheet's routes adds to its address, to say this CLI prints the source "recommended"
+ * (video/lib/sheet.ts SHEET_SOURCES_PARAM). A server sends that word only to a CLI that says so, and "kind" to any other.
+ */
+export const SHEET_SOURCES_QUERY = "sources=recommended";
 /** The brand's swipe library (convex/http.ts), the same free read `exodus genesis --list-swipes` makes. */
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
@@ -169,8 +174,11 @@ export interface SwipeListRow {
   product?: { id: string; name: string } | null;
 }
 
-/** Who set a sheet row's value (video/lib/sheet.ts SheetFrom). */
-export type SheetFrom = "you" | "their-ad" | "kind";
+/**
+ * Who set a sheet row's value (video/lib/sheet.ts SheetFrom). U6: "recommended" is a value the server worked out for this
+ * swipe, with why; it comes only because this CLI asks for it (SHEET_SOURCES_QUERY).
+ */
+export type SheetFrom = "you" | "their-ad" | "kind" | "recommended";
 
 /** One row of a swipe's saved sheet, as GET /api/v2/video/swipe-sheet sends it (video/lib/sheet.ts SheetRowView). */
 export interface SavedSheetRow {
@@ -186,6 +194,8 @@ export interface SavedSheetRow {
   readOnly: boolean;
   /** Where an ask for the row's options stands (COP-265 part 7); absent from older servers. */
   optionsStatus?: { making: boolean; sentence: string; spentUsd?: number; asksLeft?: number; failed?: boolean; noneYet?: boolean };
+  /** U6: the row's closed value for none and its words (the prop: "none", nothing in the hand); absent from older servers. */
+  none?: { value: string; label: string };
 }
 
 /** A swipe's saved sheet (video/lib/sheet.ts SheetView), kept on the server; no dashboard page shows it yet. */
@@ -1691,7 +1701,7 @@ export async function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<F
 
 // ── The saved sheet (COP-265) ─────────────────────────────────────────────────────────────────────────────────────
 
-const FROM_WORDS: Record<SheetFrom, string> = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad" };
+const FROM_WORDS: Record<SheetFrom, string> = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad", recommended: "recommended" };
 
 function sheetOf(data: unknown): { sheet: SavedSheet; dashboardUrl: string } | null {
   if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections)) return null;
@@ -1748,9 +1758,13 @@ export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
     for (const row of section.rows) {
       // A pick by number (a person or a voice made for the member) is shown with the name of what it picks.
       const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
-      const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : String(row.value);
+      // A row set to its none (U6) is shown with the server's words for it.
+      const none = row.none && row.value === row.none.value ? row.none : undefined;
+      const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : none ? `${row.value} (${none.label})` : String(row.value);
       lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
-      if (row.from) lines.push(`    ${FROM_WORDS[row.from]}${row.why ? `: ${row.why}` : ""}`);
+      // A source this CLI has no word for is left unsaid: the row prints with its reason alone, never "undefined".
+      const fromWords = row.from && Object.prototype.hasOwnProperty.call(FROM_WORDS, row.from) ? FROM_WORDS[row.from] : null;
+      if (fromWords) lines.push(`    ${fromWords}${row.why ? `: ${row.why}` : ""}`);
       else if (row.why) lines.push(`    ${row.why}`);
       lines.push(...optionLines(row, section.rows[section.rows.indexOf(row) - 1], swipeId));
       lines.push(`    ${row.usedBy ? `read by: ${row.usedBy}` : "no step reads it yet"}`);
@@ -1772,7 +1786,7 @@ export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
 
 /** `exodus video swipe sheet <swipeId>`: the swipe's saved sheet, saved on the server. Free. */
 export async function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
-  const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`);
+  const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`);
   if (!res.ok) return swipeError(res, opts.json);
   const read = sheetOf(res.data);
   if (!read) return failed("The server's answer about this sheet could not be read.", opts.json);
@@ -1792,7 +1806,7 @@ export async function swipeSheetSetFlow(
   const readAgain = `Whether it was saved is not known. Read the sheet again: exodus video swipe sheet ${swipeId}`;
   let res: ApiResponse<unknown>;
   try {
-    res = await deps.post(SWIPE_SHEET_PATH, { swipeId, picks });
+    res = await deps.post(`${SWIPE_SHEET_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, picks });
   } catch (err) {
     const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
     return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, error, saved: "unknown" })] : [error, readAgain] };
@@ -1810,7 +1824,21 @@ export async function swipeSheetSetFlow(
   if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, ...read })] };
   const set = Object.keys(picks).filter((row) => picks[row] !== null);
   const cleared = Object.keys(picks).filter((row) => picks[row] === null);
-  const said = [...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []), ...(cleared.length > 0 ? [`Cleared ${cleared.join(", ")}.`] : [])];
+  // A cleared row that is back to a default and has a none (U6: the prop) says so, and names the way to none.
+  const rowsNow = read.sheet.sections.flatMap((section) => section.rows);
+  const backToDefault = (id: string) => {
+    const row = rowsNow.find((candidate) => candidate.id === id);
+    return row?.none && row.value !== null && row.from !== "you" ? row : undefined;
+  };
+  const plainCleared = cleared.filter((id) => !backToDefault(id));
+  const said = [
+    ...(set.length > 0 ? [`Saved ${set.join(", ")}.`] : []),
+    ...(plainCleared.length > 0 ? [`Cleared ${plainCleared.join(", ")}.`] : []),
+    ...cleared.flatMap((id) => {
+      const row = backToDefault(id);
+      return row?.none ? [`Cleared ${id}, so it is back to its default, ${String(row.value)}; for ${row.none.label}, set ${id}=${row.none.value}.`] : [];
+    }),
+  ];
   if (read.sheet.notice) said.push(read.sheet.notice);
   return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
 }
@@ -2010,7 +2038,7 @@ export async function swipeSheetPeopleFlow(
   const again = `exodus video swipe sheet people ${swipeId}${count !== null ? ` --count ${count}` : ""}`;
   let res: ApiResponse<unknown>;
   try {
-    res = await deps.post(SWIPE_SHEET_OPTIONS_PATH, {
+    res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, {
       swipeId,
       row: "who",
       ...(count !== null ? { count } : {}),
@@ -2052,7 +2080,7 @@ export async function swipeSheetPeopleFlow(
   const out = progress(opts);
   for (const line of head) out.say(line);
   const ended = await poll<{ sheet: SavedSheet; dashboardUrl: string } | { refused: ApiResponse<unknown> }>(
-    () => deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`),
+    () => deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`),
     (read) => {
       if (!read.ok) return { done: { refused: read } };
       const sheet = sheetOf(read.data);
@@ -2097,7 +2125,7 @@ async function maxUsdUnsupported(swipeId: string, maxUsd: number, deps: VideoDep
 
 /** `exodus video swipe sheet voices <swipeId>`: the catalog voices on the member's ElevenLabs account that fit the person, then their own voices. Free. */
 export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
-  const res = await deps.post(SWIPE_SHEET_OPTIONS_PATH, { swipeId, row: "voice" });
+  const res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, row: "voice" });
   if (!res.ok) return swipeError(res, opts.json);
   const answer = optionsAnswerOf(res.data);
   if (!answer) return failed(`The server's answer about the voices could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);

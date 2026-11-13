@@ -3995,7 +3995,7 @@ export async function statusFlow(runId, json, deps) {
     return { code: 0, lines };
 }
 export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
-export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure"];
+export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held"];
 const ONE_TAKE_PLAIN_FINDING_CODES = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES];
 const DIRECTOR_STATUS_WORDS = {
     reviewing: "Watching this run",

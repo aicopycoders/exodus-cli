@@ -601,7 +601,7 @@ export declare function waitFlow(runId: string, opts: {
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function statusFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
-export declare const ONE_TAKE_LABEL_CODES: readonly ["one-take-label-flipped", "one-take-label-unsure"];
+export declare const ONE_TAKE_LABEL_CODES: readonly ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held"];
 export declare function directorLines(director: RunDirector): string[];
 export type DirectorSwitch = boolean | null;
 export declare function parseDirectorSwitch(word: string | undefined): {

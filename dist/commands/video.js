@@ -208,7 +208,7 @@ Usage:
   exodus video swipe status <breakdownId> [--wait] [--full] [--json]
   exodus video swipe template <breakdownId> [--yes] [--json]
   exodus video swipe products [--json]
-  exodus video swipe write <breakdownId> --product <id> [--mode whole-ad|hook-only|their-format|new-look] [--closeness <1-5|mirror|close|same-beats|same-arc|pattern-only>] [--look <slug>] [--script <file>] [--kind <kind>] [--yes] [--json]
+  exodus video swipe write <breakdownId> --product <id> [--mode whole-ad|hook-only|their-format|new-look] [--closeness <1-5|mirror|close|same-beats|same-arc|pattern-only>] [--look <slug>] [--script <file>] [--kind <kind>] [--yes [--people-max-usd <n>]] [--no-people] [--json]
   exodus video swipe show <swipeId> [--json]
   exodus video swipe list [--json]
   exodus video swipe find [--brand "<name>"] [--limit <n>] [--json]
@@ -554,6 +554,13 @@ address; who=<n> picks one, and the video is then filmed with that person and
 that face. swipe sheet voices is free: the catalog voices on the member's
 ElevenLabs account that fit the person, then their own voices, each with its
 sample's address; voice=<n> picks one, and the video is filmed in it.
+swipe write also makes people to pick from for a kind whose sheet has a person,
+when the server offers them: without --yes it says their price too, and the
+yes line carries their most (--people-max-usd <n>). The write then makes 4 on
+the member's own keys once the script is stored, waits a few minutes for them
+and shows each, with the one a check of the faces recommends. --yes alone, or
+--no-people, writes without them. swipe start waits while people are being
+made, until 5 minutes after they were asked for.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
@@ -4005,7 +4012,8 @@ export async function statusFlow(runId, json, deps) {
 }
 export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
 export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held"];
-const ONE_TAKE_PLAIN_FINDING_CODES = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES];
+export const ONE_TAKE_SAID_WRONG_CODES = ["one-take-said-wrong", "one-take-second-listen-failed"];
+const ONE_TAKE_PLAIN_FINDING_CODES = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES, ...ONE_TAKE_SAID_WRONG_CODES];
 const DIRECTOR_STATUS_WORDS = {
     reviewing: "Watching this run",
     waiting: "Waiting for redos to finish",
@@ -6199,7 +6207,7 @@ const VALUE_FLAGS = new Set([
     "persona",
 ]);
 const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
-const WRITE_VALUE_FLAGS = new Set(["kind"]);
+const WRITE_VALUE_FLAGS = new Set(["kind", "people-max-usd"]);
 const START_VALUE_FLAGS = new Set(["max-usd"]);
 const SHEET_PEOPLE_VALUE_FLAGS = new Set(["count", "max-usd"]);
 export function parsePositional(args = process.argv.slice(3)) {

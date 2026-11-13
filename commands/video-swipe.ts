@@ -44,6 +44,8 @@ export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
  * (video/lib/sheet.ts SHEET_SOURCES_PARAM). A server sends that word only to a CLI that says so, and "kind" to any other.
  */
 export const SHEET_SOURCES_QUERY = "sources=recommended";
+/** COP-289: GET ?breakdownId=&kind= says whether a write makes people for the sheet, and their price. Free. */
+export const SWIPE_WRITE_PEOPLE_PATH = "/api/v2/video/swipe-write-people";
 /** The brand's swipe library (convex/http.ts), the same free read `exodus genesis --list-swipes` makes. */
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
@@ -194,11 +196,26 @@ export interface SavedSheetRow {
   optionsCostUsd: number | null;
   usedBy: string | null;
   readOnly: boolean;
-  /** Where an ask for the row's options stands (COP-265 part 7); absent from older servers. */
-  optionsStatus?: { making: boolean; sentence: string; spentUsd?: number; asksLeft?: number; failed?: boolean; noneYet?: boolean };
+  /**
+   * Where an ask for the row's options stands (COP-265 part 7); absent from older servers. COP-289: while options are
+   * made, how many the ask makes and how long ago it started, by the server's clock.
+   */
+  optionsStatus?: {
+    making: boolean;
+    sentence: string;
+    spentUsd?: number;
+    asksLeft?: number;
+    failed?: boolean;
+    noneYet?: boolean;
+    count?: number;
+    makingForMs?: number;
+  };
   /** U6: the row's closed value for none and its words (the prop: "none", nothing in the hand); absent from older servers. */
   none?: { value: string; label: string };
-  /** COP-285: the id of the option the row recommends (the person's voice); absent when none, and from older servers. */
+  /**
+   * The id of the option the row recommends, whatever value it holds: the person's voice (COP-285) or the person a
+   * check of the faces picked (COP-289); absent when none, and from older servers.
+   */
   recommended?: string;
 }
 
@@ -248,6 +265,11 @@ export type SwipePrice =
       approximate: true;
     }
   | { swipeId: string; kind: { key: string; label: string } | null; priced: false; why: string };
+
+/** COP-289: whether a write makes people to pick from on its sheet, and their price (video/lib/sheetWritePeople.ts WritePeople). */
+export type WritePeople =
+  | { makesPeople: false; reason: string }
+  | { makesPeople: true; count: number; aboutUsd: number; mostUsd: number; paidBy: string; lines: string[] };
 
 // ── The dashboard's words (src/app/(dashboard)/video/_components/swipe-door-model.ts) ─────────────────────────────
 
@@ -342,6 +364,10 @@ export interface WriteAsk {
   scriptText?: string;
   /** A kind of ad's key, written in place of the template's pick. The server takes only a kind on this ad's menu. */
   kind?: string;
+  /** COP-289: the most the dry print showed for the people the write makes (--people-max-usd); absent, it makes none. */
+  peopleMaxUsd?: number;
+  /** COP-289: --no-people: the dry print leaves the people out, and the write makes none. */
+  noPeople?: boolean;
 }
 
 export interface StartAsk {
@@ -452,6 +478,19 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
     const named = rest.find((word) => VERBS.includes(word));
     if (named !== "write") return usage(kindElsewhere(named));
   }
+  // COP-289 review: the people's two flags are the write's alone; any other verb refuses them rather than drop them.
+  const peopleFlag = last("people-max-usd") !== undefined ? "people-max-usd" : last("people")?.flag === "no-people" ? "no-people" : null;
+  if (peopleFlag !== null) {
+    const named = rest.find((word) => VERBS.includes(word));
+    if (named !== "write") {
+      const who = named === undefined ? "video swipe --file, --url and --ad" : `video swipe ${named}`;
+      return usage(
+        peopleFlag === "people-max-usd"
+          ? `${who} takes no --people-max-usd: it carries the people's most on exodus video swipe write --yes.`
+          : `${who} takes no --no-people: it is a flag of exodus video swipe write.`,
+      );
+    }
+  }
 
   if (verb === undefined) {
     const given = (["file", "url", "ad"] as const).filter((name) => value(name) !== undefined);
@@ -543,7 +582,17 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
   if ("problem" in write) return usage(write.problem);
   const kind = value("kind");
   if (kind === null || (kind !== undefined && !kind.trim())) return usage(`video swipe write --kind needs the key of a kind of ad. ${KIND_CHECKED}`);
-  return { kind: "write", breakdownId: id, ask: { productId: product.trim(), ...write.ask, ...(kind !== undefined ? { kind: kind.trim() } : {}) }, opts };
+  // COP-289: the people the write also makes. --people-max-usd carries the most the dry print showed; --no-people, none.
+  const peopleMost = value("people-max-usd");
+  if (peopleMost === null) return usage("video swipe write --people-max-usd needs the people's most the write showed, such as 1.32.");
+  if (peopleMost !== undefined && !/^\d+(\.\d{1,2})?$/.test(peopleMost.trim())) {
+    return usage(`video swipe write --people-max-usd takes a dollar amount, such as 1.32 (got "${peopleMost}").`);
+  }
+  const noPeople = last("people")?.flag === "no-people";
+  if (peopleMost !== undefined && noPeople) return usage("video swipe write takes --people-max-usd or --no-people, not both.");
+  if (peopleMost !== undefined && !opts.yes) return usage("video swipe write --people-max-usd goes with --yes, after the price.");
+  const people = { ...(peopleMost !== undefined ? { peopleMaxUsd: Number(peopleMost.trim()) } : {}), ...(noPeople ? { noPeople: true } : {}) };
+  return { kind: "write", breakdownId: id, ask: { productId: product.trim(), ...write.ask, ...(kind !== undefined ? { kind: kind.trim() } : {}), ...people }, opts };
 }
 
 /** A row's id as the server takes it: a copy of video/lib/sheetSections.ts SHEET_ROW_ID, held equal by a test. */
@@ -807,10 +856,15 @@ async function poll<T>(
   step: (res: ApiResponse<unknown>) => { done: T } | null,
   maxPolls: number,
   deps: VideoDeps,
+  /** A clock time (deps.now) the polling ends at, whatever the count: slow reads never stretch a wait past it. */
+  untilMs?: number,
 ): Promise<{ done: T } | { lost: true } | { timedOut: true }> {
   let misses = 0;
   for (let i = 0; i < maxPolls; i++) {
-    if (i > 0) await deps.sleep(POLL_MS);
+    if (i > 0) {
+      await deps.sleep(POLL_MS);
+      if (untilMs !== undefined && deps.now() >= untilMs) break;
+    }
     const res = await read().catch(() => null);
     if (!res || missed(res)) {
       if (++misses >= MAX_MISSES) return { lost: true };
@@ -1619,12 +1673,14 @@ export async function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: S
     }
   }
   if (memberScript !== undefined && !memberScript.trim()) return failed(`--script ${ask.scriptFile} is empty.`, json);
-  if (!opts.yes) return needsYesResult("write", json, choiceLines(ask));
+  if (!opts.yes) return writeNeedsYes(breakdownId, ask, json, deps);
   const res = await deps.post(SWIPES_PATH, {
     breakdownId,
     productId: ask.productId,
     request: requestOf(ask, memberScript),
     ...(ask.kind ? { kind: ask.kind } : {}),
+    // COP-289: the people's most the dry print showed; the server makes them only with it, and never for more.
+    ...(ask.peopleMaxUsd !== undefined ? { peopleMostUsd: ask.peopleMaxUsd } : {}),
   });
   if (!res.ok) return swipeError(res, json);
   const job = isRecord(res.data) ? res.data.job : undefined;
@@ -1632,6 +1688,11 @@ export async function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: S
   opts.onJob?.(job);
   const out = progress(opts);
   out.say("Writing the brand's version on the member's key. It takes four to nine minutes.");
+  if (ask.peopleMaxUsd !== undefined) {
+    out.say(
+      `Once the script is stored, the people to pick from are made, or taken from an earlier write of this ad with at most one check of their pictures paid; at most ${usd(ask.peopleMaxUsd)} on the member's keys.`,
+    );
+  }
   const ended = await poll<{ refused: ApiResponse<unknown> } | { swipe: SwipeView } | { error: string }>(
     () => deps.get(`${SWIPES_PATH}?job=${encodeURIComponent(job)}`),
     (polled) => {
@@ -1656,10 +1717,224 @@ export async function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: S
   const dropped = kindDropped(swipe, ask.kind);
   if (dropped) return failed(dropped, json, { kindDropped: true, swipeId: swipe._id });
   const written = swipe.outcome.kind === "written";
+  // COP-289: a write that carried the people's most waits for them (a few minutes at most) and shows them. A plain
+  // --yes write never ends in silence: when its kind makes people, it says none were made and where their price is.
+  const people =
+    ask.peopleMaxUsd !== undefined
+      ? written
+        ? await peopleAfterWrite(swipe._id, ask.peopleMaxUsd, out, deps)
+        : NONE_WITH_REFUSAL
+      : written && !ask.noPeople
+        ? await peopleNotAsked(breakdownId, swipe, deps)
+        : null;
   if (json) {
-    return { code: written ? 0 : 1, lines: [JSON.stringify(written ? { ok: true, swipe } : { ok: false, refused: true, swipe })] };
+    const answer = written ? { ok: true, swipe, ...(people ? { people: people.json } : {}) } : { ok: false, refused: true, swipe };
+    return { code: written ? 0 : 1, lines: [JSON.stringify(answer)] };
   }
-  return { code: written ? 0 : 1, lines: [...out.kept, ...swipeLines(swipe, "write")] };
+  const lines = swipeLines(swipe, "write");
+  // The people go before the start's line, the last one; after a refusal, at the end.
+  const withPeople = !people ? lines : written ? [...lines.slice(0, -1), ...people.lines, "", ...lines.slice(-1)] : [...lines, ...people.lines];
+  return { code: written ? 0 : 1, lines: [...out.kept, ...withPeople] };
+}
+
+// ── The people a write makes (COP-289) ───────────────────────────────────────────────────────────────────────────────
+
+/** The free read before the write: the people it also makes and their price, or null (none, an older server, no answer). */
+async function writePeopleOf(breakdownId: string, kind: string | undefined, deps: VideoDeps): Promise<Extract<WritePeople, { makesPeople: true }> | null> {
+  try {
+    const res = await deps.get(`${SWIPE_WRITE_PEOPLE_PATH}?${writePeopleQuery(breakdownId, kind)}`);
+    const people = res.ok && isRecord(res.data) && isRecord(res.data.people) ? res.data.people : null;
+    if (!people || people.makesPeople !== true || typeof people.mostUsd !== "number" || !Array.isArray(people.lines)) return null;
+    return people as unknown as Extract<WritePeople, { makesPeople: true }>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The write's paid-step text, and, when the write also makes people (the free read says so), what they are, their
+ * price, and the yes line that carries their most (--people-max-usd), so the press is a yes to that figure. With
+ * --no-people, on an older server, or for a kind or a member that makes none, the text is the write's as before.
+ */
+async function writeNeedsYes(breakdownId: string, ask: WriteAsk, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const plain = needsYesResult("write", json, choiceLines(ask));
+  const people = ask.noPeople ? null : await writePeopleOf(breakdownId, ask.kind, deps);
+  if (!people) return plain;
+  const yes = `--yes --people-max-usd ${mostShown(people.mostUsd)}`;
+  if (json) return { code: 0, lines: [JSON.stringify({ ...(JSON.parse(plain.lines[0]) as Record<string, unknown>), people: { ...people, yes } })] };
+  return {
+    code: 0,
+    lines: [
+      // Each part says what is true of it (COP-289 review): the write's own text calls have no figure; the people do.
+      ...plain.lines.slice(0, -1).map((line) => (line === NO_PRICE ? WRITE_NO_PRICE_PEOPLE_PRICED : line)),
+      ...people.lines,
+      `Ask the member. On their yes, run the same command with ${yes}: people are made only with that figure, and never cost more. --yes alone, or --no-people, writes without them.`,
+    ],
+  };
+}
+
+/** The write's price line when the people's price is printed with it: no figure for the write's own text calls. */
+const WRITE_NO_PRICE_PEOPLE_PRICED =
+  "The CLI prints no price for the script's own write: its text calls on the member's key have no figure before they run. The people's price is below.";
+
+/** How long a write waits for the people it started, and a start for people being made: a few minutes. */
+const PEOPLE_MADE_WAIT_POLLS = (5 * 60_000) / POLL_MS;
+
+/**
+ * COP-289 review: after a plain --yes write (no figure, no --no-people), the same free read as the dry print's, for the
+ * kind written. When that kind makes people, one line says none were made and where their price is; when the read
+ * fails, that their price could not be read. An older server, or a kind or a member with no people: nothing (null).
+ */
+async function peopleNotAsked(breakdownId: string, swipe: SwipeView, deps: VideoDeps): Promise<{ lines: string[]; json: Record<string, unknown> } | null> {
+  const kind = swipe.outcome.kind === "written" ? swipe.outcome.draft.conceit : swipe.kind;
+  const priceLine = `exodus video swipe sheet people ${swipe._id}`;
+  let res: ApiResponse<unknown>;
+  try {
+    res = await deps.get(`${SWIPE_WRITE_PEOPLE_PATH}?${writePeopleQuery(breakdownId, kind)}`);
+  } catch {
+    res = { ok: false, status: 0, data: null };
+  }
+  if (!res.ok && (res.status === 0 || res.status >= 500 || res.status === 429)) {
+    // A plain --yes write never makes people: only whether this kind makes them is unknown.
+    return {
+      lines: [
+        `No people to pick from were made with this write: its yes carried no --people-max-usd. Whether this kind of ad makes them could not be read. See their price (free): ${priceLine}`,
+      ],
+      json: { state: "unknown" },
+    };
+  }
+  const people = res.ok && isRecord(res.data) && isRecord(res.data.people) ? res.data.people : null;
+  if (people?.makesPeople !== true) return null;
+  return {
+    lines: [`No people to pick from were made with this write: its yes carried no --people-max-usd. See their price (free): ${priceLine}`],
+    json: { state: "not-asked" },
+  };
+}
+
+/** The free read's query: the ad, and the kind when one is named. */
+const writePeopleQuery = (breakdownId: string, kind: string | undefined) =>
+  `breakdownId=${encodeURIComponent(breakdownId)}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`;
+
+/** What a write says of its people after a refusal: none were made. */
+const NONE_WITH_REFUSAL = { lines: ["No people were made, and nothing was paid for them."], json: { state: "none" } };
+
+/** The sheet's read as the people's waits make it: with the word recommended, so a recommended person reads as one. */
+const peopleSheetPath = (swipeId: string) => `${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`;
+
+/**
+ * Reads the swipe's sheet until its person row says no people are being made (or `waitFor` says not to wait), at most
+ * `polls` times; `onWait` is told once, the first time it waits. Null when the sheet cannot be read.
+ */
+async function untilPeopleMade(
+  swipeId: string,
+  deps: VideoDeps,
+  waitFor: (row: SavedSheetRow) => boolean,
+  onWait: (row: SavedSheetRow) => void,
+  polls = PEOPLE_MADE_WAIT_POLLS,
+  /** The clock time the wait ends at (landing review: counted by the clock, not by reads). */
+  untilMs = deps.now() + polls * POLL_MS,
+): Promise<
+  | { done: { sheet: SavedSheet; who: SavedSheetRow | undefined; waited: boolean } | null }
+  | { lost: true; last?: SavedSheetRow }
+  | { timedOut: true; last?: SavedSheetRow }
+> {
+  let waited = false;
+  // The person row of the last sheet read, for what is said when the wait ends without the people (COP-289 review).
+  let last: SavedSheetRow | undefined;
+  const ended = await poll(
+    () => deps.get(peopleSheetPath(swipeId)),
+    (read) => {
+      const sheet = read.ok ? sheetOf(read.data) : null;
+      if (!sheet) return { done: null };
+      const who = rowOfSheet(sheet.sheet, "who");
+      last = who ?? last;
+      if (who?.optionsStatus?.making === true && waitFor(who)) {
+        if (!waited) onWait(who);
+        waited = true;
+        return null;
+      }
+      return { done: { sheet: sheet.sheet, who, waited } };
+    },
+    polls,
+    deps,
+    untilMs,
+  );
+  return "done" in ended ? ended : { ...ended, ...(last ? { last } : {}) };
+}
+
+/**
+ * COP-289 review: what a start with no pick films, said from the person row as the server shows it, once people were
+ * made: the recommended person by number; else a new person cast from the row's words, not one of the people made, and
+ * how to pick one. Null when the row has no people to pick from.
+ */
+function startFilmsLine(who: SavedSheetRow | undefined, swipeId: string): string | null {
+  if (!who || !who.options || who.options.length === 0) return null;
+  const films = startFilmsOf(who);
+  if (films === "picked") return `The start films person ${who.value}, your pick.`;
+  if (films === "recommended") return `A start with no pick films person ${who.value}, the recommended one.`;
+  // The member's own words are their pick: the start films them, with or without a number picked.
+  const lead = films === "new-from-your-words" ? "The start films" : "A start with no pick films";
+  return `${lead} ${castFrom(who)}, not one of these. To film one of them (free): exodus video swipe sheet set ${swipeId} who=<n>`;
+}
+
+/** What a start films, as a closed word for --json: the person picked or recommended, or a new person cast from words. */
+type StartFilms = "picked" | "recommended" | "new-from-your-words" | "new-from-type" | "new-from-script";
+
+function startFilmsOf(who: SavedSheetRow): StartFilms {
+  if (typeof who.value === "number") return who.from === "you" ? "picked" : "recommended";
+  if (typeof who.value === "string") return who.from === "you" ? "new-from-your-words" : "new-from-type";
+  return "new-from-script";
+}
+
+/** The --json facts of a person row with people to pick from: the recommended option's id, and what a start films. */
+function startFilmsJson(who: SavedSheetRow | undefined): { recommended: string | null; films: StartFilms } | null {
+  return who?.options && who.options.length > 0 ? { recommended: who.recommended ?? null, films: startFilmsOf(who) } : null;
+}
+
+/** The person a start casts when the row holds words, not a person made: from whose words. */
+function castFrom(who: SavedSheetRow): string {
+  if (typeof who.value !== "string") return "a new person cast from the script's own words about its speaker";
+  return who.from === "you" ? "a new person cast from your words on the person row" : "a new person cast from their speaker's type";
+}
+
+/**
+ * After a write that carried the people's most: waits a few minutes at most while they are made, then shows where they
+ * stand in the server's words (the ask's end names the person a check of the faces recommends, and why), each person
+ * with their picture's address, and what to run next. A write never fails for its people.
+ */
+async function peopleAfterWrite(
+  swipeId: string,
+  mostUsd: number,
+  out: { say: (line: string) => void },
+  deps: VideoDeps,
+): Promise<{ lines: string[]; json: Record<string, unknown> }> {
+  const look = `See them: exodus video swipe sheet ${swipeId}`;
+  const askLine = `Ask for them (the price first, free): exodus video swipe sheet people ${swipeId}`;
+  const ended = await untilPeopleMade(swipeId, deps, () => true, (who) =>
+    out.say(`${who.optionsStatus?.sentence ?? "Making the people."} Waiting for them, up to 5 minutes.`),
+  );
+  if ("timedOut" in ended) {
+    // COP-289 review: what the server last said is going on (people made, or the taken people's pictures checked).
+    const said = ended.last?.optionsStatus?.sentence?.trim();
+    return { lines: [said ? `Still not done after 5 minutes: ${said} ${look}` : `The people are still being made. ${look}`], json: { mostUsd, state: "making" } };
+  }
+  if ("lost" in ended || ended.done === null) {
+    return { lines: [`Where the people stand could not be read. ${look}`], json: { mostUsd, state: "unknown" } };
+  }
+  const status = ended.done.who?.optionsStatus;
+  const people = peopleLines(ended.done.sheet);
+  const json = { mostUsd, status: status ?? null, people: ended.done.who?.options ?? [] };
+  if (!status || status.noneYet) {
+    return { lines: ["No people were made with this write, and nothing was paid for them.", askLine], json: { ...json, state: "none" } };
+  }
+  if (people.length === 0) return { lines: [status.sentence, askLine], json: { ...json, state: "failed" } };
+  // COP-289 review: people on the sheet are listed whatever the status says (taken people whose check failed are there).
+  const films = startFilmsLine(ended.done.who, swipeId);
+  const pick = typeof ended.done.who?.value === "number" ? [`Pick another (free): exodus video swipe sheet set ${swipeId} who=<n>`] : [];
+  return {
+    lines: [status.sentence, "People to pick from:", ...people, ...(films ? [films] : []), ...pick],
+    json: { ...json, state: status.failed ? "failed" : "made", ...(startFilmsJson(ended.done.who) ?? {}) },
+  };
 }
 
 /** `exodus video swipe show <swipeId>`: one swipe again. */
@@ -1738,7 +2013,9 @@ function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipe
   }
   if (row.optionsStatus?.sentence) lines.push(`    ${row.optionsStatus.sentence}`);
   // Before the first ask for people, the free way to the price (COP-265 part 7); no cost is printed before it is said.
-  if (row.id === "who" && row.optionsStatus?.noneYet) lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
+  // COP-289 review: also when no one was made (a write's people that could not be made) and an ask is left.
+  const noneMade = row.optionsStatus && !row.optionsStatus.making && options.length === 0 && (row.optionsStatus.asksLeft ?? 0) > 0;
+  if (row.id === "who" && (row.optionsStatus?.noneYet || noneMade)) lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
   // COP-285: a voice row with no voice (none picked, none recommended) says how to list the voices for the person.
   if (row.id === "voice" && row.value === null) lines.push(`    List the voices: exodus video swipe sheet voices ${swipeId}`);
   return lines;
@@ -2172,6 +2449,99 @@ export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, dep
 
 // ── The start ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * COP-289: before a start, whether people to pick from are being made for the swipe while the person row is not the
+ * member's own pick; if so, waits a few minutes at most for them, saying so. Null when there was nothing to wait for or
+ * the sheet could not be read (an older server): the start goes on as before.
+ */
+async function peopleBeforeStart(
+  swipeId: string,
+  opts: SwipeRunOptions,
+  deps: VideoDeps,
+): Promise<{ lines: string[]; stillMaking: boolean; waited: boolean; who?: SavedSheetRow } | null> {
+  let first: ReturnType<typeof sheetOf> = null;
+  try {
+    const res = await deps.get(peopleSheetPath(swipeId));
+    first = res.ok ? sheetOf(res.data) : null;
+  } catch {
+    first = null;
+  }
+  const who = first ? rowOfSheet(first.sheet, "who") : undefined;
+  if (!who) return null;
+  if (!who.optionsStatus?.making || who.from === "you") {
+    // COP-289 review: nothing to wait for, and the sheet has people: still one line on who the start films.
+    const films = startFilmsLine(who, swipeId);
+    return films ? { lines: [films], stillMaking: false, waited: false, who } : null;
+  }
+  // COP-289 review: the wait is counted from the ask's own start, 5 minutes in all, so an ask whose worker went quiet
+  // costs a member one wait, not one a start. An older server says no age: the start then waits 5 minutes, said so.
+  const aged = typeof who.optionsStatus.makingForMs === "number";
+  const leftMs = PEOPLE_MADE_WAIT_MS - (aged ? Math.max(0, who.optionsStatus.makingForMs ?? 0) : 0);
+  if (leftMs <= 0) return { lines: [goesOnLine(who, aged)], stillMaking: true, waited: false, who };
+  const out = progress(opts);
+  out.say(
+    checksOnly(who, aged)
+      ? "The pictures of the people to pick from are being checked for this swipe. The start waits for the check, until 5 minutes after it started, so a start with no pick films the one it recommends."
+      : `People to pick from are being made for this swipe. The start waits for them, ${aged ? "until 5 minutes after they were asked for" : "up to 5 minutes"}, so a start with no pick films the one a check of their faces recommends.`,
+  );
+  const ended = await untilPeopleMade(swipeId, deps, (row) => row.from !== "you", () => undefined, Math.ceil(leftMs / POLL_MS), deps.now() + leftMs);
+  if ("timedOut" in ended || "lost" in ended || ended.done === null) {
+    // Said from the last sheet read: a pick that came in during the wait is what the start films.
+    const last = ("timedOut" in ended || "lost" in ended ? ended.last : undefined) ?? who;
+    const why = "timedOut" in ended ? undefined : "Where the people stand could not be read";
+    return { lines: [...out.kept, goesOnLine(last, aged, why)], stillMaking: true, waited: true, who: last };
+  }
+  const sentence = ended.done.who?.optionsStatus?.sentence;
+  const films = startFilmsLine(ended.done.who, swipeId);
+  return { lines: [...out.kept, ...(sentence ? [sentence] : []), ...(films ? [films] : [])], stillMaking: false, waited: true, who: ended.done.who };
+}
+
+/** How long a start may wait for people, counted from when they were asked for. */
+const PEOPLE_MADE_WAIT_MS = 5 * 60_000;
+
+/** Said when the start goes on while people are still being made: why, and plainly what it films. */
+/**
+ * COP-289 review: an ask that only checks taken people. A server that gives an ask's age gives a count for every ask
+ * that makes people, so an aged ask being made with no count makes no one: it checks the pictures of people taken.
+ */
+const checksOnly = (who: SavedSheetRow, aged: boolean) => aged && who.optionsStatus?.making === true && typeof who.optionsStatus.count !== "number";
+
+function goesOnLine(who: SavedSheetRow, aged: boolean, why?: string): string {
+  const checking = checksOnly(who, aged);
+  why ??= checking
+    ? "The check of their pictures is still running 5 minutes after it started"
+    : aged
+      ? "The people are still being made 5 minutes after they were asked for"
+      : "The people are still being made after 5 minutes";
+  const films =
+    typeof who.value === "number"
+      ? who.from === "you"
+        ? `it films person ${who.value}, your pick`
+        : `it films person ${who.value}, the recommended one`
+      : `it films ${castFrom(who)}, not one of ${checking ? "these" : "the people being made"}`;
+  return `${why}, so the start goes on with the sheet as it stands now: ${films}. They stay on the sheet for a next video.`;
+}
+
+/** A start's answer after it waited for people: what the wait said first; with --json, whether they were still being made. */
+function withPeopleWait(
+  result: FlowResult,
+  people: { lines: string[]; stillMaking: boolean; waited: boolean; who?: SavedSheetRow },
+  json: boolean,
+): FlowResult {
+  if (!json) return { ...result, lines: [...people.lines, ...result.lines] };
+  if (result.lines.length !== 1) return result;
+  const films = startFilmsJson(people.who);
+  try {
+    const answer = JSON.parse(result.lines[0]) as Record<string, unknown>;
+    return {
+      ...result,
+      lines: [JSON.stringify({ ...answer, ...(people.waited || people.stillMaking ? { peopleWait: { stillMaking: people.stillMaking } } : {}), ...(films ? { startFilms: films } : {}) })],
+    };
+  } catch {
+    return result;
+  }
+}
+
 /** The server's code for a start refused because the swipe already has a video (convex/lib/swipeStart.ts). */
 export const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 
@@ -2194,6 +2564,7 @@ export async function swipeStartFlow(
   opts: SwipeRunOptions,
   deps: VideoDeps,
   again = false,
+  waitPeople = false,
 ): Promise<FlowResult> {
   const { json } = opts;
   if (!opts.yes) {
@@ -2206,6 +2577,10 @@ export async function swipeStartFlow(
       deps,
     );
   }
+  // COP-289: while the swipe's people are being made, the start waits for them, a few minutes at most, so it takes the
+  // sheet as it stands once they are made; then it starts as it always does.
+  const people = waitPeople ? await peopleBeforeStart(swipeId, opts, deps) : null;
+  if (people) return withPeopleWait(await swipeStartFlow(swipeId, ask, opts, deps, again), people, json);
   // COP-265 part 6: a server without the price before the yes ignores maxUsd and would start the video unheld, so a
   // start held to a price first asks the price's route (a free read) and starts nothing where it is missing.
   if (ask.maxUsd !== undefined) {
@@ -3590,7 +3965,8 @@ async function runSheetSource(item: SheetSource, videos: SheetVideo[], ctx: Shee
             touch(write);
           };
           const wrote = answerOf(
-            await swipeWriteFlow(breakdownId, { productId: ctx.productId, ...sheetWrite.ask }, { json: true, yes: true, wait: false, onJob }, deps),
+            // A sheet run makes no people with its writes (COP-289): no figure, and no read of their price.
+            await swipeWriteFlow(breakdownId, { productId: ctx.productId, ...sheetWrite.ask, noPeople: true }, { json: true, yes: true, wait: false, onJob }, deps),
           );
           if (!isRecord(wrote.swipe)) {
             if (!jobNamed && postRefused(wrote)) write.pending = null;
@@ -4407,7 +4783,7 @@ export async function runSwipePlan(
     case "find":
       return swipeFindFlow(plan.ask, opts, deps);
     case "start":
-      return swipeStartFlow(plan.swipeId, plan.ask, opts, deps, plan.again);
+      return swipeStartFlow(plan.swipeId, plan.ask, opts, deps, plan.again, true);
     case "sheet":
       return swipeSheetReadFlow(plan.swipeId, opts, deps);
     case "sheet-set":

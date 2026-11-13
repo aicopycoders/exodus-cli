@@ -11,6 +11,7 @@ export declare const SWIPE_SHEET_PATH = "/api/v2/video/swipe-sheet";
 export declare const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 export declare const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 export declare const SHEET_SOURCES_QUERY = "sources=recommended";
+export declare const SWIPE_WRITE_PEOPLE_PATH = "/api/v2/video/swipe-write-people";
 export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
@@ -237,6 +238,8 @@ export interface SavedSheetRow {
         asksLeft?: number;
         failed?: boolean;
         noneYet?: boolean;
+        count?: number;
+        makingForMs?: number;
     };
     none?: {
         value: string;
@@ -304,6 +307,17 @@ export type SwipePrice = {
     priced: false;
     why: string;
 };
+export type WritePeople = {
+    makesPeople: false;
+    reason: string;
+} | {
+    makesPeople: true;
+    count: number;
+    aboutUsd: number;
+    mostUsd: number;
+    paidBy: string;
+    lines: string[];
+};
 type ServerMode = "whole" | "hook" | "their-format" | "new-look";
 export declare const SWIPE_MODES: ReadonlyArray<{
     flag: string;
@@ -343,6 +357,8 @@ export interface WriteAsk {
     scriptFile?: string;
     scriptText?: string;
     kind?: string;
+    peopleMaxUsd?: number;
+    noPeople?: boolean;
 }
 export interface StartAsk {
     style?: string;
@@ -525,7 +541,7 @@ export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     runId: string;
     url: string;
 } | null;
-export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps, again?: boolean): Promise<FlowResult>;
+export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps, again?: boolean, waitPeople?: boolean): Promise<FlowResult>;
 export declare const SHEET_FIELDS: readonly ["sources", "product", "personas", "mechanism", "guidance", "mode", "closeness", "look", "script", "kind", "characters", "finish", "oneShot", "style", "title", "music"];
 export declare const SHEET_VIDEO_WARNING = 6;
 export interface SheetSource {

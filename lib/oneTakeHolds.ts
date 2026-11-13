@@ -7,6 +7,7 @@
  * "one-take-label-held") for a mirrored label it did not flip, as a flip would turn the room around, or (COP-295)
  * could not flip, or flipped without a second look that read it right. Such a take holds the run's
  * cut until a person keeps it as it is; it cannot be made again on its own (`retry-clip` is refused on its run).
+ * COP-299: "one-take-said-wrong" is a hold for its words: a word of the product two listens agree was said wrong.
  */
 export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-words-missing",
@@ -14,4 +15,5 @@ export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-kept-paid-take",
   "one-take-words-unchecked",
   "one-take-label-held",
+  "one-take-said-wrong",
 ];

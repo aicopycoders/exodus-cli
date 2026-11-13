@@ -18,6 +18,7 @@ import {
   type WorkflowRun,
 } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
+import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import {
   customerAnswer,
   customerRunPage,
@@ -205,6 +206,11 @@ The whole loop, in order:
        picture stays, no new video is made, and a clip whose voice pass
        cannot finish is kept as it was. Use --scene <n> for one clip.
 
+     exodus video keep <runId> --scene <n>
+       Keep a held scene's clip as it is, as "Use scene N as-is" on the
+       video's page does. It orders nothing. Once no scene is held, the app's
+       own cut goes on and makes the final video.
+
   9. Make your cut from those files.
 
   10. exodus video upload <runId> --file cut.mp4
@@ -235,6 +241,7 @@ Usage:
   exodus video broll remove <runId> --scene <n> [--json]
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
+  exodus video keep <runId> --scene <n> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
@@ -275,7 +282,8 @@ Options:
                        Which video step holds the clip, when a scene has one on
                        more than one step (retry-clip, revoice)
   --scene <n>          Which scene to redo. One scene only, a whole number
-                       (retry-frame, retry-clip, revoice). Which B-roll shot
+                       (retry-frame, retry-clip, revoice), or to keep as it is
+                       (keep). Which B-roll shot
                        to move or remove (broll move, broll remove)
   --all                Every finished clip that kept the video model's voice
                        (revoice)
@@ -605,11 +613,13 @@ switched on get these, on their own brands: start (--script, --conceit,
 --review-storyboard, --stop-at-script, --rewrite-to-fit), swipe (all of it
 but swipe start --title), status, storyboard, approve (the storyboard), voices,
 retry-frame --scene <n> (redo one scene's picture while the storyboard waits),
-pull (the finished video, each scene's clip and voice, and the music) and
-upload. These stay admin-only: start --video-model / --voice / --voice-path /
+pull (the finished video, each scene's clip and voice, and the music),
+upload and keep (a held scene as it is). These stay admin-only: start --video-model / --voice / --voice-path /
 --director, swipe start --title, director,
 status --rejected-draft, retry-clip, revoice, broll, map and move. start --broll
-works for whoever B-roll is switched on for.
+works for whoever B-roll is switched on for. A stopped step's retry,
+exodus workflow repair <runId> retry, needs an admin key today: a beta tester
+uses Try again on the video's page.
 If a command answers "video isn't enabled for this key", the run id is wrong,
 the command is admin-only, or video isn't switched on for your dashboard user.
 
@@ -625,6 +635,7 @@ Examples:
   exodus video retry-clip run_123 --scene 3 --note "keep the handshake in frame"
   exodus video retry-clip run_123 --scene 3 --voice-first
   exodus video revoice run_123 --all
+  exodus video keep run_123 --scene 2
   exodus video picks run_123
   exodus video pick run_123 --face STRATEGIST=2 --voice STRATEGIST=3 --room OFFICE=4
   exodus video picks run_123 --redo face:STRATEGIST --note "older, greyer"
@@ -683,6 +694,8 @@ const REVOICE_NOT_ON_THIS_SERVER =
   "This Exodus server does not have the voice redo yet, so nothing was started and nothing " +
   "was spent. It arrives with the next server update.";
 export const FINAL_PATH = "/api/v2/video/final";
+// COP-277: the run page's "Use scene N as-is", from the command line. An older server answers 404 here.
+export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export const VOICES_PATH = "/api/v2/video/voices";
 // Stop 2: the picks a run drew before its storyboard (GET), a pick or a redo (POST).
 export const PICKS_PATH = "/api/v2/video/picks";
@@ -1232,7 +1245,7 @@ export type RunStop =
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[] }
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[] }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
@@ -1512,8 +1525,37 @@ export function scenesBeingRedone(run: VideoRun, items: NodeItem[]): number[] {
   return [...scenes].sort((a, b) => a - b);
 }
 
+/**
+ * COP-277: a held scene that is a One-take take kept and held for its words, with the sentence its finding says. Such
+ * a take is kept with `exodus video keep`; it cannot be made again on its own.
+ */
+export interface HeldTake {
+  sceneIndex: number;
+  sentence: string;
+}
+
+/**
+ * COP-277: the held scenes whose clip carries a One-take hold finding (ONE_TAKE_HOLD_CODES), each with its sentence:
+ * every hold finding's words, in the order the video step wrote them (a take kept after its second order failed may
+ * also have left out words). Only the scene's latest clip row is read (highest attempt), as the server's
+ * cutHeldScenesOf reads it, so an older row's finding never turns a drawing-fault hold into a take.
+ */
+export function heldTakesOf(scenes: readonly number[] | undefined, items: readonly NodeItem[] | null | undefined): HeldTake[] {
+  if (!scenes?.length || !items) return [];
+  return scenes.flatMap((sceneIndex) => {
+    const latest = items
+      .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
+      .reduce<NodeItem | undefined>((best, i) => (!best || (i.attempt ?? 0) >= (best.attempt ?? 0) ? i : best), undefined);
+    const said = (latest?.findings ?? [])
+      .filter((f) => ONE_TAKE_HOLD_CODES.includes(f.code) && f.detail.trim())
+      .map((f) => f.detail.trim());
+    return said.length > 0 ? [{ sceneIndex, sentence: said.join(" ") }] : [];
+  });
+}
+
 /** #1704: fill in the one fact `classifyRun` cannot see. `cutAttached` comes
- *  from `hasAttachedCut`, or is null when the ledger could not be read. */
+ *  from `hasAttachedCut`, or is null when the ledger could not be read.
+ *  COP-277: the scene rows also say which held scenes are One-take takes. */
 export function resolveStop(
   stop: RunStop,
   cutAttached: boolean | null,
@@ -1530,7 +1572,8 @@ export function resolveStop(
     return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
   }
   if (stop.at !== "final-watch") return stop;
-  return { ...stop, cutAttached };
+  const heldTakes = heldTakesOf(stop.heldScenes, items);
+  return { ...stop, cutAttached, ...(heldTakes.length > 0 ? { heldTakes } : {}) };
 }
 
 /**
@@ -1655,8 +1698,33 @@ function missingSceneLines(
 /**
  * #4257: the app's cut is held for scenes whose drawing fault outlived its
  * redo. Keeping a clip as it is happens on the video's page only.
+ * COP-277: a One-take take held for its words says its own sentence and is kept with `exodus video keep`; it is
+ * never called a drawing fault and never offered `retry-clip`, which its run refuses.
  */
-function heldSceneLines(scenes: number[], runId: string, videoPage: string): string[] {
+function heldSceneLines(scenes: number[], runId: string, videoPage: string, heldTakes: HeldTake[] = []): string[] {
+  const takes = scenes.filter((scene) => heldTakes.some((t) => t.sceneIndex === scene));
+  const faults = scenes.filter((scene) => !takes.includes(scene));
+  return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage) : [])];
+}
+
+/** COP-277: the One-take takes held for their words: each one's sentence, its keep, and where to watch it first. */
+function heldTakeLines(takes: number[], heldTakes: HeldTake[], runId: string, videoPage: string): string[] {
+  if (takes.length === 0) return [];
+  const one = takes.length === 1;
+  const phrase = scenesPhrase(takes).replace(/^scenes?/, (word) => (word === "scene" ? "take" : "takes"));
+  return [
+    `Held: ${phrase} ${one ? "was" : "were"} kept for you to watch, so the final video wasn't made.`,
+    ...takes.map((scene) => heldTakes.find((t) => t.sceneIndex === scene)!.sentence),
+    ...takes.map((scene) =>
+      one
+        ? `Keep it as it is: exodus video keep ${runId} --scene ${scene}`
+        : `Keep take ${scene} as it is: exodus video keep ${runId} --scene ${scene}`,
+    ),
+    `${one ? "Watch it first:  " : "Watch them first:"} ${videoPage}`,
+  ];
+}
+
+function drawingFaultLines(scenes: number[], runId: string, videoPage: string): string[] {
   const one = scenes.length === 1;
   return [
     `Held: ${scenesPhrase(scenes)} still ${one ? "has" : "have"} a drawing fault after ${one ? "it was" : "they were"} made again, so the final video wasn't made.`,
@@ -1665,7 +1733,11 @@ function heldSceneLines(scenes: number[], runId: string, videoPage: string): str
         ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
         : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`,
     ),
-    `${one ? "Keep it as it is" : "Keep them as they are"}: on the video's page, ${videoPage}`,
+    // COP-277: the keep the page's "Use as-is" makes, from here.
+    ...scenes.map((scene) =>
+      one ? `Keep it as it is: exodus video keep ${runId} --scene ${scene}` : `Keep scene ${scene} as it is: exodus video keep ${runId} --scene ${scene}`,
+    ),
+    `Or on the video's page: ${videoPage}`,
   ];
 }
 
@@ -1757,7 +1829,7 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     if (stop.missingScenes?.length) {
       return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
     }
-    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage);
+    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes);
     // #1704: the ledger read failed, so every command below would be a guess —
     // "upload a cut" to someone who already has one, or "approve" to someone
     // who has nothing to approve. Say what IS known, and name the one command
@@ -5261,6 +5333,12 @@ export async function statusFlow(
       }
       if (row.frame?.lastRedo) lines.push(`       picture: ${row.frame.lastRedo.label}`);
       for (const finding of row.clip?.findings ?? []) {
+        // Local night fix F1 and F2(b): the words a kept one-take take said in place of the script's, and its label
+        // check, are the worker's own plain sentences for the member, printed as they are.
+        if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
+          lines.push(`       ${finding.detail}`);
+          continue;
+        }
         lines.push(`       ${finding.code} (${finding.severity}): ${finding.detail}`);
         // #1784: what the checker itself said, when it adds something.
         const judgeSeverity = finding.judgeSeverity ?? finding.severity;
@@ -5311,6 +5389,22 @@ export async function statusFlow(
   if (hasFinal && finalSpeech) lines.push("Final speech:", ...speechSummaryLines(finalSpeech));
   return { code: 0, lines };
 }
+
+/**
+ * Local night fix F1: the finding a one-take take carries when it said other words in place of the script's (scout
+ * ugc-one-take-steps.ts ONE_TAKE_HEARD_AS_CODE); its detail is one plain sentence for the member.
+ */
+export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
+
+/**
+ * Local night fix F2(b): the findings of a one-take take's label check (scout ugc-one-take-label.ts
+ * ONE_TAKE_LABEL_FLIPPED_CODE, ONE_TAKE_LABEL_UNSURE_CODE): a take flipped because its label came out mirrored, and a
+ * label the check could not read. Each detail is one plain sentence for the member.
+ */
+export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure"] as const;
+
+/** The one-take findings `video status` prints as their plain sentence alone, with no code before it. */
+const ONE_TAKE_PLAIN_FINDING_CODES: readonly string[] = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES];
 
 // The run page's Director panel words (director-panel.tsx), so the two agree.
 const DIRECTOR_STATUS_WORDS: Record<NonNullable<RunDirector["status"]>, string> = {
@@ -6775,6 +6869,32 @@ function sceneListWords(sceneIndexes: number[]): string {
 type RevoiceSceneResult =
   | { sceneIndex: number; nodeId?: string; ok: true; triggerRunId?: string }
   | { sceneIndex: number; nodeId?: string; ok: false; error: string };
+
+/** COP-277: what an older server, with no keep route, leaves the member: the page's own button. */
+const KEEP_NOT_ON_THIS_SERVER = "This Exodus server cannot keep a scene from the command line yet, so nothing changed. Keep it on the video's page:";
+
+/**
+ * COP-277: `exodus video keep <runId> --scene <n>`, the run page's "Use scene N as-is": the clip the scene's checks
+ * flagged is kept as it is, for an admin or for a beta tester on their own video, behind the page's own gate. It
+ * orders nothing. A keep that answers the last scene the app's cut was held for starts that cut (the server's).
+ */
+export async function keepFlow(runId: string, sceneIndex: number, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(KEEP_SCENE_PATH, { runId, sceneIndex });
+  if (missingRouteLine(res, "exodus video keep")) {
+    const line = `${KEEP_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+    return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+  }
+  if (!res.ok) return errorResult(res, json);
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, sceneIndex })] };
+  return {
+    code: 0,
+    lines: [
+      `Kept scene ${sceneIndex} as it is. Nothing was ordered.`,
+      "If the final video was waiting on this scene alone, the app makes it now.",
+      `See where it stands: exodus video status ${runId}`,
+    ],
+  };
+}
 
 /** One request per scene, so one scene's refusal never costs the others. */
 export async function revoiceFlow(
@@ -8378,6 +8498,7 @@ export async function run(
     "retry-frame",
     "retry-clip",
     "revoice",
+    "keep",
     "voices",
     "pull",
     "upload",
@@ -8531,6 +8652,14 @@ export async function run(
         defaultDeps,
       ),
     );
+  }
+
+  if (sub === "keep") {
+    const sceneRaw = flagString(flags, "scene");
+    if (sceneRaw === undefined) usage("video keep needs --scene <n>, the scene to keep as it is.");
+    const sceneIndex = Number(sceneRaw);
+    if (!Number.isInteger(sceneIndex)) usage(`video keep --scene must be a whole scene number, not "${sceneRaw}".`);
+    return printResult(await keepFlow(runId, sceneIndex, json, defaultDeps));
   }
 
   if (sub === "revoice") {

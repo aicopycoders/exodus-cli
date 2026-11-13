@@ -76,6 +76,11 @@ export interface CustomerRun {
     stopReason: CustomerStopReason | null;
     detailsPath: string | null;
     cutHolds?: string[];
+    cutHeldScenes?: Array<{
+        sceneIndex: number;
+        sentence: string;
+        take: boolean;
+    }>;
 }
 export declare function customerCutHeld(run: CustomerRun): boolean;
 export interface ScriptTidied {

@@ -11,6 +11,7 @@ import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
+import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
@@ -158,6 +159,11 @@ The whole loop, in order:
        picture stays, no new video is made, and a clip whose voice pass
        cannot finish is kept as it was. Use --scene <n> for one clip.
 
+     exodus video keep <runId> --scene <n>
+       Keep a held scene's clip as it is, as "Use scene N as-is" on the
+       video's page does. It orders nothing. Once no scene is held, the app's
+       own cut goes on and makes the final video.
+
   9. Make your cut from those files.
 
   10. exodus video upload <runId> --file cut.mp4
@@ -188,6 +194,7 @@ Usage:
   exodus video broll remove <runId> --scene <n> [--json]
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
+  exodus video keep <runId> --scene <n> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
@@ -228,7 +235,8 @@ Options:
                        Which video step holds the clip, when a scene has one on
                        more than one step (retry-clip, revoice)
   --scene <n>          Which scene to redo. One scene only, a whole number
-                       (retry-frame, retry-clip, revoice). Which B-roll shot
+                       (retry-frame, retry-clip, revoice), or to keep as it is
+                       (keep). Which B-roll shot
                        to move or remove (broll move, broll remove)
   --all                Every finished clip that kept the video model's voice
                        (revoice)
@@ -558,11 +566,13 @@ switched on get these, on their own brands: start (--script, --conceit,
 --review-storyboard, --stop-at-script, --rewrite-to-fit), swipe (all of it
 but swipe start --title), status, storyboard, approve (the storyboard), voices,
 retry-frame --scene <n> (redo one scene's picture while the storyboard waits),
-pull (the finished video, each scene's clip and voice, and the music) and
-upload. These stay admin-only: start --video-model / --voice / --voice-path /
+pull (the finished video, each scene's clip and voice, and the music),
+upload and keep (a held scene as it is). These stay admin-only: start --video-model / --voice / --voice-path /
 --director, swipe start --title, director,
 status --rejected-draft, retry-clip, revoice, broll, map and move. start --broll
-works for whoever B-roll is switched on for.
+works for whoever B-roll is switched on for. A stopped step's retry,
+exodus workflow repair <runId> retry, needs an admin key today: a beta tester
+uses Try again on the video's page.
 If a command answers "video isn't enabled for this key", the run id is wrong,
 the command is admin-only, or video isn't switched on for your dashboard user.
 
@@ -578,6 +588,7 @@ Examples:
   exodus video retry-clip run_123 --scene 3 --note "keep the handshake in frame"
   exodus video retry-clip run_123 --scene 3 --voice-first
   exodus video revoice run_123 --all
+  exodus video keep run_123 --scene 2
   exodus video picks run_123
   exodus video pick run_123 --face STRATEGIST=2 --voice STRATEGIST=3 --room OFFICE=4
   exodus video picks run_123 --redo face:STRATEGIST --note "older, greyer"
@@ -624,6 +635,7 @@ const VOICE_FIRST_NOT_ON_THIS_SERVER = "This Exodus server cannot redo a clip vo
 const REVOICE_NOT_ON_THIS_SERVER = "This Exodus server does not have the voice redo yet, so nothing was started and nothing " +
     "was spent. It arrives with the next server update.";
 export const FINAL_PATH = "/api/v2/video/final";
+export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export const VOICES_PATH = "/api/v2/video/voices";
 export const PICKS_PATH = "/api/v2/video/picks";
 export const MAP_PATH = "/api/v2/video/map";
@@ -915,6 +927,19 @@ export function scenesBeingRedone(run, items) {
     }
     return [...scenes].sort((a, b) => a - b);
 }
+export function heldTakesOf(scenes, items) {
+    if (!scenes?.length || !items)
+        return [];
+    return scenes.flatMap((sceneIndex) => {
+        const latest = items
+            .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
+            .reduce((best, i) => (!best || (i.attempt ?? 0) >= (best.attempt ?? 0) ? i : best), undefined);
+        const said = (latest?.findings ?? [])
+            .filter((f) => ONE_TAKE_HOLD_CODES.includes(f.code) && f.detail.trim())
+            .map((f) => f.detail.trim());
+        return said.length > 0 ? [{ sceneIndex, sentence: said.join(" ") }] : [];
+    });
+}
 export function resolveStop(stop, cutAttached, items) {
     if (stop.at === "pilot") {
         if (!items)
@@ -925,7 +950,8 @@ export function resolveStop(stop, cutAttached, items) {
     }
     if (stop.at !== "final-watch")
         return stop;
-    return { ...stop, cutAttached };
+    const heldTakes = heldTakesOf(stop.heldScenes, items);
+    return { ...stop, cutAttached, ...(heldTakes.length > 0 ? { heldTakes } : {}) };
 }
 export async function resolveStopAtPark(stop, runId, deps) {
     if (stop.at !== "final-watch" && stop.at !== "pilot")
@@ -993,14 +1019,34 @@ function missingSceneLines(missing, framesNodeId, runId, runUrl) {
     lines.push("The ad can't be approved until every scene has a clip.", `Watch it here:   ${runUrl}`);
     return lines;
 }
-function heldSceneLines(scenes, runId, videoPage) {
+function heldSceneLines(scenes, runId, videoPage, heldTakes = []) {
+    const takes = scenes.filter((scene) => heldTakes.some((t) => t.sceneIndex === scene));
+    const faults = scenes.filter((scene) => !takes.includes(scene));
+    return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage) : [])];
+}
+function heldTakeLines(takes, heldTakes, runId, videoPage) {
+    if (takes.length === 0)
+        return [];
+    const one = takes.length === 1;
+    const phrase = scenesPhrase(takes).replace(/^scenes?/, (word) => (word === "scene" ? "take" : "takes"));
+    return [
+        `Held: ${phrase} ${one ? "was" : "were"} kept for you to watch, so the final video wasn't made.`,
+        ...takes.map((scene) => heldTakes.find((t) => t.sceneIndex === scene).sentence),
+        ...takes.map((scene) => one
+            ? `Keep it as it is: exodus video keep ${runId} --scene ${scene}`
+            : `Keep take ${scene} as it is: exodus video keep ${runId} --scene ${scene}`),
+        `${one ? "Watch it first:  " : "Watch them first:"} ${videoPage}`,
+    ];
+}
+function drawingFaultLines(scenes, runId, videoPage) {
     const one = scenes.length === 1;
     return [
         `Held: ${scenesPhrase(scenes)} still ${one ? "has" : "have"} a drawing fault after ${one ? "it was" : "they were"} made again, so the final video wasn't made.`,
         ...scenes.map((scene) => one
             ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
             : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`),
-        `${one ? "Keep it as it is" : "Keep them as they are"}: on the video's page, ${videoPage}`,
+        ...scenes.map((scene) => one ? `Keep it as it is: exodus video keep ${runId} --scene ${scene}` : `Keep scene ${scene} as it is: exodus video keep ${runId} --scene ${scene}`),
+        `Or on the video's page: ${videoPage}`,
     ];
 }
 function pilotLines(stop, runId, runUrl) {
@@ -1083,7 +1129,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
         }
         if (stop.heldScenes?.length)
-            return heldSceneLines(stop.heldScenes, runId, videoPage);
+            return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes);
         if (stop.cutAttached === null) {
             return [
                 "Parked: every piece is made.",
@@ -3894,6 +3940,10 @@ export async function statusFlow(runId, json, deps) {
             if (row.frame?.lastRedo)
                 lines.push(`       picture: ${row.frame.lastRedo.label}`);
             for (const finding of row.clip?.findings ?? []) {
+                if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
+                    lines.push(`       ${finding.detail}`);
+                    continue;
+                }
                 lines.push(`       ${finding.code} (${finding.severity}): ${finding.detail}`);
                 const judgeSeverity = finding.judgeSeverity ?? finding.severity;
                 if (finding.judgeDetail) {
@@ -3944,6 +3994,9 @@ export async function statusFlow(runId, json, deps) {
         lines.push("Final speech:", ...speechSummaryLines(finalSpeech));
     return { code: 0, lines };
 }
+export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
+export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure"];
+const ONE_TAKE_PLAIN_FINDING_CODES = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES];
 const DIRECTOR_STATUS_WORDS = {
     reviewing: "Watching this run",
     waiting: "Waiting for redos to finish",
@@ -4984,6 +5037,26 @@ function sceneListWords(sceneIndexes) {
     if (sceneIndexes.length === 1)
         return `Scene ${sceneIndexes[0]}`;
     return `Scenes ${sceneIndexes.slice(0, -1).join(", ")} and ${sceneIndexes[sceneIndexes.length - 1]}`;
+}
+const KEEP_NOT_ON_THIS_SERVER = "This Exodus server cannot keep a scene from the command line yet, so nothing changed. Keep it on the video's page:";
+export async function keepFlow(runId, sceneIndex, json, deps) {
+    const res = await deps.post(KEEP_SCENE_PATH, { runId, sceneIndex });
+    if (missingRouteLine(res, "exodus video keep")) {
+        const line = `${KEEP_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+        return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+    }
+    if (!res.ok)
+        return errorResult(res, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, sceneIndex })] };
+    return {
+        code: 0,
+        lines: [
+            `Kept scene ${sceneIndex} as it is. Nothing was ordered.`,
+            "If the final video was waiting on this scene alone, the app makes it now.",
+            `See where it stands: exodus video status ${runId}`,
+        ],
+    };
 }
 export async function revoiceFlow(runId, target, json, deps) {
     const runRes = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
@@ -6218,6 +6291,7 @@ export async function run(flags, occurrences) {
         "retry-frame",
         "retry-clip",
         "revoice",
+        "keep",
         "voices",
         "pull",
         "upload",
@@ -6354,6 +6428,15 @@ export async function run(flags, occurrences) {
             usage(`video retry-clip --scene must be a whole scene number, not "${sceneRaw}".`);
         }
         return printResult(await retryClipFlow(runId, { sceneIndex, nodeId: flagString(flags, "node") }, { note: flagString(flags, "note"), voiceFirst: flags["voice-first"] === true }, json, defaultDeps));
+    }
+    if (sub === "keep") {
+        const sceneRaw = flagString(flags, "scene");
+        if (sceneRaw === undefined)
+            usage("video keep needs --scene <n>, the scene to keep as it is.");
+        const sceneIndex = Number(sceneRaw);
+        if (!Number.isInteger(sceneIndex))
+            usage(`video keep --scene must be a whole scene number, not "${sceneRaw}".`);
+        return printResult(await keepFlow(runId, sceneIndex, json, defaultDeps));
     }
     if (sub === "revoice") {
         const sceneRaw = flagString(flags, "scene");

@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A UGC script with no video ("write me a UGC script", "swipe this UGC ad" for a script) is `ugc-ads`, and the separate UGC video kit's sheet ("run the preproduction sheet") is `ugc-preproduction`, not this skill. A timeline ad asked for without "exodus" ("make me a timeline ad", "turn this winning ad into timeline ads") is `timeline-ad-factory`, on the member's own Kie.ai key; "exodus, make a skeleton timeline video" stays here. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, read first, then one sheet of choices and one yes for the write and the whole video (or, when the member asks, step by step with a yes before each paid step). With no ad named ("find some ads to swipe for this product, give me options"), it first lists the video ads in the brand's swipe library with `exodus video swipe find` and offers at most six. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull and upload on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
+description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A UGC script with no video ("write me a UGC script", "swipe this UGC ad" for a script) is `ugc-ads`, and the separate UGC video kit's sheet ("run the preproduction sheet") is `ugc-preproduction`, not this skill. A timeline ad asked for without "exodus" ("make me a timeline ad", "turn this winning ad into timeline ads") is `timeline-ad-factory`, on the member's own Kie.ai key; "exodus, make a skeleton timeline video" stays here. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, read first, then one sheet of choices and one yes for the write and the whole video (or, when the member asks, step by step with a yes before each paid step). With no ad named ("find some ads to swipe for this product, give me options"), it first lists the video ads in the brand's swipe library with `exodus video swipe find` and offers at most six. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull, upload and keep on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -1085,9 +1085,10 @@ CLI words it the way the run page does. On their own brands they can:
   file"). `--stop-at-script` prints that script and starts nothing.
 - `video status <runId>`: where the video is, in plain words (waiting in line,
   planning, drawing, storyboard ready for review, filming, ready with its link,
-  held for a scene they must make again or keep as it is on the video's page,
-  or stopped and why). `--json` prints the server's answer as it came; a held
-  video says `"stage": "failed"` with the held scenes in `cutHolds`.
+  held for a scene they must make again or keep as it is, or stopped and why).
+  `--json` prints the server's answer as it came; a held video says
+  `"stage": "failed"` with the held scenes in `cutHolds`, and a newer server
+  also sends `cutHeldScenes` (each held scene's number and its sentence).
 - `video storyboard <runId>`: each scene's line and picture, while the
   storyboard waits for review.
 - `video approve <runId>`: approves the storyboard. At an audition stop,
@@ -1107,6 +1108,9 @@ CLI words it the way the run page does. On their own brands they can:
   handover" below applies to them.
 - `video upload <runId> --file <cut>`: attaches their cut and prints the page
   to watch it on.
+- `video keep <runId> --scene <n>`: keeps a held scene's clip as it is, as
+  "Use scene N as-is" on the video's page does, after their yes. It orders
+  nothing; keeping the last held scene starts the cut.
 - `video swipe`: all of "Swiping a video ad" except `swipe start --title`,
   which is refused with one sentence naming it. The run it starts answers the
   way start's does.
@@ -1292,6 +1296,8 @@ exodus video pull <runId> --out ./ad-<runId>              every piece + manifest
 exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "…"] [--voice-first]
                                                           redo one clip at the final watch
 exodus video revoice <runId> --all | --scene <n>          redo only the voice; no new video
+exodus video keep <runId> --scene <n>                     keep a held scene as it is; orders nothing;
+                                                          only after the member's yes
                                                           … make the cut (your choice of tool)
 exodus video upload <runId> --file ./ad-<runId>/cut.mp4   attach it
 exodus video review <runId> --file ./ad-<runId>/cut.mp4 --accept | --reject
@@ -1340,12 +1346,31 @@ under it:
   cut itself; when a scene's clip still has a drawing fault after it was made
   again, the stop block says `Held:` and names the scene
   (`stop.heldScenes` in `--json`). No cut is made until each held scene is
-  made again with `retry-clip`, or kept as it is on the video's page (the
-  link it prints). Keeping the last one starts the cut.
+  made again with `retry-clip`, or kept as it is with `exodus video keep
+  <runId> --scene <n>` or on the video's page (the link it prints). Keeping
+  the last one starts the cut.
+  A One-take take held for its words is named under `Held:` with its own
+  sentence, every reason it was held for (`stop.heldTakes` in `--json`). It
+  cannot be made again on its own, so no `retry-clip` is offered. Show the user the sentence
+  and ask them to watch the take. With their yes, `exodus video keep <runId>
+  --scene <n>` keeps it as it is: it orders nothing, and keeping the last held
+  take starts the cut. Otherwise a new run films it again.
 - paused: a builder checkpoint neither video verb resolves —
   `exodus workflow checkpoint <runId>` is the verb for that one.
 - failed: `status` shows how far it got, and a `--wait` that was running exits
   1 with the error. Tell the user; do not start another run on your own.
+  Two stops of a One-take run have a way out, each after the user's yes:
+  `exodus workflow repair <runId> retry`.
+  - Kie failed a picture twice (its sentence says "Kie failed it" and what Kie
+    said): the retry orders that picture again, at most twice more. Each
+    order that draws is paid on their Kie key at Kie's price for that
+    picture; an order Kie failed is not counted as paid. When the sentence
+    says instead that a retry stops the same way, the orders may already be
+    paid for: only a new start draws the picture (`exodus video swipe start
+    <swipeId> --again` says its price before it pays for anything).
+  - The connection to the text model dropped twice: the retry asks again and
+    keeps what was already written. The storyboard already asked once more
+    by itself after the first drop.
   When the storyboard is the step that failed, `status` adds a "What happened
   to the storyboard" block: which parts of the plan were accepted, which part
   was turned down, and why (#1902). Relay it as written. On an admin key it may

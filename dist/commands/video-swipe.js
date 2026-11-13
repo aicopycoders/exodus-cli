@@ -803,10 +803,26 @@ export function filmingLines(filming, version) {
 }
 const BY_EYE = "  (The video model's reading by eye, not proven: every line but Measured, taken from the frames; Words, counted by code; and Cuts, counted by code with the jump cuts the video model saw.)";
 const TEMPLATE_MAX_POLLS = 120;
+function offeredOf(template) {
+    const list = template.offered;
+    if (!Array.isArray(list))
+        return [];
+    return list.filter((entry) => isRecord(entry) && typeof entry.key === "string" && typeof entry.label === "string" && typeof entry.reason === "string");
+}
+function offeredLine(kind, how) {
+    const about = typeof kind.about === "string" && kind.about.trim() !== "" ? ` ${kind.about.trim()}` : "";
+    return `Also fits their ad: ${kind.label} (${kind.key}).${about} ${kind.reason} If the member wants it, ${how}.`;
+}
+function sheetOfferedLines(template, sheet) {
+    if (sheet.kind !== null || sheet.sources.length !== 1)
+        return [];
+    return offeredOf(template).map((offered) => `  ${offeredLine(offered, `set "kind": "${offered.key}" in the sheet before its next run`)}`);
+}
 function templateLines(template) {
     return [
         `Kind of ad: ${template.kind.label} (${template.kind.key})`,
         `  ${template.kind.why}`,
+        ...offeredOf(template).map((kind) => offeredLine(kind, `add --kind ${kind.key} to the write`)),
         `Look: ${template.look.label} (${template.look.slug})`,
         `  ${template.look.why}`,
         `Their ad: ${template.lines} lines, about ${Math.round(template.seconds)} s.`,
@@ -814,7 +830,7 @@ function templateLines(template) {
 }
 function nextAfterTemplate(breakdownId) {
     return [
-        "The swipe writes this kind of ad and no other. If the member wants another kind, say so before writing.",
+        "The swipe writes the kind of ad it was matched to, or the one --kind names, and no other. If the member wants another kind, say so before writing.",
         "Next: pick a product (exodus video swipe products), then write (paid, on the member's key; ask first):",
         `  exodus video swipe write ${breakdownId} --product <productId> --mode whole-ad --closeness 2 --yes`,
     ];
@@ -2504,6 +2520,8 @@ async function runSheetSource(item, videos, ctx) {
                 src.lastError = null;
                 touch(src);
                 say(`  ${templateKindLine(template, sheet.kind)} Look: ${template.look.label}. The template was made before, so it cost nothing.`);
+                for (const line of sheetOfferedLines(template, sheet))
+                    say(line);
             }
             else {
                 const at = stamp(deps);
@@ -2528,6 +2546,8 @@ async function runSheetSource(item, videos, ctx) {
                 src.lastError = null;
                 touch(src);
                 say(`  ${templateKindLine(view, sheet.kind)} Look: ${view.look.label}.`);
+                for (const line of sheetOfferedLines(view, sheet))
+                    say(line);
             }
         }
     }

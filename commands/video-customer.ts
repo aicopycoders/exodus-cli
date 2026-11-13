@@ -86,6 +86,11 @@ export interface CustomerRun {
    * Absent from older servers.
    */
   cutHolds?: string[];
+  /**
+   * COP-277: the same held scenes with their numbers, and whether each is a One-take take held for its words (kept
+   * with `exodus video keep`, never made again on its own). Absent from older servers.
+   */
+  cutHeldScenes?: Array<{ sceneIndex: number; sentence: string; take: boolean }>;
 }
 
 /** #4257: the final cut waits for the customer to keep or remake a scene. */
@@ -93,12 +98,31 @@ export function customerCutHeld(run: CustomerRun): boolean {
   return (run.cutHolds?.length ?? 0) > 0;
 }
 
-function heldLines(holds: string[], page: string): string[] {
-  const one = holds.length === 1;
+function heldLines(run: CustomerRun, page: string): string[] {
+  const holds = run.cutHolds ?? [];
+  const scenes = run.cutHeldScenes;
+  const one = (scenes?.length ?? holds.length) === 1;
+  const head = `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`;
+  if (!scenes?.length) {
+    return [head, ...holds.map((hold) => `  ${hold}`), `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`];
+  }
+  // COP-277: a One-take take is kept as it is from here; it cannot be made again on its own.
+  const takes = scenes.filter((s) => s.take);
+  const faults = scenes.filter((s) => !s.take);
   return [
-    `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`,
-    ...holds.map((hold) => `  ${hold}`),
-    `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+    head,
+    ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
+    ...takes.map((s) =>
+      takes.length === 1
+        ? `Keep it as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`
+        : `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`,
+    ),
+    ...(faults.length > 0
+      ? [
+          `${faults.length === 1 ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+          ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+        ]
+      : [`${takes.length === 1 ? "Watch it first:  " : "Watch them first:"} ${page}`]),
   ];
 }
 
@@ -297,7 +321,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
       ];
     case "failed":
-      return run.cutHolds?.length ? heldLines(run.cutHolds, page) : stoppedLines(run, page);
+      return run.cutHolds?.length ? heldLines(run, page) : stoppedLines(run, page);
     case "cancelled":
       return ["This video was stopped."];
   }

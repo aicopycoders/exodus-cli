@@ -145,6 +145,12 @@ export interface SwipeTemplateView {
     };
     lines: number;
     seconds: number;
+    offered?: Array<{
+        key: string;
+        label: string;
+        about?: string;
+        reason: string;
+    }>;
 }
 export interface SwipeDraft {
     script: string;

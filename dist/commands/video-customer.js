@@ -10,12 +10,28 @@ export function speechSummaryLines(speech) {
 export function customerCutHeld(run) {
     return (run.cutHolds?.length ?? 0) > 0;
 }
-function heldLines(holds, page) {
-    const one = holds.length === 1;
+function heldLines(run, page) {
+    const holds = run.cutHolds ?? [];
+    const scenes = run.cutHeldScenes;
+    const one = (scenes?.length ?? holds.length) === 1;
+    const head = `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`;
+    if (!scenes?.length) {
+        return [head, ...holds.map((hold) => `  ${hold}`), `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`];
+    }
+    const takes = scenes.filter((s) => s.take);
+    const faults = scenes.filter((s) => !s.take);
     return [
-        `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`,
-        ...holds.map((hold) => `  ${hold}`),
-        `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+        head,
+        ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
+        ...takes.map((s) => takes.length === 1
+            ? `Keep it as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`
+            : `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+        ...(faults.length > 0
+            ? [
+                `${faults.length === 1 ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+                ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+            ]
+            : [`${takes.length === 1 ? "Watch it first:  " : "Watch them first:"} ${page}`]),
     ];
 }
 export function customerAnswer(data) {
@@ -135,7 +151,7 @@ export function customerStageLines(run, page) {
                 `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
             ];
         case "failed":
-            return run.cutHolds?.length ? heldLines(run.cutHolds, page) : stoppedLines(run, page);
+            return run.cutHolds?.length ? heldLines(run, page) : stoppedLines(run, page);
         case "cancelled":
             return ["This video was stopped."];
     }

@@ -119,6 +119,12 @@ export interface SwipeTemplateView {
   look: { slug: string; label: string; why: string };
   lines: number;
   seconds: number;
+  /**
+   * COP-291: the kinds the server offers next to the match for this member, each with what it makes (`about`, the first
+   * sentence of the kind's Description) and its reason, in the server's words. Absent from a server before it, and when
+   * none is offered.
+   */
+  offered?: Array<{ key: string; label: string; about?: string; reason: string }>;
 }
 
 export interface SwipeDraft {
@@ -1191,10 +1197,40 @@ const BY_EYE = "  (The video model's reading by eye, not proven: every line but 
 /** Two tries of up to 180 s each, and the time to start: ten minutes is past the worst case. */
 const TEMPLATE_MAX_POLLS = 120;
 
+/** COP-291: the kinds the server offers next to the match, as far as they read; an entry that doesn't is left out. */
+function offeredOf(template: SwipeTemplateView): NonNullable<SwipeTemplateView["offered"]> {
+  const list: unknown = template.offered;
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (entry): entry is { key: string; label: string; reason: string } =>
+      isRecord(entry) && typeof entry.key === "string" && typeof entry.label === "string" && typeof entry.reason === "string",
+  );
+}
+
+/**
+ * COP-291: an offered kind in one line: its name, what it makes in its own words when the server sends them, why it fits
+ * their ad, and how the member takes it. Choosing it is the member's.
+ */
+function offeredLine(kind: NonNullable<SwipeTemplateView["offered"]>[number], how: string): string {
+  const about = typeof kind.about === "string" && kind.about.trim() !== "" ? ` ${kind.about.trim()}` : "";
+  return `Also fits their ad: ${kind.label} (${kind.key}).${about} ${kind.reason} If the member wants it, ${how}.`;
+}
+
+/**
+ * COP-291: a sheet run's lines for the kinds offered next to the match, each with the sheet's way to name it. Said only
+ * for a sheet of one ad that names no kind: a sheet's kind is the kind of every ad in it, and its next run writes again,
+ * which is paid. They change nothing this run writes.
+ */
+function sheetOfferedLines(template: SwipeTemplateView, sheet: Pick<SwipeSheet, "kind" | "sources">): string[] {
+  if (sheet.kind !== null || sheet.sources.length !== 1) return [];
+  return offeredOf(template).map((offered) => `  ${offeredLine(offered, `set "kind": "${offered.key}" in the sheet before its next run`)}`);
+}
+
 function templateLines(template: SwipeTemplateView): string[] {
   return [
     `Kind of ad: ${template.kind.label} (${template.kind.key})`,
     `  ${template.kind.why}`,
+    ...offeredOf(template).map((kind) => offeredLine(kind, `add --kind ${kind.key} to the write`)),
     `Look: ${template.look.label} (${template.look.slug})`,
     `  ${template.look.why}`,
     `Their ad: ${template.lines} lines, about ${Math.round(template.seconds)} s.`,
@@ -1203,7 +1239,8 @@ function templateLines(template: SwipeTemplateView): string[] {
 
 function nextAfterTemplate(breakdownId: string): string[] {
   return [
-    "The swipe writes this kind of ad and no other. If the member wants another kind, say so before writing.",
+    // COP-291: --kind writes another kind this ad can be made as, offered or not, so the line says so every time.
+    "The swipe writes the kind of ad it was matched to, or the one --kind names, and no other. If the member wants another kind, say so before writing.",
     "Next: pick a product (exodus video swipe products), then write (paid, on the member's key; ask first):",
     `  exodus video swipe write ${breakdownId} --product <productId> --mode whole-ad --closeness 2 --yes`,
   ];
@@ -3391,6 +3428,7 @@ async function runSheetSource(item: SheetSource, videos: SheetVideo[], ctx: Shee
         src.lastError = null;
         touch(src);
         say(`  ${templateKindLine(template, sheet.kind)} Look: ${template.look.label}. The template was made before, so it cost nothing.`);
+        for (const line of sheetOfferedLines(template, sheet)) say(line);
       } else {
         const at = stamp(deps);
         src.pending = { step: "template", at };
@@ -3413,6 +3451,7 @@ async function runSheetSource(item: SheetSource, videos: SheetVideo[], ctx: Shee
         src.lastError = null;
         touch(src);
         say(`  ${templateKindLine(view, sheet.kind)} Look: ${view.look.label}.`);
+        for (const line of sheetOfferedLines(view, sheet)) say(line);
       }
     }
   } catch (err) {

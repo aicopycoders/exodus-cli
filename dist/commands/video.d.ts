@@ -24,6 +24,7 @@ export declare const helpText: string;
 export declare const RUN_PATH = "/api/v2/workflow";
 export declare const ITEMS_PATH = "/api/v2/workflow/items";
 export declare const FINAL_PATH = "/api/v2/video/final";
+export declare const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export declare const VOICES_PATH = "/api/v2/video/voices";
 export declare const PICKS_PATH = "/api/v2/video/picks";
 export declare const MAP_PATH = "/api/v2/video/map";
@@ -320,6 +321,7 @@ export type RunStop = {
     missingScenes?: MissingScene[];
     framesNodeId?: string;
     heldScenes?: number[];
+    heldTakes?: HeldTake[];
 } | {
     at: "pilot";
     nodeId?: string;
@@ -368,6 +370,11 @@ export declare function pilotCheck(sceneIndex: number, row: NodeItem | undefined
 export declare function classifyRun(run: VideoRun): RunStop;
 export declare function hasAttachedCut(items: NodeItem[]): boolean;
 export declare function scenesBeingRedone(run: VideoRun, items: NodeItem[]): number[];
+export interface HeldTake {
+    sceneIndex: number;
+    sentence: string;
+}
+export declare function heldTakesOf(scenes: readonly number[] | undefined, items: readonly NodeItem[] | null | undefined): HeldTake[];
 export declare function resolveStop(stop: RunStop, cutAttached: boolean | null, items?: NodeItem[] | null): ResolvedStop;
 export declare function resolveStopAtPark(stop: RunStop, runId: string, deps: Pick<VideoDeps, "get">): Promise<ResolvedStop>;
 export declare function stageWord(stage: string): string;
@@ -593,6 +600,8 @@ export declare function waitFlow(runId: string, opts: {
     onProgressLine?: (line: string) => void;
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function statusFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
+export declare const ONE_TAKE_LABEL_CODES: readonly ["one-take-label-flipped", "one-take-label-unsure"];
 export declare function directorLines(director: RunDirector): string[];
 export type DirectorSwitch = boolean | null;
 export declare function parseDirectorSwitch(word: string | undefined): {
@@ -857,6 +866,7 @@ export declare function planClipRevoice(run: VideoRun, items: NodeItem[], target
 export type RevoiceTarget = ClipRedoTarget | {
     all: true;
 };
+export declare function keepFlow(runId: string, sceneIndex: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function revoiceFlow(runId: string, target: RevoiceTarget, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export interface CastVoiceRow {
     characterId: string;

@@ -59,7 +59,9 @@ export type CustomerStopReason =
   | { kind: "openrouter-out-of-credits" }
   | { kind: "plan-too-big" }
   | { kind: "plan-rejected" }
-  | { kind: "keys-missing"; keys: string[] };
+  | { kind: "keys-missing"; keys: string[] }
+  /** #4488: the step's own sentence, shown as it is. Absent from older servers. */
+  | { kind: "stop-sentence"; sentence: string };
 
 export interface CustomerRun {
   view: "customer";
@@ -234,6 +236,13 @@ function stoppedLines(run: CustomerRun, page: string): string[] {
     return [
       `This video stopped because ${reason.keys.length === 1 ? "a key is" : "some keys are"} missing (${reason.keys.join(", ")}).`,
       `Add ${reason.keys.length === 1 ? "it" : "them"} in Settings → API Keys, then try again from the video's page.`,
+    ];
+  }
+  if (reason?.kind === "stop-sentence") {
+    return [
+      "Here's why this video stopped.",
+      reason.sentence,
+      run.canRetry ? `Try again from the video's page: ${page}` : "Start a new one from the Video page.",
     ];
   }
   return run.canRetry

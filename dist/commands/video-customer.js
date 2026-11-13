@@ -77,6 +77,13 @@ function stoppedLines(run, page) {
             `Add ${reason.keys.length === 1 ? "it" : "them"} in Settings → API Keys, then try again from the video's page.`,
         ];
     }
+    if (reason?.kind === "stop-sentence") {
+        return [
+            "Here's why this video stopped.",
+            reason.sentence,
+            run.canRetry ? `Try again from the video's page: ${page}` : "Start a new one from the Video page.",
+        ];
+    }
     return run.canRetry
         ? ["Something went wrong making this video.", `Try again from the video's page: ${page}`]
         : ["Something went wrong making this video. Start a new one from the Video page."];

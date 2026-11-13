@@ -43,6 +43,9 @@ export type CustomerStopReason = {
 } | {
     kind: "keys-missing";
     keys: string[];
+} | {
+    kind: "stop-sentence";
+    sentence: string;
 };
 export interface CustomerRun {
     view: "customer";

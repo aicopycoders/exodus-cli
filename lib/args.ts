@@ -52,7 +52,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         // --no-wait → { wait: false }
         flags[key.slice(3)] = false;
         i++;
-      } else if (next !== undefined && !next.startsWith("--")) {
+      } else if (next !== undefined && !next.startsWith("--") && next !== "-h") {
+        // `-h` is the help switch, never a flag's value: `--json -h` taking it as
+        // its value left help unset, so the command ran instead of its help.
         flags[key] = next;
         i += 2;
       } else {

@@ -7,6 +7,9 @@ export function speechSummaryLines(speech) {
         "speech-issue": "Speech issue — review required", unverified: "Speech not verified" };
     return [labels[speech.status], ...speech.issues.map(speechIssueText)];
 }
+function noPictureBeforeApproval(run) {
+    return run.stage === "review" && run.planHold?.atBoard === true && run.planHold.beforePictures !== true;
+}
 export function spendAskLines(run, runId) {
     if (run.spendAsk) {
         return [
@@ -140,6 +143,19 @@ function stoppedLines(run, page) {
         ? ["Something went wrong making this video.", `Try again from the video's page: ${page}`]
         : ["Something went wrong making this video. Start a new one from the Video page."];
 }
+const FOR_GOOD = "It can't be undone; a change after it is a new run.";
+export function finalApproveLines(template) {
+    return [
+        template ? "Approving makes this cut the run's finished video." : `Approving makes this cut the run's finished video. ${FOR_GOOD}`,
+        "Nothing is posted to an ad account; the video stays on its page.",
+    ];
+}
+export function finalApprovedLines(template) {
+    return [
+        template ? "Approved. This cut is now the run's finished video." : `Approved. This cut is now the run's finished video. ${FOR_GOOD}`,
+        "Nothing is posted to an ad account. The video stays on its page, and exodus video pull saves it.",
+    ];
+}
 export function customerStageLines(run, page) {
     const id = run.runId;
     const audition = run.templateApproval?.audition;
@@ -167,6 +183,13 @@ export function customerStageLines(run, page) {
                 `Watch it here: ${page}`,
             ];
         case "review":
+            if (noPictureBeforeApproval(run)) {
+                return [
+                    "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
+                    `Read them:    exodus video storyboard ${id}`,
+                    `Approve them: exodus video approve ${id}`,
+                ];
+            }
             return [
                 "Your storyboard is ready for your review.",
                 `See it:      exodus video storyboard ${id}`,
@@ -185,6 +208,7 @@ export function customerStageLines(run, page) {
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),
+                ...(run.awaitingSignOff ? finalApproveLines(run.template === true) : []),
                 `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
             ];
         case "failed":
@@ -227,6 +251,16 @@ export function customerStoryboardLines(board) {
         return [
             "This video isn't waiting for you to review its storyboard right now.",
             `Check where it is: exodus video status ${id}`,
+        ];
+    }
+    if (board.noPictureBeforeApproval) {
+        return [
+            "Script",
+            ...board.scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]),
+            "",
+            "No take gets a picture before you approve.",
+            `approve with: exodus video approve ${id}`,
+            `pick voices: exodus video voices ${id}`,
         ];
     }
     const stillDrawing = board.scenes.some((s) => s.frameStatus === "pending" || s.frameStatus === "drawing");

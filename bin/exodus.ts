@@ -160,13 +160,16 @@ async function main() {
   // Version: handled before dispatch so `--version`/`-v` isn't treated as a command.
   if (["--version", "-v", "-V", "version"].includes(command)) {
     console.log(getVersion());
-    process.exit(0);
+    return;
   }
 
   // Top-level help: no command, "help" command, or --help without a subcommand.
+  // Printing paths return instead of process.exit: on macOS a pipe is written
+  // asynchronously, and exiting right after console.log cut `exodus video --help`
+  // read through a pipe at 8192 bytes. Returning lets Node flush stdout first.
   if (!command || command === "help") {
     console.log(await buildHelp());
-    process.exit(0);
+    return;
   }
 
   let commandModule: {
@@ -175,24 +178,27 @@ async function main() {
       occurrences: FlagOccurrence[],
     ) => Promise<void>;
     helpText?: string;
+    /** COP-345: the part of helpText for the subcommand on the command line, or null for the whole. */
+    subcommandHelp?: () => string | null;
   };
   try {
     commandModule = await import(`../commands/${command}.js`);
   } catch {
     console.error(`Unknown command: "${command}"\n`);
     console.log(await buildHelp());
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
-  // Per-subcommand help: `exodus <cmd> --help`.
+  // Per-subcommand help: `exodus <cmd> --help`, and `exodus <cmd> <sub> --help` where the module can tell its part (COP-345).
   if (flags["help"] === true) {
     if (commandModule.helpText) {
-      console.log(commandModule.helpText);
+      console.log(commandModule.subcommandHelp?.() ?? commandModule.helpText);
     } else {
       console.log(`No detailed help is available for "${command}" yet.\n`);
       console.log(await buildHelp());
     }
-    process.exit(0);
+    return;
   }
 
   if (typeof commandModule.run !== "function") {

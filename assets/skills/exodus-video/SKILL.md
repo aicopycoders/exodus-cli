@@ -401,7 +401,12 @@ and until it is delivered, it ends with no upload line: make no cut of your
 own, unless `status` says the app's cut didn't work and offers you to cut it
 yourself, and the member says yes.
 
-- Approve: `exodus video approve <runId>` makes the cut the ad. It is one-way.
+- Approve: `exodus video approve <runId>` makes the cut the run's finished
+  video. Unless the run started from a template, it can't be undone; a change
+  after it is a new run. Nothing is posted to an ad account. The video stays
+  on the run page and in Video → Your ads, and `pull` saves it. A workflow
+  whose Output names a Drive folder, or that has a webhook, also sends it
+  there.
 - Redo a clip: `retry-clip` as at stop 4, after their yes. On a run the app
   cuts, it cuts again by itself (read `status`); on any other, pull, cut and
   upload again.
@@ -414,11 +419,10 @@ on those plans and downloaded from Suno."
 
 ## Swiping a video ad
 
-What Swipe a video does on the dashboard, from the terminal. Exodus breaks the
+What Swipe a video does on the dashboard, from the terminal: Exodus breaks the
 competitor's ad down, matches it to the closest kind of ad and look it makes
 (the template), writes the brand's version, and starts the video on the kind
-the swipe wrote. The run is the same one Swipe a video starts on the
-dashboard.
+the swipe wrote, the same run Swipe a video starts on the dashboard.
 
 These steps need Video switched on for the member's account. Without it every
 swipe command answers "Not found on this brand. The id is wrong or is another
@@ -429,17 +433,99 @@ them, and offer `ugc-swipe` (the script) instead of stopping: it swipes their
 ad's words into a script for their product, with no video. Offer it too when
 they want only the words.
 
-This path has no picks stop and no pilot clip. The run goes from the start
-straight to the storyboard (stop 3), and approving the storyboard makes every
-clip. A run started with `--one-shot` approves its own storyboard when its
-checks pass. Making the video from one of our formats (`--adapt`, "From one
-sentence to a film") keeps the picks stop and the pilot clip.
+This path has no picks stop and no pilot clip: the run goes from the start
+straight to the storyboard (stop 3), whose approve makes every clip, and a
+`--one-shot` run approves it itself when its checks pass. A video made from
+one of our formats (`--adapt`, "From one sentence to a film") keeps both.
 
-By default a swipe is one round: you read the ad, send the member one sheet,
-and on their one yes write the brand's version and make each video they
-picked. When the member names no ad, the options come first (step 0): video
-ads from the brand's swipe library to pick from. A member who asks to say yes
-before each paid step gets "Step by step" below.
+By default a swipe is one round: read the ad, one question with the plan, and
+on its yes write and make each video. When the member names no ad, the
+options come first (step 0); "Step by step" asks before each paid step.
+
+**How it talks.** Seven rules; the screens below are their templates (the
+question's text, options and money line as written; the message in your words).
+
+1. **Decide, then show.** Pick every row you can (how close, where it stops,
+   music, the product, the recommended person and voice); the member edits it.
+   Rows that do nothing today (persona and mechanism while noted, not read;
+   the "not yet" lists) stay off the first screen.
+2. **Text first, then the question, in one reply.** The picker shows only its
+   question's text and each option's label and description, so a plan you
+   only thought never reaches the screen. Write the message as plain text
+   first (one or two lines: what you read, rule 7's cue; never the plan
+   twice), then call `AskUserQuestion`: its text holds the plan and the money
+   line in at most 3 short lines, then the question. No paragraph of reasons.
+3. **Ask with the `AskUserQuestion` tool** (1 to 4 questions, 2 to 4 options
+   each, a header of at most 12 characters, one line of description an option;
+   it adds "Other" by itself), the recommended option first with
+   "(Recommended)" only for a real reason. Where the tool is not there (it
+   errors, in a subagent, on a host without it), send the question's text and
+   the same options as a short numbered list after the message. A typed answer
+   always works. Step 0's six options stay a numbered list. One real option
+   gets a second ("Stop here", "None"). A row of more than four values (how
+   close has five; a long product or voice list) shows what it is now and the
+   nearest two or three, and names the rest in the question's text ("also:
+   Same arc") for "Other", or goes as a numbered list.
+4. **The option that spends carries its price in its label**, in the CLI's own
+   figures, or "no printed price" where it prints none: a verb, what it buys
+   in two or three words, the price. Its description starts with what it buys
+   in full. Never a figure you worked out, never a formula.
+5. **One money line**, in each paid step's question's text, right before the
+   question, and at the end: `Spent so far: $<X>`, each cost line the CLI
+   printed counted once, with whose money it was (never the team's and the
+   member's added up), and in brackets what printed no cost: `Spent so far:
+   $<X> on the team's keys for reading their ad (the template, on your model
+   key: not printed)`. On a run whose `status` prints "Cost so far:" or "Cost:"
+   (an admin key), of a kind whose price the member said yes to: `Spent $<X> of
+   about $<Y>`, X that line's figure, Y that price's "about". With no such
+   line, "the run's cost is not printed": never a figure, never that it was
+   free. Who pays is said once: the read's line (step 1), then the sheet's
+   spending option ("on your own keys", naming the Kie and ElevenLabs keys a
+   kind needs). Say a cost as the CLI printed it, each once ("It cost $<X> on
+   the member's key."): never a range, an average or an "about" of your own.
+6. **Progress is one line; a problem is two lines and a question** (step 4).
+   Narrate no command; wait on a run in the background (`exodus video wait
+   <runId>`) and speak when it is delivered or stops.
+7. **Details on request**, named once on the first screen: "show sheet", "show
+   script", "show people", "why" (step 3).
+
+Rule 4's spending options, each figure the one the CLI printed for this swipe.
+An option that runs a `--yes` line and has no row still carries the CLI's
+figures or "no printed price" in its label, not only in its description:
+
+| Ask | Label | Its description starts |
+|---|---|---|
+| The sheet | `Make 1 video · no printed price` (above 6: `Make 8 videos · no printed price`) | 1 script, then the video to its storyboard; the voices and clips wait for your yes there (one shot: the whole video, with no final approve). On your own keys. |
+| The sheet, a write that makes people | `Write it · people about $…, at most $…` | 1 script (no printed price), <k> people to pick from, and the animal's picture ($…) if the script has one. The film waits for your yes on its price. |
+| "Film it?" | `Film it · about $…, at most $…` | <k> takes at <size>. The cut plays them a little faster and shortens long pauses, so the video is shorter than its takes and can be shorter than their ad. … Not in the price: text calls on your model key, the word check on your ElevenLabs key, a second listen on your Kie key. |
+| Their look | `Their look · about $…, at most $…` | One read of their speaker's look, then <k> new people and a check of their faces. Never their face. |
+| More people | `<n> more people · at most $…` | <n> new people to pick from, on your model and Kie keys. Nothing is filmed. |
+| A hold | `Film every take again · about $…, at most $…` | A new video from the same swipe. One take cannot be filmed alone. |
+| A refused write | `Write again · no printed price` (with people: `Write again · people about $…, at most $…`) | The same write again, on your model key. A refused write is paid too. |
+| Your own script | `Use my own script · no printed price` | Your lines word for word, made the way their ad is made, on your model key; people only when the script keeps their speaker's type. |
+| Step by step; the read past its limit or again (step 1); a start on its own (a refused start, step 5's check) | `Read the ad · no printed price`, `Read the rest · <what is left> · no printed price`, `Read it again · no printed price`, `Make the template · no printed price`, `Write it · no printed price`, `Start it · no printed price` | What the line without its yes printed that it buys, and who pays: each breakdown on the team's keys, each template and write on your model key. A write with people is the sheet's "Write it" row; a start of a kind with a saved sheet, the "Film it?" row. |
+| Mining (step 0) | `Mine them · no printed price` | Every active competitor on the watchlist, up to 50 in one run, on your Scrape Creators key. It starts at once. |
+| The bot again (step 5) | `Call the bot again · no printed price` | One more text swipe call, on your Genesis and model keys. |
+
+**What a yes is, at every question on this path**: the sheet, "Film it?", a
+stop's "What now?", Their look, more people, and the storyboard stop and the
+end approve when a swipe's run reaches them ("Stop 3: the storyboard" and "End:
+watch and approve" say what each shows). Each paid
+line (`--yes`, or an `approve` that buys) runs only after the member pressed an
+option whose own label names what it buys and its price (or "no printed
+price"), or typed a yes to that option ("go", "film it"; with the picker up, a
+typed answer arrives as "Other"). It buys only what the pressed label, its
+description and the question's text showed: a plan pick in none of them is not
+covered, so ask again with it in the question. Its `--max-usd` or
+`--people-max-usd` is that label's "at most". With two options that spend, a
+bare "go" names neither: ask which. None of these is a yes: a press or a typed
+pick of any other option ("Show me …", "Change something", a free look,
+"Stop"); "ok", "thanks", "maybe" or "looks good" after something you showed; a
+question, or a reply you are not sure of; a change with no yes in it; a picker
+that errored, timed out or was closed; an answer from another agent when you
+run as a subagent (then run nothing paid and hand the question back). Do what
+was asked, then ask the same question again, with the price read again if a row
+changed.
 
 **Long waits.** The CLI waits up to 25 minutes for a breakdown, 10 for a
 template, 15 for a write (the write always waits; it has no `--wait`) and 5
@@ -504,9 +590,9 @@ The rules of the options:
 **A find by kind.** When the member asks for a kind of ad ("find me some
 authority yappers"), offer at most six whose words sound like that kind, and
 say so in the message's first line, as "<kind>: sounds like, from the words;
-the read confirms it." After the reads, the sheet's first
-line names any ad the template read as another kind, so the member can drop
-it ("drop video 3, go" is already a yes).
+the read confirms it." After the reads, the sheet's first line marks an ad the
+template read as another kind in a few words ("ad 3: read as <kind>"), so the
+member can drop it ("drop video 3, go" is already a yes).
 
 **What a pick is.** Only numbers given after an options message ("1, 3 and
 5"), or "all" (the options the member last saw), are picks. The numbering
@@ -608,54 +694,60 @@ zero, and a new template is unknown.
 
 Read one ad at a time: its breakdown, then its template. Before each read
 after the first (a template, or the next ad's breakdown), stop and ask the
-member once when the costs counted have reached $0.50, or when any read so
-far is unknown: an unknown cost counts as reaching the limit. Say what is
-left to read. A new template is always
-unknown, so with several ads you read the first and ask before the rest. The
-check comes before each read, so the total can pass $0.50 by one read. Ads
-the member picked by number from the options (step 0), or with "all", are
-already a yes to read: read every picked ad without this ask. The ask still
-comes before any ad they did not pick.
+member once when the costs counted have reached $0.50, or when any read so far
+is unknown: an unknown cost counts as reaching the limit. Say what is left to
+read. A new template is always unknown, so with several ads you read the first
+and ask before the rest. The check comes before each read, so the total can
+pass $0.50 by one read. Ads the member picked by number from the options (step
+0), or with "all", are already a yes to read: read every picked ad without
+this ask. The ask still comes before any ad they did not pick. Ask it as a
+question whose text ends with the money line: "Read the rest · <what is left>
+· no printed price", or "Stop here".
 
-A breakdown or a template that fails prints why. With one ad, tell the
-member and stop. With several, leave that ad out, say so in the sheet's first
-line, and go on with the others. Reading again is paid too, and needs their
-yes.
+A breakdown or a template that fails prints why. With one ad, tell the member
+and stop. With several, leave that ad out, mark it in a few words on the
+sheet's first line ("ad 2: not read"), and go on with the others.
 
 ### 2. Read the choices
 
-Free, and no yes: `exodus segment personas` (the saved personas; leave out
-the ones marked `[archived]`) and `exodus primer show` (its MECHANISM
-section; with no primer saved, say so once and offer only the member's own
-words or none). The products came in step 1.
+Free, and no yes: `exodus segment personas` (the saved personas; leave out the
+ones marked `[archived]`) and `exodus primer show` (its MECHANISM section;
+with no primer saved, the mechanism row offers only the member's own words or
+none). The products came in step 1.
 
 ### 3. The sheet, once
 
-Send this in one message, in this order, then stop and wait:
+Send the sheet as one reply, its message as text first and its question after
+it (rule 2), then stop and wait. The message:
 
-> I read your ad as <kind of ad>, <look>, <n> lines, about <s> s. The swipe
-> makes that kind of ad. Say "show me" for the shot list and the script.
-> One sheet, answer once (my picks are marked):
-> 0. **Let it run** (I pick every row) or **I choose**.
-> 1. **Persona** (noted; the video writer does not read it yet): <your three best fits, each with a short reason>, show all <N>, or none. Pick several for one video each.
-> 2. **Mechanism** (noted; the video writer does not read it yet): <the primer's mechanisms>, your own words, or none.
-> 3. **How close:** 1 Mirror, 2 Close, 3 Same beats, 4 Same arc, 5 Pattern only.
-> 4. **Characters:** the tool picks them (your saved characters: not yet).
-> 5. **Run:** one shot, or stop at the storyboard.
-> 6. **Finish:** music on or off (captions, speed, cuts: not yet).
-> **How many:** <n> videos = <a> ads × <p> personas:
-> - Video 1: <ad> × <persona>
-> - Video 2: <ad> × <persona>
-> **Cost:** no price before the write, but for the people a write makes (in It buys); a kind with a saved sheet gets its price after it.
-> **My picks:** <one line, with the reason>. **It buys:** <n> scripts and <n>
-> whole videos, on your keys. Say go, or change a row. (Above 6 videos, end
-> with "Say yes to <n> videos, or change a row." instead.)
+> Read your ad: <length>, <who is in it>, <how it is cut>. (several ads: one sheet for all, a few words each)
+> Say "show sheet", "show script" or "why" · "personas": <N> saved, several make one video each, <noted only | written in by the text swipe bot> (only when the brand has some) · "mechanism" (only when step 5's path is open)
+
+Its question (`AskUserQuestion`, header "Make it?"), its text:
+
+> <the kind the swipe makes> for <product> · Script <how close, in words> · Stop <at the storyboard, before the paid clips | at the end, with no final approve> · Music <off | on, on your ElevenLabs key>
+> Videos <n> = <a> ads × <p> personas: 1 <ad> × <persona>, 2 … (only when more than one) · Persona and mechanism: <the picks>, <written in by the text swipe bot | noted only: the videos differ only as two writes do> (only when picked)
+> Spent so far: $<X> on the team's keys for reading their ad (the template, on your model key: not printed). Make it?
+
+Its options: 1. the spending option (the table) 2. another way, only when
+there is one, such as One-take UGC when the template offered it 3. Change
+something: the product, how close, where it stops, music 4. Stop.
+
+"Change something" asks the rows as questions (rule 3), what each is now first,
+marked "(now)", then sends the sheet again. "show sheet" prints every row as
+`swipe-sheet.md` (beside this file) lays it out. "show script" is their ad's
+script (`status --full`, free), and after the write the written one with its
+direction, Kept and Changed; "show people", each person made with their
+picture's address, and the voices when the sheet has a `voice` row; "why", your
+reasons, one line each.
 
 **The yes covers only the list the member last saw.** Before any write or
-start, the member has seen the list and the count, and said yes to them.
-This holds also when their first message says "just do it" or "let it run":
-"Let it run" fills the rows with your picks, and the yes still comes from
-the member.
+start, the member has seen the list and the count, and said yes to them. This
+holds also when their first message says "just do it" or "let it run": "Let it
+run" fills the rows with your picks, and the yes still comes from the member.
+The yes is as "What a yes is" says. A typed change with no yes in it: make the
+change, send the sheet again with its price, and ask again. Each "wait" below
+asks the question again.
 
 - A reply that makes the buy bigger is not the yes, even with "go" in it:
   more videos, another ad, music on where the sheet said off, or "one shot"
@@ -665,10 +757,11 @@ the member.
   "go", is the yes: how close, music off, or leaving out videos it names
   ("drop video 3, go"). Say the change in one line and start. "Fewer" with
   no say in which ones is not the yes: send the shorter list and wait.
-- Anything else is not the yes: a question, "show me", "maybe", "looks
-  good?", or a reply you are not sure of. Answer it and wait. Above 6 videos,
-  only a yes that names the count is the yes ("yes to 8 videos", "8, go"); a
-  bare "go" or "yes" gets the count asked again.
+- Above 6 videos, only a yes that names the count is the yes ("yes to 8
+  videos", "8, go"); a bare "go" or "yes" gets the count asked again. So above
+  6 videos the spending option names the count ("Make 8 videos · …"), and its
+  press is a yes that names it; a numbered list ends "That is 8 videos. Say
+  yes to 8 videos."
 - On a sheet of 1 video, "1: Anna, Ben and Cara. Go." is 3 videos: send the
   list of 3 and wait.
 
@@ -683,159 +776,137 @@ The rows:
 - **One-take UGC** (`--kind ugc-one-take`): one person talks to the camera,
   each 15 or 25 seconds of the script filmed as one long take. It is open to
   admins only for now: for anyone else the CLI refuses it, so don't offer it
-  to them. Use it when the member asks for a one-take UGC video or names
-  Luke's UGC method, and then the sheet's first line says the swipe makes
-  one-take UGC. Use it too when the template prints "Also fits their ad:
+  to them. Take it when the member asks for a one-take UGC video or names
+  Luke's UGC method. Use it too when the template prints "Also fits their ad:
   One-take UGC (ugc-one-take). …" and the member asked for a UGC video of one
   person talking to the camera, in any words: the word "one-take" is not
-  needed. Then take it: in the sheet's first line, in place of "The swipe
-  makes that kind of ad.", say in one line that the swipe makes One-take UGC,
-  with the reason the template's line gives; One-take UGC is then the kind
-  made. The write carries `--kind ugc-one-take`, its dry run first (People,
-  below), and the sheet's yes is the yes to it. The line comes only for an ad
-  its write takes and a member who may start it. When the line comes and the
-  member asked for nothing it fits, name it in the sheet's first line as one
-  option beside the kind the swipe makes, with the reason that line gives.
-  Then add `--kind ugc-one-take` to the write only on the member's yes; never
-  choose it unasked. A reply that picks it is not the yes yet: run its write line with
-  `--kind ugc-one-take` and no `--yes` (free; People, below) for the people's
-  price, send the sheet again with **It buys:** in the saved sheet's form, and
-  wait for the yes. A sheet run (`exodus video swipe run --sheet <file>`) of
-  one ad that names no kind prints the same line, ending "set "kind":
-  "ugc-one-take" in the sheet before its next run.": set it only on their yes,
-  and say that the next run writes that ad again, which is paid. On an ad it
-  can't be made from, the write refuses it and says why. It buys a face photo,
-  a picture of the room, a cut-out of the product, a picture of an animal when
-  the script puts one in the picture, and one take for each 15 or 25 seconds of
-  script, on the member's Kie key, and text calls on their model key; it needs their ElevenLabs key and their Kie key. Its price is the
-  server's estimate, known once the swipe is written: `exodus video swipe
-  sheet price <swipeId>` (free) prints it at 720p or a 480p draft, the whole
-  video or the first take only, each with the most it can cost. The "about"
-  films each take once. A take filmed again (as when a filming left out
-  script words that matter) is paid again, so the run can cost more than
-  "about"; the "at most" counts each take and picture made twice. On an admin
-  key, plain `exodus video status` prints a line that starts "Cost so far:"
-  or "Cost:" once the run has spent anything: that is the run's own cost, the
-  figure the dashboard shows, and the line says what is not in it (what the
-  swipe paid for before the run). When it prints none, no cost is recorded
-  yet: say so, and never call the run free.
-- **The saved sheet** (a kind that has one; One-take UGC today). The server
-  keeps one for each swipe of such a kind, made after its write. For such a
-  video this sheet's yes covers the write and its people only, and **It
-  buys:** says so: "<n> scripts now, each with <k> people to pick from and
-  the animal when its script puts one in the picture (at most $<most> for each
-  script's people and animal); each video after your yes on its saved sheet",
-  with the people's part only when the dry write printed their price (People,
-  below). The saved sheet and its yes come in step 4.
-- **People** (a kind whose write can make them: One-take UGC, when the
-  server offers people to pick from). Before you
-  send the sheet, run that video's write line (step 4) without `--yes`: it
-  writes nothing and pays for nothing. When the kind makes people, it prints
-  "This write also gives the sheet <k> people to pick from, …", their price
-  ("About $… for new people: …" and "At most $… in all: …") and the line to
-  run: "On their yes, run the same command with --yes --people-max-usd
-  <most>". Put that most on the sheet, as above: the sheet's yes is the yes to
-  it. The same price names the animal: "A picture of the animal, if the
-  script puts one in the picture: $…". With that yes, the write also reads the
-  stored script for an animal it puts in the picture (the dog in a dog
-  product's ad) and draws one picture of it with the people, inside the same
-  most. The saved sheet shows it on the row "The animal", with its picture;
-  `exodus video swipe sheet set <swipeId> animal=none` takes it out of the
-  video (free). With no animal in the script the row says "No animal in the
-  script." and no picture is paid for. When the member gave a money limit and the people's most, added over
-  every video on the sheet, is already over it, say so on the sheet and ask:
-  no write goes out until what it can cost fits. When it prints no people's
-  price, the write makes none. When the member
-  wants no people, the write takes `--no-people`, and the sheet says so. Two
-  more writes make none, and nothing is paid for them. A member's own
-  script (`their-format`) that keeps its own person (the "Persona and
-  mechanism" row below says when) makes none even with the figure; the write prints
-  "No people were made with this write: the script keeps no type of their
-  speaker to make them from. Nothing was paid for them. …". A video that step
-  5 writes is written with a plain `--yes`, which makes none; it prints "No
-  people to pick from were made with this write: its yes carried no
-  --people-max-usd. …". So leave the people out of **It buys** for a step 5
-  video, and for the member's own script say its people are made only when the
-  script keeps their speaker's type. Either way the member can ask for people
-  on the saved sheet: `exodus video swipe sheet people <swipeId>`, the price
-  first.
-- **Persona.** Offer the three saved personas that fit the ad best, each with
-  a short reason, then "show all <N>" (every persona not marked
-  `[archived]`). Several may be picked: one video for each.
+  needed. Then take it: the plan says the swipe makes One-take UGC, with the
+  reason the template's line gives; One-take UGC is then the kind made. The
+  write carries `--kind ugc-one-take`, its dry run first (People, below), and
+  the sheet's yes is the yes to it. The line comes only for an ad its write
+  takes and a member who may start it. When the line comes and the member
+  asked for nothing it fits, offer it as one option of the sheet's question,
+  beside the kind the swipe makes, with the reason that line gives; never
+  choose it unasked. A press or a typed pick of it is not the yes yet: run its
+  write line with `--kind ugc-one-take` and no `--yes` (free; People, below),
+  and send the sheet again with that price. A sheet run (`exodus video swipe
+  run --sheet <file>`) of one ad that names no kind prints the same line,
+  ending "set "kind": "ugc-one-take" in the sheet before its next run.": set
+  it only on their yes, and say that the next run writes that ad again, which
+  is paid. On an ad it can't be made from, the write refuses it and says why.
+  It buys a face photo, a picture of the room, a cut-out of the product, a
+  picture of an animal when the script puts one in the picture, and one take
+  for each 15 or 25 seconds of script, on the member's Kie key, and text calls
+  on their model key; it needs their ElevenLabs key and their Kie key. Its
+  price, the server's estimate, comes after the write (step 4). The "about"
+  films each take once. A take filmed again (as when a filming left out script
+  words that matter) is paid again, so the run can cost more than "about"; the
+  "at most" counts each take and picture made twice. On an admin key, plain
+  `exodus video status` prints a line that starts "Cost so far:" or "Cost:"
+  once the run has spent anything: that is the run's own cost, the figure the
+  dashboard shows, and the line says what is not in it (what the swipe paid
+  for before the run). When it prints none, no cost is recorded yet: say so,
+  and never call the run free.
+- **The saved sheet** (One-take UGC today) comes after the write, with its
+  own yes (step 4). This sheet's yes covers their write and its people only,
+  and the spending option says so, with the people's part only when the dry
+  write printed their price (People, below).
+- **People** (a kind whose write can make them: One-take UGC, when the server
+  offers people to pick from). Before you send the sheet, run that video's
+  write line (step 4) without `--yes`: it writes nothing and pays for nothing.
+  When the kind makes people, it prints "This write also gives the sheet <k>
+  people to pick from, …", their price ("About $… for new people: …", "A
+  picture of the animal, if the script puts one in the picture: $…" and "At
+  most $… in all: …") and the line to run: "On their yes, run the same command
+  with --yes --people-max-usd <most>". Those figures go in the spending option
+  ("Write it" in the table, each video's as printed): the about from "About $…
+  for new people" (the people only; the animal's own line goes in the
+  description) and the most from "At most $… in all". Its press is the yes to
+  that most. With it, the write also draws the animal its stored script puts
+  in the picture (the dog in a dog product's ad) with the people, inside the
+  same most; `exodus video swipe sheet set <swipeId> animal=none` takes it out
+  of the video (free). When the member gave a money limit and the people's
+  most, added over every video on the sheet, is already over it, say so in one
+  line of the plan and ask: no write goes out until what it can cost fits.
+  When it prints none, the write makes no people. Nor does `--no-people`. Two
+  more writes make none, and nothing is paid for them: a member's own script
+  (`their-format`) that keeps its own person (the "Persona and mechanism" row
+  below says when), and a video that step 5 writes, written with a plain
+  `--yes`; each write says so. So leave the people out of a step 5 video's
+  option, and for the member's own script its description says its people are
+  made only when the script keeps their speaker's type. Either way the member
+  can ask for people on the saved sheet: `exodus video swipe sheet people
+  <swipeId>`, the price first.
+- **Persona.** Pick none unless the member named one. "personas" asks the three
+  that fit the ad best, each with a short reason, as one question that takes
+  several picks, and "show all <N>" lists every one. "mechanism" asks the
+  primer's mechanisms (step 2), the member's own words, or none.
 - **Persona and mechanism.** The video writer reads neither. When step 5's
   path is open, the text swipe bot writes them into each video's lines, and
   the rows say so (step 5). When it is closed, and for a video the bot does
-  not write, they are noted, not read: in
-  **My picks**, a persona or a mechanism always carries "(noted, not used
-  yet)", the primer's lead mechanism included, and videos for two personas
-  differ only as two writes of the same request differ. In that case, when
-  more than one persona is picked, say this in your reply before the yes, so
-  the member does not pay for several videos expecting a script for each
-  persona. Two other ways make a persona real without step 5. The member
-  writes their own script for that persona, and the write takes it with
-  `--mode their-format --script <file>`, made the way their ad is made. For
-  a kind whose sheet has a person (One-take UGC today), who is filmed
+  not write, they are noted, not read: on "show sheet", a persona or a
+  mechanism always carries "(noted, not used yet)", the primer's lead
+  mechanism included, and videos for two personas differ only as two writes of
+  the same request differ. In that case, when more than one persona is picked,
+  the plan's personas line says so ("noted only: the videos differ only as two
+  writes do"), so the member does not pay for several videos expecting a
+  script for each persona. Two other ways make a persona real without step 5.
+  The member writes their own script for that persona, and the write takes it
+  with `--mode their-format --script <file>`, made the way their ad is made.
+  For a kind whose sheet has a person (One-take UGC today), who is filmed
   depends on the script. One that names no speaker, and does not make its
   speaker the other sex from their ad's speaker, is cast as their ad's
   speaker's type: the write puts that type on the script's cast line. A
   speaker label that is not a placeholder ("Maya:", not "Speaker:"), a name
   the script says ("Hi, I'm Jess"), its own words about the speaker, or words
-  that make the speaker the other sex keep the script's own person. The
-  saved sheet's person row says which, and why. To film the persona's own
-  person, the script names its speaker, or the member sets `who` on the
-  saved sheet. Or the member swipes the words with the `swipe` skill and
-  makes the film from one of our formats (its "Make it a video"). That path
-  asks a yes before each paid step, and it makes the film in the format they
-  pick, not in the ad's own kind and look.
+  that make the speaker the other sex keep the script's own person. The saved
+  sheet's person row says which, and why. To film the persona's own person,
+  the script names its speaker, or the member sets `who` on the saved sheet.
+  Or the member swipes the words with the `swipe` skill and makes the film
+  from one of our formats (its "Make it a video"). That path asks a yes before
+  each paid step, and it makes the film in the format they pick, not in the
+  ad's own kind and look.
 - **Characters.** A swiped run takes no saved characters, so the row offers
-  only "the tool picks". A kind whose write makes people (People, above)
-  has its person picked on the saved sheet, in step 4.
-- **Run.** With "stop at the storyboard", the line reads **It buys:** <n>
-  scripts, and <n> storyboards with their pictures; the voices and clips
-  wait for your yes at each storyboard. With "one shot", the film is
-  delivered by itself once the app's cut is made, with no final approve: say
-  so in **My picks** when one shot is picked.
+  only "the tool picks". People a write makes are picked in step 4.
+- **Run.** "Stop at the storyboard" buys the scripts and the storyboards with
+  their pictures; the voices and clips wait for your yes at each. "One shot"
+  has no final approve (step 4): the plan's Stop line says so.
 - **Finish.** `swipe start` takes `--music` and nothing else for the finish.
-  Music is made on the member's own ElevenLabs key. Caption style, speed,
-  jump cuts and the end card come with a later update.
+  Music is made on the member's own ElevenLabs key. Music is off unless the
+  member asked for it; the plan's line says which. Caption style, speed, jump
+  cuts and the end card come with a later update.
 - **How many.** Ads × personas, with none counting as one persona and the
   characters counting as one today. Show the multiplication, as in "4 videos
-  = 2 ads × 2 personas". Above 6 videos, say the count and ask for the yes on
-  that count in so many words: "That is 8 videos. Say yes to 8 videos."
-- **Cost.** Before the write the CLI prints no price for a swipe, so the
-  sheet says exactly that: no number, no range, no guess. A kind with a saved
-  sheet (One-take UGC today) gets its price after the write, with its saved
-  sheet (step 4). The people its write makes are priced before it (People,
-  above). A kind with no saved sheet prints no price before its write or its
-  start, so the member sees no figure before the yes: say so on the sheet.
-  When the member gave a money limit ("under $27"), say too that this kind
-  prints no price, so the limit cannot be checked against one before the yes.
-  Only when the template offered One-take UGC for this ad ("Also fits their
-  ad: …"), say that it prints a price before its start, and that its start is
-  refused when it can cost more than the "at most" shown. Ask how they want to
-  go on, and wait. The Director block of `exodus video
-  status` prints "Spent: $… of $12.00": the $12.00 is the Director's limit
-  for its redos on that video, not a price and not a ceiling for the first
-  pass. Never quote it as the cost.
-- **Product.** Add a row **Product:** only when `swipe products` lists more
-  than one. With one, write for that one.
+  = 2 ads × 2 personas".
+- **Cost.** Before the write the CLI prints no price for a swipe: the option's
+  "no printed price" says so, and no other line about cost goes on the screen.
+  With a money limit and a kind with no saved sheet, add one line: "This kind
+  prints no price, so I can't check your $<limit> before the yes." There, when
+  the template offered One-take UGC for this ad ("Also fits their ad: …"), its
+  option's description says it prints a price before its start, held to its "at
+  most". The Director block of `exodus video status` prints "Spent: $… of
+  $12.00": the $12.00 is the Director's limit for its redos on that video, not
+  a price and not a ceiling for the first pass. Never quote it as the cost.
+- **Product.** Ask the product only when `swipe products` lists more than one
+  and the member named none. With one, write for that one.
 - **Anything else.** Add a row only when the member's ask carried a note. A
   note that names what to swipe (hook only, their format with their own
   script, a new look) sets `--mode` (step 4), and **My picks** says the mode
-  back. Say back any other note as noted, not used yet.
-- **Several ads.** One sheet covers every ad the member named: list what you
-  read from each in the first line. The count and the warning above 6 hold.
+  back. So does the plan. Say back any other note in one line, as noted, not
+  used yet.
 
-**The videos, in a fixed order.** List them one per line: the ads in the
+**The videos, in a fixed order.** List them in this order: the ads in the
 order the member gave them, and for each ad the personas in the order the
 sheet shows them. The same picks give the same list.
 
-**A bare number.** Read a reply of only a number ("3") as the count of
-videos, and say so in the list's first line: "I read 3 as 3 videos." Pick
-one video for each ad, in the order given, before a second persona for any
-ad; then the next persona in the order shown for each ad, and so on, until
-the count is reached. List the videos in the fixed order and wait for the
-yes. When the picks cannot make that many, say how many they can make.
+**A bare number.** After a numbered list of options (rule 3's fallback), a
+number picks that option, as a press does. Anywhere else, read a reply of only
+a number ("3") as the count of videos, and say so in the list's first line: "I
+read 3 as 3 videos." Pick one video for each ad, in the order given, before a
+second persona for any ad; then the next persona in the order shown for each
+ad, and so on, until the count is reached. List the videos in the fixed order
+and wait for the yes. When the picks cannot make that many, say how many they
+can make.
 
 When the member says "just do it": no persona, the primer's lead mechanism
 (noted, not used yet), closeness 2, the tool picks the characters, one shot,
@@ -844,40 +915,53 @@ no music. With more than one product and none named, ask that one row first.
 ### 4. On the yes
 
 The yes covers the writes and the starts, and the bot calls when step 5
-applies; nothing else. The breakdown and the template are once per ad, and
-are done already.
+applies; nothing else (the read is done).
 
-**The saved sheet** changes this for a kind that has one (One-take UGC
-today): the yes of step 3 covers its writes, and its starts wait for one more
-yes. Run step 1 for every such video first. Then read each one's saved sheet
-with `exodus video swipe sheet <swipeId>` (free) and show them one time,
-together in one message: their rows (with each person made, their picture's
-address, and the one recommended, when the sheet shows them), and the swipe's dashboard page each
-prints (that page does not show the saved sheet yet). Ask one yes for all
-their starts, then run step 2 for each. A reply that only changes a row is
-not that yes: set it with `exodus video swipe sheet set <swipeId>
-notes="<words>"` (free; `<row>=` clears a row), say the change in one line,
-and ask the yes again. Say a row marked "no step reads it yet" as saved, not
-used. The start copies the saved sheet into the video; a change after it is
-for the next video.
+**The saved sheet** (step 3's row) changes this: the yes of step 3 covers its
+writes, and its starts wait for one more yes. Run step 1 for every such video
+first. Then read each one's saved sheet and its price, both free (`exodus
+video swipe sheet <swipeId>` and `exodus video swipe sheet price <swipeId>`),
+and send one reply for all their starts, its message as text first (rule 2):
 
-**Recommended rows.** A row may print `recommended:` and a reason: a value
-worked out for this swipe. Today that can be the person (`who`), the voice
-(`voice`), what the person holds (`prop`), the kind of opening (`hookKind`)
-and the text card at the start (`headline`). Show each with its reason. "Let
-it run" here, said in reply to these saved sheets and their prices, is the yes
-to the starts with the sheets as they stand: set nothing (a size a money
-limit needs is set before the sheets are shown, below), since a start with no pick films every recommended value
-and every other row's default. A "let it run" said before them, as in the
-first message, is not this yes: the writes went on the yes to step 3's sheet,
-and the starts wait for a reply to these. When people were made but the person row recommends none,
-a start with no pick films a new person, not one of them: the write and the
-start say so, and the member picks with `who=<n>` if they want one of them. A
-member's pick wins (the row then reads `from you:`). `<row>=` clears a pick,
-and the row goes back to its recommended value or default. `prop=none` holds
-nothing through the video (it prints `prop: none (nothing held through the
-video)`), though a take may still pick up a small thing for a moment, such as
-a mug or a drink; `prop=` takes it back to its default.
+> Script ready: <n> lines, <k> takes. Say "show sheet", "show script" or "why"
+
+Its question (`AskUserQuestion`, header "Film it?"), its text:
+
+> It opens: "<its first line>". (several videos: one line for all, each video's number, first words and person, and no Person line)
+> Person: <name>, the recommended one of <k> | a new person cast from their speaker's type (or the words the write names), none of the <k> made · Voice: <name><, not <accent> like their speaker: "Change something" picks another> (Person only when the sheet has people, Voice only with a `voice` row; "not <accent>" only when `status --full`'s Cast names their speaker's accent and the voice row's reason, or the voice's name as `sheet voices` prints it, shows another or none)
+> Spent so far: $<X> on the team's keys for reading their ad, $<W> on yours (the template, on your model key: not printed). Film it?
+
+Its options: 1. Film it (the table), its figures from the price's "Price:"
+line 2. Show me the script and the <k> people 3. Change something: person,
+voice, size, how it is filmed, their look 4. Stop.
+
+With several videos, the label says how many and the description each one's
+price as printed, never their sum. Each start's `--max-usd`, and each write's
+`--people-max-usd`, is that video's own printed "at most", never a sum. "show sheet" prints each saved sheet's rows
+(with each person made, their picture's address, and the one recommended, when
+the sheet shows them) and the swipe's dashboard page each prints, whose
+Pre-production card on Your version shows the same picks: a change made there
+is to this same saved sheet, so read it and its price again. A press of "Film
+it", or a typed yes to it, is the one yes for all their starts: run step 2 for
+each. A reply that only changes a row is not that yes: set it with `exodus
+video swipe sheet set <swipeId> notes="<words>"` (free; `<row>=` clears a row),
+read the price again, say the change in one line, and ask again. Say a row
+marked "no step reads it yet" as saved, not used. The start copies the saved
+sheet into the video; a change after it is for the next video.
+
+**Recommended rows.** A row may print `recommended:` and a reason ("why" gives
+it): today `who`, `voice`, `prop` (what the person holds), `hookKind` and
+`headline`. "Let it run" here, said in reply to these saved sheets and their
+prices, is the yes to the starts with the sheets as they stand: set nothing (a
+size a money limit needs is set before the sheets are shown, below), since a
+start with no pick films every recommended value and every other row's default.
+A "let it run" said before them, as in the first message, is not this yes: the
+writes went on the yes to step 3's sheet, and the starts wait for a reply to
+these. A member's pick wins (the row then reads `from you:`); `<row>=` clears
+it, back to the recommended value or default. `prop=none` holds nothing through
+the video (it prints `prop: none (nothing held through the video)`), though a
+take may still pick up a small thing for a moment, such as a mug or a drink;
+`prop=` takes it back to its default.
 
 `who` is the person filmed: a person made for the swipe, by number
 (`who=<n>`), or words in the row's own form, as `who="a white woman in her
@@ -886,38 +970,38 @@ script decides.
 **Their look.** When the member wants the person to look like their speaker
 ("make her look like the woman in their ad", closer to, the same as), the row
 is "How close to their speaker" (`basedOn`): `type`, the default (a new person
-of their speaker's type), or `look`: new people who also have their
-speaker's hair, clothes, nails, skin tone, brows, makeup, freckles and build,
-read from their ad in our words, never their face, a name, a tattoo, a scar or
-a birthmark. Their age stays the type's. Never write `who` by hand for this.
+of their speaker's type), or `look`: new people who also have their speaker's
+hair, clothes, nails, skin tone, brows, makeup, freckles and build, read from
+their ad in our words, never their face, a name, a tattoo, a scar or a
+birthmark. Their age stays the type's. Never write `who` by hand for this.
 `exodus video swipe sheet set <swipeId> basedOn=look` with no `--yes` buys
 nothing: it prints the price (one read of their speaker's look on the member's
 OpenRouter key, then 4 new people and the check of their faces) and the line
-that says yes. Say that price to the member; only on their yes run it with
-`--yes --people-max-usd <the most it showed>`, then read the sheet a few
-minutes later and show the people made from it. `basedOn=type` goes back, free.
-When the row offers only `type`, it says why (no OpenRouter key, a well-known or
+that says yes. Ask it as a question whose option carries that price ("Their
+look · about $…, at most $…", the table); only on its yes run it with `--yes
+--people-max-usd <the most it showed>`, then read the sheet a few minutes
+later and show the people made from it. `basedOn=type` goes back, free. When
+the row offers only `type`, it says why (no OpenRouter key, a well-known or
 named speaker, their ad's video not kept, a read that failed): say that reason
-and do not work around it. A sheet with no `basedOn` row has no such choice for
-this swipe: say so, and keep `who`.
-`filmed`, `pose`, `prop`, `moves`, `place`, `look`, `time`, `placeNote`: how
-and where it is filmed, each with its default's reason; set one only when the
-member asks (`time=dusk`). `notes` end every take's prompt.
-`hook` is take 1's opening action, `off` or a level from 1 to 5 (2 is the
-usual), and `hookKind` its kind (`any`, or one the row lists), each with
-its default's reason; set one only when the member asks (`hook=3`,
-`hook=off`). With the hook on, the board asks the hook director for the
-opening: one text call on the member's model key, which the price names among
-what it leaves out. `headline` is the text card at the start: `none`, or the
-member's own words for it (one short line; a refusal says what fits).
-With each sheet, show its price: `exodus video swipe sheet price <swipeId>`
-(free) prints it at the sheet's rows, with the most it can cost and one line
-of what it leaves out. A 480p draft or the first take only is a row the
-member sets (`size=480p`, `takes=first`) when the price lists them; read the
-price again after a set. The first take only is a cheap check of the method
-and the size, not of the final person: the whole video after it is a second
-start, paid on its own (`takes=all`, then `swipe start <swipeId> --again`),
-and it casts the person and draws the pictures again. Say so before that yes.
+and do not work around it. A sheet with no `basedOn` row has no such choice
+for this swipe: say so, and keep `who`. `filmed`, `pose`, `prop`, `moves`,
+`place`, `look`, `time`, `placeNote` (how and where it is filmed), `hook`
+(take 1's opening action, `off` or a level from 1 to 5, 2 the usual) and
+`hookKind` (its kind, `any` or one the row lists) each carry their default's
+reason: set one only when the member asks (`time=dusk`, `hook=3`). `notes` end
+every take's prompt. With the hook on, the board asks the hook director for
+the opening: one text call on the member's model key, which the price names
+among what it leaves out. `headline` is the text card at the start: `none`, or
+the member's own words for it (one short line; a refusal says what fits). The
+screen's price is `exodus video swipe sheet price <swipeId>` (free) at the
+sheet's rows, with the most it can cost; the option's description ends with
+what it leaves out, shortened (the table's "Film it?" row). "why" gives each
+line of the price. A 480p draft or the first take only is a row the member
+sets (`size=480p`, `takes=first`) when the price lists them; read the price
+again after a set. The first take only is a cheap check of the method and the
+size, not of the final person: the whole video after it is a second start,
+paid on its own (`takes=all`, then `swipe start <swipeId> --again`), and it
+casts the person and draws the pictures again. Say so before that yes.
 **A money limit.** When the member gave one ("keep the whole thing under
 $15"), hold it before the start: add the people's most when the dry write
 printed one (its "At most $… in all"), what the write cost when the limit is
@@ -927,18 +1011,18 @@ price leaves out are in no figure: say so, and leave room for them. Over it,
 nothing starts. When a smaller size the price lists fits (its whole video,
 every take, and the start does not refuse it), set it before you show the
 saved sheets (`exodus video swipe sheet set <swipeId> size=480p`, free), read
-the price again, and say on the sheet in one line that it is a 480p draft,
-the size that fits their limit: their yes to that sheet is the yes to it. A
-limit given after they saw the sheets: name the 480p draft and wait for their
-yes. With a money limit and no "at most" printed, the limit cannot be
-checked: stop and ask. For example, with a limit for everything:
-when the write's cost, the people's most and 720p's "at most" add up to more
-than the limit, and the same sum with 480p's "at most" is under it, set
-480p. Every figure in that sum is the one the CLI printed for this swipe,
-never one from memory. When no size fits, stop and ask; when the price lists the first take
-only (`takes=first`), you may name it as a smaller thing they can choose,
-never as the whole video. The `--max-usd` you start with is the "at most" the
-price shows, so it is never above what is left of the member's limit.
+the price again, and say on the sheet in one line that it is a 480p draft, the
+size that fits their limit: their yes to that sheet is the yes to it. A limit
+given after they saw the sheets: name the 480p draft and wait for their yes.
+With a money limit and no "at most" printed, the limit cannot be checked: stop
+and ask. For example, with a limit for everything: when the write's cost, the
+people's most and 720p's "at most" add up to more than the limit, and the same
+sum with 480p's "at most" is under it, set 480p. Every figure in that sum is
+the one the CLI printed for this swipe, never one from memory. When no size
+fits, stop and ask; when the price lists the first take only (`takes=first`),
+you may name it as a smaller thing they can choose, never as the whole video.
+The `--max-usd` you start with is the "at most" the price shows, so it is
+never above what is left of the member's limit.
 
 **A video that reached its estimate.** A regular video (not One-take) keeps
 the estimate it showed before the start. When its next take would cost more
@@ -958,29 +1042,27 @@ A write that carried the people's most makes the first people to pick from
 (People, step 3). Offer more people, or voices to pick from, only when the
 member asks for options. More people are paid on the member's keys: run
 `exodus video swipe sheet people <swipeId> --count <n>` first (no `--yes`),
-show the price it prints word for word, and after their yes run the line it
-prints (`--yes --max-usd <n>`, the most the price said). Do not add `--wait`:
-it can wait up to 45 minutes. Read the sheet a few minutes later (`exodus
-video swipe sheet <swipeId>`) and show each person's name and picture address.
-A sheet with a `voice` row (there only while the server offers people and
-voices to pick from) has its voices listed once by the server after the write
-(when the member has an ElevenLabs key), and the row may recommend one
-and say why: a voice that fits the person, which may skip a voice the
-brand's recent swipes already have, so its videos don't all sound the same.
-A sheet with no `voice` row has no voices to pick from: say nothing about
-them. `exodus
-video swipe sheet voices <swipeId>` lists them again: one read of the voice
-list on the member's ElevenLabs key, and no speech is made, so it buys
-nothing. It prints the voices that fit the person, best fit first, each with
-its age and accent when known ("Sarah · young · American") and a sample to
-hear, then "Recommended: <n> (…). <why> A start with no pick films it."; after
-the member's pick, "Recommended: <n> (…). You picked it, so a start films it."
-or "… You picked <m>, so a start films your pick."; or why none is. A voice
-row with no voice prints "List the voices: exodus video swipe sheet voices
-<swipeId>". A
-pick is a set (`who=<n>`, `voice=<n>`), and the video is filmed with that
-person, their face and that voice. If the server says these choices are not
-switched on yet, say so and go on with the sheet as it is.
+put the price it prints in the option, and after the yes run the line it
+prints (`--yes --max-usd <n>`, the most the price said). Do not add
+`--wait`: it can wait up to 45 minutes. Read the sheet a few minutes later and
+show each person's name and picture address. A sheet with a `voice` row
+(there only while the server offers people and voices to pick from) has its
+voices listed once by the server after the write (when the member has an
+ElevenLabs key), and the row may recommend one and say why: a voice that fits
+the person, which may skip a voice the brand's recent swipes already have, so
+its videos don't all sound the same. A sheet with no `voice` row has no voices to pick from: say nothing
+about them. `exodus video swipe sheet voices <swipeId>` lists them again: one
+read of the voice list on the member's ElevenLabs key, and no speech is made,
+so it buys nothing. It prints the voices that fit the person, best fit first,
+each with its age and accent when known ("Sarah · young · American") and a
+sample to hear, then "Recommended: <n> (…). <why> A start with no pick films
+it."; after the member's pick, "Recommended: <n> (…). You picked it, so a
+start films it." or "… You picked <m>, so a start films your pick."; or why
+none is. A voice row with no voice prints "List the voices: exodus video swipe
+sheet voices <swipeId>". A pick is a set (`who=<n>`, `voice=<n>`), and the
+video is filmed with that person, their face and that voice. If the server
+says these choices are not switched on yet, say so and go on with the sheet as
+it is.
 
 For each video, in the listed order, run steps 1 and 2; step 3 comes once
 every video has started:
@@ -988,78 +1070,84 @@ every video has started:
 1. `exodus video swipe write <breakdownId> --product <id> --mode whole-ad
    --closeness <n> --yes`. A mode set from a note changes the line:
    `hook-only` takes `--closeness` as `whole-ad` does. `their-format` takes
-   the member's own script: save it to a file and pass `--script <file>`,
-   with no `--closeness` (the CLI refuses one). `new-look` takes `--look
-   <slug>`; no command lists the looks a swipe can take, so ask the member
-   for the exact look name and never invent one (the writer refuses a look
-   it does not make). When step 5 applies, its write line takes the place of
-   this one. The write takes four to nine minutes. Show the member the
-   script, the direction, Kept and Changed, and what it cost. When a persona
-   or a mechanism was picked and step 5 does not apply, add one line: "The
-   persona and the mechanism are noted, not used: the video writer does not
-   read them yet."
-   For a kind whose write makes people (People, step 3), run the yes line
-   the dry write printed: `--yes --people-max-usd <most>`, or `--yes
-   --no-people` when the member wants none. A plain `--yes` makes no people,
-   and the write then says so: "No people to pick from were made with this
-   write: its yes carried no --people-max-usd. See their price (free): …".
-   With the figure, the write waits for the people (a line ending "Waiting for
-   them, up to 5 minutes."), then prints how their ask ended and each person
-   with their picture's address. The animal, when the script puts one in the
-   picture, is on the saved sheet's row "The animal" a few minutes later
-   (`exodus video swipe sheet <swipeId>` shows it with its picture's address);
-   a start waits for it while it is still being made. Show each person's name and picture. Read the
-   write's own lines; never assume one is recommended. When the ask names one
-   ("Person N is recommended." and why), the write says "A start with no pick
-   films person N, the recommended one." When it names none, it says "… films
-   a new person cast from …, not one of these. To film one of them (free):
-   exodus video swipe sheet set <swipeId> who=<n>": tell the member that a
-   start with no pick films none of the people shown, and set `who=<n>` only
-   on their word. When none were made, it prints the server's sentence for
-   that (it says why when the server knows, as for a script that keeps no type
-   of their speaker) or "No people were made with this write, and nothing was
-   paid for them.", then "Ask for them (the price first, free): exodus video
-   swipe sheet people <swipeId>". After 5 minutes it prints "Still not done
-   after 5 minutes: …" with what the server last said, then "See them: exodus
-   video swipe sheet <swipeId>" (when the server said nothing: "The people are
-   still being made. See them: …"): the write is done, so read the sheet a few
-   minutes later.
-   For a kind whose sheet has these rows (One-take UGC today), the write may
-   also write our own text card and pick a kind of opening. They show on the
-   saved sheet as `headline` and `hookKind`, marked recommended. When one was
-   left out, Changed ends with a note. "We left out the text card we wrote:
-   <why>. The video has no text card.": tell the member in one line; they may
-   write their own card (`headline="<words>"`) or leave the video with none.
-   "We left out the kind of opening we picked: <why>. The sheet's kind of
-   opening row keeps its default.": tell the member; they may set `hookKind`
-   to a kind the row lists, or leave the default.
-   The write's last line says "Start the video (paid; ask first)": the
-   sheet's yes was that ask, so start now, with the line below, not the
-   write's own, which leaves out `--one-shot`. For a kind with a saved
-   sheet, that ask is the saved sheet's yes instead: start after it. Note the
-   swipe id it printed for that video.
-2. `exodus video swipe start <swipeId> --one-shot --yes`, without
-   `--one-shot` when the member chose to stop at the storyboard, and with
-   `--music` when they chose music. For a kind with a saved sheet whose price
-   printed a number, add `--max-usd <n>` with the "at most" it showed: a
-   start that can now cost more is refused, and nothing is started. With a
-   money limit, start only once that "at most" fits what is left of it ("A
-   money limit", above). No
-   number printed: no `--max-usd`, and never a guessed one. When the sheet
-   has people, the start says first whom it films ("A start with no pick
-   films person N, the recommended one.", or the member's pick). While they
-   are still being made it says "People to pick from are being made for this
-   swipe. The start waits for them, …", waits until 5 minutes after they
-   were asked for, then starts and says whom it films. Give the member the
-   `Watch it:` link at once. Then go on to the next video.
-3. When every video has started, follow each run with `exodus video status
-   <runId>` and do what it prints. The app makes a swiped video's cut ("End:
-   watch and approve"), so make no cut of your own. A one-shot run is
-   delivered by itself once that cut is made: give the member its run page.
-   While the app makes it, `status` says "Every piece is made. The app makes
-   the cut now; look again in a minute: exodus video status <runId>": read
-   `status` again in a minute. A run that stopped at the storyboard goes to
-   stop 3, then the end.
+   the member's own script: save it to a file and pass `--script <file>`, with
+   no `--closeness` (the CLI refuses one). `new-look` takes `--look <slug>`;
+   no command lists the looks a swipe can take, so ask the member for the
+   exact look name and never invent one (the writer refuses a look it does not
+   make). When step 5 applies, its write line takes the place of this one. The
+   write takes four to nine minutes: say so in one line. When it is done, one
+   line: the script's opening and what it cost ("show script" gives the
+   script, the direction, Kept and Changed). When the member picked a persona
+   or a mechanism and step 5 does not apply, add one line: "The persona and
+   the mechanism are noted, not used: the video writer does not read them
+   yet." For a kind whose write makes people (People, step 3), run the yes
+   line the dry write printed (`--yes --people-max-usd <most>`), or `--yes
+   --no-people` when the member wants none; a plain `--yes` makes none, and
+   says so. With the figure, the write waits up to 5 minutes for the people,
+   then prints each with their picture's address and whom a start with no pick
+   films: the one it recommends, or a new person cast from their speaker's
+   type, not one of these (tell the member; set `who=<n>` only on their word;
+   never assume one is recommended). When none were made it says so, that
+   nothing was paid for them, and how to ask for them (the price first, free).
+   After the 5 minutes the write is done: read the sheet a few minutes later.
+   The animal, when the script has one, is on the saved sheet's row "The
+   animal" a few minutes later, with its picture's address; a start waits for
+   it. For One-take UGC the write may also write our own text card and pick a
+   kind of opening (`headline`, `hookKind`, marked recommended); when Changed
+   ends "We left out the text card we wrote: …" or "We left out the kind of
+   opening we picked: …", tell the member in one line: they may write their
+   own card (`headline="<words>"`), set `hookKind` to a kind the row lists, or
+   leave it. The write's last line says "Start the video (paid; ask first)":
+   the sheet's yes was that ask, so start now, with the line below, not the
+   write's own, which leaves out `--one-shot`. For a kind with a saved sheet,
+   that ask is the saved sheet's yes instead: start after it. Note the swipe
+   id it printed for that video.
+2. `exodus video swipe start <swipeId> --one-shot --yes`, without `--one-shot`
+   when the member chose to stop at the storyboard, and with `--music` when
+   they chose music. For a kind with a saved sheet whose price printed a
+   number, add `--max-usd <n>` with the "at most" it showed: a start that can
+   now cost more is refused, and nothing is started. With a money limit, start
+   only once that "at most" fits what is left of it ("A money limit", above).
+   No number printed: no `--max-usd`, and never a guessed one. When the sheet
+   has people, the start says first whom it films. Give the member the `Watch
+   it:` link in one line, at once. Then go on to the next video.
+3. When every video has started, wait on each run in the background with
+   `exodus video wait <runId>`, each in its own command, and say one line:
+   "Filming <n> videos · I'll tell you when each is delivered or needs you."
+   When a wait ends, read `exodus video status <runId>` once and do what it
+   prints. The app makes a swiped video's cut ("End: watch and approve"), so
+   make no cut of your own. A run that stopped at the storyboard goes to stop
+   3, then the end, which asks the final approve. A one-shot video is
+   delivered by itself once the app's cut is made, with no final approve,
+   unless the film's check against its own sound fails ("End: watch and
+   approve").
+
+**A stop that needs the member** (a check found a problem, a held take, a
+refused write or start) is two lines and a question, offering only the ways
+that `status`, the hold's own sentence or the refusal names: the free look
+first, a free way marked "free", a paid way with the price the CLI printed for
+it (`sheet price` before a new run with `--again`) or "no printed price". A
+new run keeps none of the first start's flags: give `--one-shot` and `--music`
+again when the first had them. Its message, as text first (rule 2):
+
+> Stopped for you. <each cost line the stopped step printed, as printed, if any: "It cost $<X> on the member's key."> Say "why"
+
+Its question (`AskUserQuestion`, header "What now?"), its text:
+
+> <what happened, in plain words>. <what is still good>.
+> Spent $<X> of about $<Y> (or rule 5's other forms). What now?
+
+Its options: 1. the free look ("Watch take 2 first") 2. a free way on ("Keep
+it · free") 3. a paid way on, as the table's "A hold" or "A refused write" row.
+
+**Delivered** is three lines, the money line last:
+
+> Done. <the run page, or the file `pull` wrote>.
+> Listen once: <a word `status` flags, or the product's name>.
+> Spent $<X> of about $<Y> for the film (or rule 5's other forms); before it, <the last money line's figures, each with whose keys>
+
+With several videos, one line a video: its ad and persona, its `Watch it:`
+link and its money, or why it stopped.
 
 **Never start the same swipe twice.** One swipe is one video. A start of a
 swipe that already has a video is refused, starts nothing, and names the run:
@@ -1074,55 +1162,36 @@ noted none), with no run and not marked refused, is that write. Show it with
 row marked refused is that write's refusal: report it as a refused write. When
 no such row is there yet, the write may still finish: check again later.
 
-At the end, report each video on one line: its ad and persona, its run id
-and its `Watch it:` link, or why it stopped. For a One-take video, add what it
-cost (the "Cost:" line of `status`), beside the "about" shown before the
-yes.
-
-**The end of each video** is as "End: watch and approve" says. A one-shot
-video is delivered by itself once the app's cut is made, with no final
-approve, unless the film's check against its own sound fails ("End: watch and
-approve"). A video that stopped at the storyboard asks the final approve, which
-is one way. A redo of a clip there needs its own yes.
-
 **A refusal or a failed check stops that video only.** The others go on, and
 every video is in the report at the end. A refused write prints "The writer
 refused:" and its sentence (on an admin key, then "What the checks found:"),
 its swipe id, what it cost, "Nothing was started." and "Writing again is paid
 too: the same exodus video swipe write line, after the member's yes.". Report
-all of it for that video.
+it as a stop that needs the member (above), with the ways on its sentence ends
+with.
 
-A refusal for claims reads "Your product sheet doesn't back up …" and names
-up to two held lines, each with why in brackets: `it says "…", which we
-couldn't find on the sheet`; `… which the sheet says, but we couldn't find it
-in the part we matched to this claim`; `we found no one sentence of the sheet
-that backs "…" as the line says it`; `it still hedges or repeats a word of
-"…", the claim we rewrote it from`; `it names the product next to a line we
-took out, so it reads as that line's claim`; or, for a shot, `it shows a
-result, "…", in so many words, and we never back a shot that does, whatever
-the sheet says`. More lines end "and N more (the dashboard lists every one)".
-Give the member the way out the refusal ends with:
+A refusal for claims reads "Your product sheet doesn't back up …" and names up
+to two held lines, each with why in brackets (not found on the sheet, a hedge
+kept, the product named next to a line taken out, a shot that shows a result);
+more end "and N more (the dashboard lists every one)". The ways on, by how it
+ends:
 
-- When it ends "If it's true, add the line's own words to your product's
-  description (on the dashboard: Library, Materials, Brand info, then the
-  product's Edit), then write again." (or "If a line is true, …", or "If a
-  spoken line whose claim we couldn't find on the sheet is true, …"): ask
-  the member whether that line is true of their product. Only if it is, they
-  add the line's own words to the product's description at that place. Then,
-  on their yes, run the same write line again.
-- When it ends "Write again." alone, no held line can be backed by the
-  description: on the member's yes, run the same write line again.
-- "… a price or code your product sheet doesn't list. If it's right, add it
-  to your product's description (…), then write again.": the same, for that
-  price or code.
+- "If it's true, add the line's own words to your product's description (on
+  the dashboard: Library, Materials, Brand info, then the product's Edit),
+  then write again." (or "If a line is true, …", "If a spoken line whose claim
+  we couldn't find on the sheet is true, …", or the same for "a price or code
+  your product sheet doesn't list"): ask the member whether it is true of
+  their product. Only if it is, they add its own words there; then, on their
+  yes, run the same write line again.
+- "Write again." alone: no held line can be backed by the description: on the
+  member's yes, run the same write line again.
 - "The script we wrote left out …, and at closeness … every beat stays. …":
   the member adds what that beat can say to the product's description, or
-  picks closeness 4 or 5, where beats can merge or drop. Then write again on
+  picks closeness 4 or 5, where beats can merge or drop; then write again on
   their yes.
 - "Your script says "…", from their ad or a price or code your product sheet
   doesn't list. We never change your words, so take it out, then try again.":
-  the member's own script holds those words. They take them out of the file,
-  and you write again on their yes.
+  they take those words out of their own script; write again on their yes.
 - Any other sentence: say it as it is, and write again only on their yes.
 
 **Never write around a refusal yourself.** Do not pass the refused script,
@@ -1173,16 +1242,19 @@ mechanism noted only.
 
 **On the sheet, when the path is open.**
 
-- Rows 1 and 2 read "(used through the text swipe bot)" in place of
-  "(noted; …)".
-- Row 3 reads "1 Near-clone, 2 New scene, same beats, 3 Same idea, new
-  drama, 4 Same arc, 5 Pattern only (with 4 or 5, the persona and the
-  mechanism are only noted)". Levels 1 to 3 are the `swipe` skill's levels
-  (its section 2), not the dial's: say so when the member asks. A video the
-  bot does not write takes the same number as its `--closeness`.
-- **It buys** adds, when the picks give the bot any video: "and a text swipe
-  call for each video (two at level 2 or 3), on your own Genesis and model
-  keys." When only some videos take it, name them ("for videos 1 and 3").
+- On "show sheet" and in "Change something", rows 1 and 2 read "(used through
+  the text swipe bot)" in place of "(noted; …)".
+- On "show sheet" and in "Change something", row 3 reads "1 Near-clone, 2 New
+  scene, same beats, 3 Same idea, new drama, 4 Same arc, 5 Pattern only (with
+  4 or 5, the persona and the mechanism are only noted)". Levels 1 to 3 are
+  the `swipe` skill's levels (its section 2), not the dial's: say so when the
+  member asks. A video the bot does not write takes the same number as its
+  `--closeness`.
+- The spending option's description adds, when the picks give the bot any
+  video: "Plus a text swipe call for each video (two at level 2 or 3), on your
+  own Genesis and model keys, no printed price." When only some videos take
+  it, name them ("for videos 1 and 3"). **It buys** on "show sheet" says the
+  same.
 - A reply that adds bot calls makes the buy bigger, so it is not the yes: a
   persona or a mechanism added where the sheet had none, or, while a persona
   or a mechanism is picked, how close moved from 1 to 2 or 3, or from 4 or 5
@@ -1253,19 +1325,19 @@ say; a result beyond them needs a product fact.
   "the #1").
 
 When a picked persona or mechanism is missing, or a line promises something
-the product's facts do not hold (a result, a health benefit, a number), do
-not start that video: show the member that line and ask. The other videos go
-on. Show each such line with the fact it would need, and offer three ways
-on: start it as written, leave that video out, or the member's own words for
-those lines, written again with `--mode their-format --script <file>` (a
-second paid write, on their word) and checked again. This is the one stop
-this path adds, and it comes only when the check finds something. The write
-may still refuse a name, price or code from their ad, or a cast the kind of
-ad cannot take (more speakers than it holds, or speakers where it takes a
-narrator only): a refused write stops that video only, as above. A write
-whose wait was cut off and is found again with `exodus video swipe show
-<swipeId>` (as "On the yes" says) gets this check too, on the script `show`
-prints, before its start.
+the product's facts do not hold (a result, a health benefit, a number), do not
+start that video: show the member that line and ask. The other videos go on.
+Show each such line with the fact it would need, and offer three ways on:
+start it as written, leave that video out, or the member's own words for those
+lines, written again with `--mode their-format --script <file>` (a second paid
+write, on their word) and checked again. Ask it as step 4's stop that needs
+the member. This is the one stop this path adds, and it comes only when the
+check finds something. The write may still refuse a name, price or code from
+their ad, or a cast the kind of ad cannot take (more speakers than it holds,
+or speakers where it takes a narrator only): a refused write stops that video
+only, as above. A write whose wait was cut off and is found again with `exodus
+video swipe show <swipeId>` (as "On the yes" says) gets this check too, on the
+script `show` prints, before its start.
 
 **Run so far.** Levels 1 and 2 of this path have been run for real, as far
 as the write. Level 3 has not.
@@ -1291,83 +1363,42 @@ noted only.
 
 ### Step by step: a yes before each paid step
 
-For a member who asks for stops. Four steps cost money, and the CLI prints no
-price for any of them but the people a write makes and the start of a kind
-with a saved sheet. Run each one first without `--yes`: it sends nothing and
-prints what the step buys and who pays. Tell the member both, and the price
-when it prints one, else say the CLI prints no price; never guess one, and run
-the same line with `--yes` only after their yes.
+For a member who asks for stops: the steps above, with one question before
+each of the four paid steps (the read of an ad, its template, the write, the
+start) in place of one yes for all. Run each one first without `--yes` (it
+sends nothing), put what it prints in the option (the table's "Step by step"
+row), and run the same line with `--yes` only after their yes.
 
-1. **Get the ad.** One of a video file, a link (Meta Ad Library, TikTok,
-   Instagram or YouTube), or a video ad in the brand's swipe library by the
-   id that `exodus video swipe find` prints (free):
-   `exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId>`.
-   The breakdown is paid on the team's keys, not the member's. A link or an
-   ad this brand broke down before comes back at once and costs nothing.
-   With `--wait` it prints each step as it starts, and takes a few minutes.
-   Once it is done, `exodus video swipe status <breakdownId> --full` prints
-   what Exodus read from the ad: each shot with its cut times, a-roll or
-   cutaway, framing, camera and description, then the script with who says
-   each line, then the cast, then how it is filmed. It is free. Show the
-   member the shot list and the script before the template, so they can say
-   whether Exodus read their ad right. In "How it is filmed", every line but
-   Measured, Cuts and Words is the video model's reading by eye, and it is
-   often wrong: in Exodus's own checks the camera height was right 2 times
-   in 9. Cuts is counted, but it includes jump cuts the video model saw.
-   Give the by-eye lines as what Exodus thinks it saw, never as fact, and
-   ask the member to check any that matters against the ad. Measured says
-   only that most of the part of the frame it could read stood still; it
-   does not prove the phone was put down.
-2. **The template.** `exodus video swipe template <breakdownId>`, paid on the
-   member's own Anthropic or OpenRouter key. It prints the kind of ad and the
-   look the ad matched, and why. A template made before costs nothing. Show
-   the member the kind and the look, and the "Also fits their ad: …" line when
-   it prints one (the One-take UGC row under "3. The sheet, once" says what to
-   do with it). The swipe writes the kind it was matched to, or the one the
-   write names with `--kind`, and no other: name another kind only on the
-   member's yes. A kind this ad can't be made as is refused before the write
-   is paid, with the kinds it can be made as. For any other kind, stop here
-   and make the video from that format with the ad's words instead ("From one
-   sentence to a film").
-3. **The choices.** `exodus video swipe products` lists the brand's
-   products. Ask which product, what to swipe and how close. What to swipe
-   (`--mode`, `whole-ad` if left off): Whole ad, Hook only, Their format, my
-   script (`--script <file>`, the member's own words), or Their script, a new
-   look (`--look <slug>`). How close (`--closeness`, 2 if left off): 1 Mirror,
-   2 Close, 3 Same beats, 4 Same arc, 5 Pattern only. `exodus video --help`
-   has each one's line.
-4. **The write.** `exodus video swipe write <breakdownId> --product <id>
-   [--mode …] [--closeness …]`, paid on the member's own key. It takes four to
-   nine minutes and waits by itself. Show the member the script, the
-   direction, Kept and Changed, and what it cost. When the line without
-   `--yes` also prints the people's price (One-take UGC, when the server
-   offers people), it prints the yes line with `--people-max-usd <most>`: tell
-   the member that price, and run that line on their yes, or `--yes
-   --no-people` when they want none. When it prints none, the write makes no
-   people. With people, the write then waits up to 5 minutes more for the people and
-   shows them, as step 1 of "On the yes" says. A refusal prints the writer's
-   sentence and "Nothing was started.": tell the member, give them the way out
-   the sentence ends with ("A refusal or a failed check" in "On the yes"), and
-   write again, which is paid too, only on their yes. If the wait gives up,
-   the write may still finish: run `exodus video swipe list` before writing
-   again. It shows the brand's newest swipes, and a refused one is marked with
-   what it cost.
-5. **The start.** `exodus video swipe start <swipeId>`. It buys the
-   storyboard and its pictures; the voices and clips wait for the storyboard's
-   yes. `--style <look>` changes the look, `--music` adds a music bed.
-   `--title "<name>"` names the ad, for admins only: a beta tester leaves it
-   off, or the CLI refuses it with one sentence naming it. With `--one-shot`
-   it buys the whole video with no stop: ask before passing it. `--wait` waits until the run needs the
-   member. A swipe that already has a video is refused, with its run; a
-   second video from it needs `--again` and the member's yes to a second video.
-   For a kind with a saved sheet (One-take UGC today), show the saved sheet
-   one time before this start, as in step 4 (`exodus video swipe sheet
-   <swipeId>`, free), in the same message as what the start buys and who
-   pays (the line without `--yes`). On this path the saved sheet's yes is
-   the start's yes: ask once, then run the line with `--yes` and the
-   `--max-usd <n>` that line printed (its price's "at most"): a start that
-   can now cost more is refused, and nothing is started. A reply that
-   only changes a row is not that yes.
+1. **Get the ad.** Step 1's breakdown line for one ad, first without `--yes`,
+   then asked ("without asking" does not hold here): a video file, a link
+   (Meta Ad Library, TikTok, Instagram or YouTube), or a video ad in the
+   brand's swipe library by the id that `exodus video swipe find` prints
+   (free). Then show the shot list and the script (`status --full`, free), so
+   the member can say whether Exodus read their ad right. In "How it is
+   filmed", every line but Measured, Cuts and Words is the video model's
+   reading by eye, often wrong (the camera height was right 2 times in 9 in
+   Exodus's checks): say those as what Exodus thinks it saw. Cuts counts jump
+   cuts the model saw too; Measured does not prove the phone was put down.
+2. **The template.** Step 1's template line, first without `--yes`, then
+   asked. Show the kind, the look, why, and the "Also fits their ad: …" line
+   when it prints one (the One-take UGC row of step 3). The swipe writes the
+   kind it was matched to, or another named with `--kind` on the member's yes.
+   For a kind this ad can't be made as (step 3's "The kind of ad"), stop here
+   and make the video from that format with the ad's words ("From one sentence
+   to a film").
+3. **The choices**, as questions: the product, what to swipe (`--mode`, as
+   step 4's write line says) and how close (`--closeness`, 2 if left off).
+4. **The write.** Step 4's write line: its people's price goes in the option
+   when the line without `--yes` prints one, and their yes line is the one it
+   prints.
+5. **The start.** `exodus video swipe start <swipeId>` buys the storyboard and
+   its pictures; the voices and clips wait for the storyboard's yes. With
+   `--one-shot` it buys the whole video with no stop: ask before passing it.
+   `--style <look>` changes the look, `--music` adds a music bed, and `--wait`
+   waits until the run needs the member. `--title "<name>"` names the ad, for
+   admins only: a beta tester leaves it off, or the CLI refuses it with one
+   sentence naming it. For a kind with a saved sheet, its question (step 4) is
+   the start's question, with the `--max-usd <n>` the line printed.
 6. **Then** stop 3 (the storyboard) and the end, as above.
 
 ### Every swipe command
@@ -1375,32 +1406,23 @@ the same line with `--yes` only after their yes.
 ```operator-guide
 exodus video swipe --file <ad.mp4> | --url <link> | --ad <swipeAdId> [--yes] [--wait]
                                                           break the ad down (team's keys); one read before costs nothing
-exodus video swipe status <breakdownId> [--wait] [--full] where the breakdown stands, step by step;
-                                                          --full adds what it read: shots, script, cast, filming
+exodus video swipe status <breakdownId> [--wait] [--full] where the breakdown stands; --full: shots, script, cast, filming
 exodus video swipe template <breakdownId> [--yes]         the kind of ad and look it matched (member's key)
 exodus video swipe products                               the brand's products and their ids
 exodus video swipe write <breakdownId> --product <id> [--mode <mode>] [--closeness <step>] [--look <slug>] [--script <file>] [--kind <kind>] [--yes [--people-max-usd <n>]] [--no-people]
-                                                          the brand's version (member's key); waits for it. For a kind
-                                                          whose write makes people (when the server offers them),
-                                                          without --yes it also prints their price, and --yes
-                                                          --people-max-usd <n> makes them too
+                                                          the brand's version (member's key); without --yes, its people's price
 exodus video swipe show <swipeId>                         one swipe again
-exodus video swipe list                                   the brand's newest swipes, each with when it was written and its product;
-                                                          a refused one shows what it cost
+exodus video swipe list                                   the brand's newest swipes, when written, product, a refusal's cost
 exodus video swipe find [--brand "<name>"] [--limit <n>]  video ads in the swipe library to offer as options (free); no kind, no results
 exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music] [--one-shot] [--again] [--max-usd <n>] [--yes] [--wait]
-                                                          start the run on the kind the swipe wrote; --again for a
-                                                          second, paid video of a swipe that already has one; waits
-                                                          up to 5 minutes for people still being made
-exodus video swipe sheet <swipeId>                        the saved sheet the server keeps for a swipe (free);
-                                                          no dashboard page shows it yet
+                                                          the run on the kind the swipe wrote; --again: a second, paid video
+exodus video swipe sheet <swipeId>                        the saved sheet the server keeps for a swipe (free)
 exodus video swipe sheet set <swipeId> <row>=<value> ...  change rows of the saved sheet, all or none; <row>= clears one (free)
 exodus video swipe sheet set <swipeId> basedOn=look --yes --people-max-usd <n>
                                                           their look: run it first without --yes for its price
 exodus video swipe sheet price <swipeId>                  the video's price at the saved sheet's rows and at each size and takes (free)
 exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>]
-                                                          new people to pick from (paid on the member's keys: the
-                                                          price first, --yes with its most makes them); who=<n> picks one
+                                                          new people to pick from (member's keys; the price first); who=<n> picks one
 exodus video swipe sheet voices <swipeId>                 the voices that fit the person, best fit first, each with its
                                                           sample (and its age and accent when known), and the one the
                                                           row recommends, if any: one read of the voice list on the
@@ -1453,7 +1475,9 @@ CLI words it the way the run page does. On their own brands they can:
 - `video approve <runId>`: approves the storyboard. At an audition stop,
   `video approve <runId> --audition <digest>` accepts the audition clips, and
   plain `video approve <runId>` pays for another try of the failed audition
-  takes ("The audition stop"). Nothing else.
+  takes ("The audition stop"). When their finished video waits for them
+  ("finish it"), `video approve <runId>` finishes it, as "End: watch and
+  approve" says. Nothing else.
 - `video voices <runId>`: who speaks, their current voice, and the voices on
   the tester's own ElevenLabs account. `--set <character>=<voiceId>` picks one,
   until the storyboard is approved.

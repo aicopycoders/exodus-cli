@@ -23,6 +23,8 @@ import {
   customerAnswer,
   customerRunPage,
   customerStageIsWorking,
+  finalApproveLines,
+  finalApprovedLines,
   customerCutHeld,
   customerStageLines,
   customerStatusLines,
@@ -1360,6 +1362,11 @@ export type RunStop =
       heldReason?: string;
       /** The run's format shows the floor plan as a map at this stop. */
       blockingMap?: true;
+      /**
+       * COP-337: a Video-page run parked at its board itself with no pictures step (a One-take run's), so no picture is
+       * drawn before this approval: what waits for the yes is the script and the voice. Read off the run's steps.
+       */
+      noPictureBeforeApproval?: true;
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -1367,7 +1374,7 @@ export type RunStop =
   // `appCutOnRun`, filled by resolveStop from the rows, says the cut on the run is the app's own. `appOutdatesCut` says
   // the server's "making" also means any cut on the run is not one to keep (a script-video run, see appCutOutdates).
   // `redoingScenes`, filled by status from the rows (scenesBeingRedone), are the scenes being made again before that cut.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[] }
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[]; fromTemplate?: true }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
@@ -1514,6 +1521,20 @@ function parkedAtStoryboardGate(run: VideoRun, pausedNode: VideoRunNode): boolea
   return !parkedByBuilderCheckpoint(run) && GATE_NODE_KINDS.has(pausedNode.kind);
 }
 
+/**
+ * COP-337: a Video-page run (its workflow is the Video page's module) parked at the board itself, with no pictures step
+ * to run (every step of a run's graph has a row from its start, convex workflows.ts createRunRows), so nothing is drawn
+ * before this approval. A board the check before pictures held, or a run parked before its pause point moved, still has
+ * its pictures step and reads as before; so does a workflow of the builder, whose step is its Storyboard.
+ */
+function noPictureBeforeApproval(run: VideoRun, pausedNode: VideoRunNode): boolean {
+  return (
+    run.moduleKey === "script-video" &&
+    pausedNode.kind === "storyboard" &&
+    !run.nodes.some((n) => n.kind === "scene-frames" && n.status !== "out-of-scope")
+  );
+}
+
 function parkedAtFinalWatch(run: VideoRun): boolean {
   return (
     !parkedByBuilderCheckpoint(run) &&
@@ -1587,6 +1608,7 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(isShowAd(run) ? { showAd: true } : {}),
         ...(held ? { heldReason: held } : {}),
         ...(run.blockingMap === true ? { blockingMap: true as const } : {}),
+        ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true as const } : {}),
       };
     }
     if (parkedAtFinalWatch(run)) {
@@ -1613,6 +1635,8 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(run.cutFailure?.sentence ? { cutFailure: run.cutFailure.sentence } : {}),
         ...(run.appCut === "making" ? { appMakesCut: true as const } : {}),
         ...(appCutOutdates(run) ? { appOutdatesCut: true as const } : {}),
+        // COP-344: a run from a template does not say its approve can't be undone (finalApproveLines).
+        ...(run.launchDoor === "template" ? { fromTemplate: true as const } : {}),
       };
     }
     return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -2015,9 +2039,19 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
   if (stop.at === "storyboard-gate") {
     const lines = [
       ...(stop.heldReason ? [stop.heldReason] : []),
-      "Parked: the storyboard is waiting for your yes.",
-      `Read it:    exodus video storyboard ${runId}`,
-      `Approve it: exodus video approve ${runId}`,
+      // COP-337: the CLI cannot tell whether a person was picked on the sheet (the run read does not say), so it names
+      // the script and the voice; the run page shows the picked person.
+      ...(stop.noPictureBeforeApproval
+        ? [
+            "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+            `Read them:    exodus video storyboard ${runId}`,
+            `Approve them: exodus video approve ${runId}`,
+          ]
+        : [
+            "Parked: the storyboard is waiting for your yes.",
+            `Read it:    exodus video storyboard ${runId}`,
+            `Approve it: exodus video approve ${runId}`,
+          ]),
     ];
     if (stop.showAd) {
       lines.push(`Send back:  exodus video flag ${runId} --note "what's wrong"`);
@@ -2088,6 +2122,8 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
         return [
           "Parked: the app's cut is made and waiting for your approval.",
           `Approve it:      exodus video approve ${runId}`,
+          // COP-344: what the final approve does, as under the uploaded cut's approve below.
+          ...finalApproveLines(stop.fromTemplate === true),
           `Watch it here:   ${runUrl}`,
           // COP-319 review: a one-take take's redo is refused on the server (convex workflows.ts oneTakeSceneRedoRefused).
           "Changed your mind? A clip redo, where the run allows one, has the app make the cut again; a one-take take is filmed again only by a new run.",
@@ -2096,6 +2132,8 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
       return [
         "Parked: your cut is uploaded and waiting for your approval.",
         `Approve it:      exodus video approve ${runId}`,
+        // COP-344: what the final approve does, under the command that does it.
+        ...finalApproveLines(stop.fromTemplate === true),
         `Watch it here:   ${runUrl}`,
         "Changed your mind? You can still redo a clip and upload a new cut.",
       ];
@@ -6269,6 +6307,24 @@ export async function quoteFlow(runId: string, json: boolean, deps: VideoDeps, p
   ] };
 }
 
+/**
+ * COP-344: whether the run waits for its final approve: a Guided video waiting for its member's finish on the
+ * customer tier (`awaitingSignOff`), else the final watch `status` names; with whether the run is from a template.
+ * A read that fails, throws or answers something else is null, so the approve itself never waits on it.
+ */
+async function waitsForFinalApprove(runId: string, deps: VideoDeps): Promise<{ template: boolean } | null> {
+  try {
+    const read = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (!read?.ok) return null;
+    const customer = customerAnswer<CustomerRun>(read.data);
+    if (customer) return customer.stage === "ready" && customer.awaitingSignOff === true ? { template: customer.template === true } : null;
+    const run = asVideoRun(read.data);
+    return classifyRun(run).at === "final-watch" ? { template: run.launchDoor === "template" } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function approveFlow(
   runId: string,
   opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string; auditionDigest?: string },
@@ -6285,6 +6341,9 @@ export async function approveFlow(
     }
     requestQuote = { quotes: prepared };
   }
+  // COP-344: the approve route answers a storyboard's approve and a final one alike, so the run is read first, as
+  // status reads it, for the receipt to say what a final approve made final. --json keeps its one call.
+  const final = opts.json ? null : await waitsForFinalApprove(runId, deps);
   const res = await deps.post(APPROVE_PATH, {
     runId,
     // The check's block: sent only when the member typed --accept-findings.
@@ -6340,7 +6399,7 @@ export async function approveFlow(
   return {
     code: 0,
     lines: [
-      "Approved.",
+      ...(final ? finalApprovedLines(final.template) : ["Approved."]),
       ...warnings,
       ...(summary.length > 0 ? ["", ...summary, ""] : []),
       `See what happens next: exodus video status ${runId}`,
@@ -7828,16 +7887,24 @@ async function statusVoiceLines(runId: string, deps: VideoDeps): Promise<string[
   if (!res?.ok) return [];
   const sheet = (res.data ?? {}) as Partial<CastVoiceSheet>;
   const cast = Array.isArray(sheet.cast) ? sheet.cast : [];
-  const summary = voiceSummaryLines(cast, []);
+  // COP-345: a voice the server did not check gets no state (it would read "not checked" here and "ElevenLabs has it"
+  // on the storyboard), and the command that checks is named: `voices` reads the sheet with the check (voicesFlow).
+  const summary = voiceSummaryLines(cast, [], { checkSkipped: true });
   if (summary.length === 0) return [];
   const clash = cast.some((row) => row.fit?.clash === true);
-  return ["", ...summary, ...(clash ? [VOICE_CLASH_HINT] : [])];
+  const unchecked = cast.some((row) => Boolean(row.voice) && row.availability === undefined);
+  return [
+    "",
+    ...summary,
+    ...(unchecked ? [`ElevenLabs is not asked here. To check these voices: exodus video voices ${runId}`] : []),
+    ...(clash ? [VOICE_CLASH_HINT] : []),
+  ];
 }
 
 /** #1845: the compact "Voices" block the storyboard stop and the approve receipt
  *  share — one line per character who speaks or already has a voice, then the
  *  sheet's own notices. Empty when there is nothing worth saying. */
-function voiceSummaryLines(cast: CastVoiceRow[], notices: string[]): string[] {
+function voiceSummaryLines(cast: CastVoiceRow[], notices: string[], opts: { checkSkipped?: boolean } = {}): string[] {
   const rows = cast.filter((row) => row.spokenScenes > 0 || row.voice !== null);
   // A note can arrive with no rows at all (the approve's check could not run),
   // and it must still be read — only the "Voices" heading needs rows under it.
@@ -7846,7 +7913,7 @@ function voiceSummaryLines(cast: CastVoiceRow[], notices: string[]): string[] {
   for (const row of rows) {
     lines.push(
       row.voice
-        ? `  ${row.name.padEnd(width)}  →  ${voiceWords(row)}  ${availabilityWords(row)}${fitWords(row)}`
+        ? `  ${row.name.padEnd(width)}  →  ${voiceWords(row)}${opts.checkSkipped && row.availability === undefined ? "" : `  ${availabilityWords(row)}`}${fitWords(row)}`
         : `  ${row.name.padEnd(width)}  →  no voice chosen (keeps the generated voice)`,
     );
   }
@@ -8990,6 +9057,31 @@ export function parsePositional(args = process.argv.slice(3)): string[] {
   const asSet = read(SHEET_SET_VALUE_FLAGS);
   if (asSet[0] === "swipe" && asSet[1] === "sheet" && asSet[2] === "set") return asSet;
   return read(new Set());
+}
+
+/**
+ * COP-345: `exodus video <sub> --help` (bin/exodus.ts): the lines of the help's Usage block that belong to the subcommand
+ * typed, the longest run of its words that starts one, with the lines under each, and where the rest is. Null with no
+ * words or words that start none, so the caller prints the whole help as before: `exodus video --help` stays whole,
+ * since the video skill and its drift test read it.
+ */
+export function subcommandHelp(words: readonly string[] = parsePositional()): string | null {
+  const block = helpText.slice(helpText.indexOf("\nUsage:\n") + "\nUsage:\n".length);
+  const entries: string[][] = [];
+  for (const line of block.slice(0, block.indexOf("\n\n")).split("\n")) {
+    if (line.startsWith("  exodus video ")) entries.push([line]);
+    else if (line.startsWith("    ") && entries.length > 0) entries[entries.length - 1].push(line);
+  }
+  const typed = words.filter((word) => !word.startsWith("-"));
+  for (let n = typed.length; n > 0; n--) {
+    const said = typed.slice(0, n).join(" ");
+    const own = entries.filter(([line]) => {
+      const rest = line.slice("  exodus video ".length);
+      return rest === said || rest.startsWith(`${said} `);
+    });
+    if (own.length > 0) return ["Usage:", ...own.flat(), "", "exodus video --help shows everything."].join("\n");
+  }
+  return null;
 }
 
 function flagString(flags: Record<string, string | boolean>, name: string): string | undefined {

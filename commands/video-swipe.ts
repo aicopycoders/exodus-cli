@@ -940,6 +940,19 @@ const VIDEO_TYPES: Record<string, string> = {
 /** A breakdown silent for 20 minutes is failed by the server's sweep; the wait gives it five more. */
 const BREAKDOWN_MAX_POLLS = 300;
 
+/**
+ * COP-345: the page of their ad, the swipe door on this breakdown (the address In progress opens, in-progress-swipe-model.ts
+ * swipeReadHref), on the dashboard this CLI talks to: `deps.dashboardUrl`, which is getDashboardUrl() (lib/client.ts).
+ * While the ad waits or is read it shows "Waiting in line" or "Reading their ad" over a bar beside the choices, then the
+ * choices. Built here from the id: onOwnDashboard (video-customer.ts) moves a link the server built onto this dashboard,
+ * and the breakdown routes answer no link to move.
+ */
+export function breakdownPage(dashboardUrl: string, breakdownId: string): string {
+  return `${dashboardUrl.replace(/\/+$/, "")}/video?door=swipe&breakdown=${encodeURIComponent(breakdownId)}`;
+}
+
+const pageLine = (dashboardUrl: string, breakdownId: string) => `Their ad on the dashboard: ${breakdownPage(dashboardUrl, breakdownId)}`;
+
 /** `exodus video swipe --file | --url | --ad`: start a breakdown, or find the one this ad already has. */
 export async function swipeBreakdownFlow(source: SwipeSource, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult> {
   const { json } = opts;
@@ -1000,9 +1013,13 @@ export async function swipeBreakdownFlow(source: SwipeSource, opts: SwipeRunOpti
   if (!started.breakdownId) return failed("The server did not say which breakdown it started.", json);
 
   const { breakdownId, existing } = started;
-  const head = existing
-    ? [`This ad already has a breakdown: ${breakdownId}. It cost nothing.`]
-    : [`Breakdown ${breakdownId} started. It reads the ad on the team's keys, in a few minutes.`];
+  const head = [
+    existing
+      ? `This ad already has a breakdown: ${breakdownId}. It cost nothing.`
+      : `Breakdown ${breakdownId} started. It reads the ad on the team's keys, in a few minutes.`,
+    // COP-345: the page, as soon as the breakdown has an id.
+    pageLine(deps.dashboardUrl, breakdownId),
+  ];
   if (!opts.wait) {
     return {
       code: 0,
@@ -1070,17 +1087,18 @@ async function waitForBreakdown(
     return { code: 1, lines: [error, hint], json: { error, mayStillFinish: hint } };
   }
   const { read } = ended.done;
-  return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read), json: { breakdown: read.breakdown, template: read.template } };
+  return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template } };
 }
 
-function breakdownEndLines({ breakdown, template }: BreakdownRead): string[] {
+function breakdownEndLines({ breakdown, template }: BreakdownRead, dashboardUrl: string): string[] {
   if (breakdown.status === "failed") {
     return [
       `The breakdown failed: ${breakdown.error ?? "no reason was given."}`,
       "Reading the ad again is paid too: run the same exodus video swipe command with --yes, after the member's yes.",
     ];
   }
-  return ["The breakdown is done.", ...spentLines(breakdown), ...nextAfterBreakdown(breakdown._id, template)];
+  // COP-345: and the page again, once it is done.
+  return ["The breakdown is done.", pageLine(dashboardUrl, breakdown._id), ...spentLines(breakdown), ...nextAfterBreakdown(breakdown._id, template)];
 }
 
 function spentLines(breakdown: SwipeBreakdown): string[] {
@@ -1144,8 +1162,8 @@ export async function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptions
     `The ad: ${breakdown.sourceUrl ?? breakdown.fileName ?? "an uploaded file"}`,
     ...breakdown.steps.map((step) => `  ${step.status.padEnd(width)}  ${step.label}`),
   ];
-  if (breakdown.status === "done" || breakdown.status === "failed") lines.push(...breakdownEndLines(read));
-  else lines.push(`Wait for it: exodus video swipe status ${breakdown._id} --wait`);
+  if (breakdown.status === "done" || breakdown.status === "failed") lines.push(...breakdownEndLines(read, deps.dashboardUrl));
+  else lines.push(pageLine(deps.dashboardUrl, breakdown._id), `Wait for it: exodus video swipe status ${breakdown._id} --wait`);
   if (full) lines.push(...fullLines(isRecord(res.data) ? res.data : {}));
   return { code: 0, lines };
 }
@@ -3927,6 +3945,7 @@ async function runSheetSource(item: SheetSource, videos: SheetVideo[], ctx: Shee
             ? `  This ad already has a breakdown: ${src.breakdownId}. It cost nothing.`
             : `  Breakdown ${src.breakdownId} started. It reads the ad on the team's keys, in a few minutes.`,
         );
+        say(`  ${pageLine(deps.dashboardUrl, src.breakdownId)}`); // COP-345
       } else {
         say(`  Breakdown ${src.breakdownId}, from before.`);
       }

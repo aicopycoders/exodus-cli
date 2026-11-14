@@ -7,7 +7,7 @@ description: Swipe a winning ad (spoken or sung: micro-dramas, Suno song ads, ji
 
 The bot on Genesis does the swiping. This skill picks the ad, asks five questions, calls the bot once per swipe, and counts what comes back.
 
-A video ad to swipe as it is made, from its file, its link or its id in Exodus, skips this skill: it goes to the `exodus-video` skill's "Swiping a video ad": it reads the ad, asks one sheet (persona, mechanism, how close, characters, run, finish, and how many videos), and makes the videos on one yes. With a persona or a mechanism, and the keys this skill needs, it calls this skill's bot as sections 3 and 4 say, then makes the video from those lines.
+A video ad to swipe as it is made, from its file, its link or its id in Exodus, skips this skill: it goes to the `exodus-video` skill's "Swiping a video ad": it reads the ad, shows a short plan with one question (every row on "show sheet"), and makes the videos on the member's yes. With a persona or a mechanism, and the keys this skill needs, it calls this skill's bot as sections 3 and 4 say, then makes the video from those lines.
 
 ## 1. Get the ad (two doors)
 

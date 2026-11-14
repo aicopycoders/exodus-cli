@@ -348,6 +348,7 @@ export type RunStop = {
     showAd?: true;
     heldReason?: string;
     blockingMap?: true;
+    noPictureBeforeApproval?: true;
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];
@@ -359,6 +360,7 @@ export type RunStop = {
     appCutOnRun?: true;
     appOutdatesCut?: true;
     redoingScenes?: number[];
+    fromTemplate?: true;
 } | {
     at: "pilot";
     nodeId?: string;
@@ -1082,5 +1084,6 @@ export interface SongImportOptions {
 }
 export declare function songImportFlow(runId: string, opts: SongImportOptions, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function parsePositional(args?: string[]): string[];
+export declare function subcommandHelp(words?: readonly string[]): string | null;
 export declare function run(flags: Record<string, string | boolean>, occurrences: FlagOccurrence[]): Promise<void>;
 export {};

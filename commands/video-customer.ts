@@ -72,6 +72,8 @@ export interface CustomerRun {
   mode: "one-shot" | "guided";
   stage: CustomerRunStage;
   templateApproval?: { audition?: AuditionReview };
+  /** Door 2: present (true) only on a run from a template (convex customerRunView.ts). Absent from older servers. */
+  template?: true;
   /** #3299: a Guided video's cut is ready and waits for `exodus video approve`. Absent from older servers. */
   awaitingSignOff?: boolean;
   waiting: { ahead: number; stepsDone: number } | null;
@@ -104,6 +106,16 @@ export interface CustomerRun {
   spendWentOn?: { sentence: string };
   /** #4582: the member said stop here. */
   spendStopped?: { sentence?: string };
+  /** COP-218/COP-337: the run waits at its storyboard; `beforePictures` when a pictures step follows it. */
+  planHold?: { atBoard?: boolean; beforePictures: boolean };
+}
+
+/**
+ * COP-337: the run waits at its storyboard with no pictures step after it (a One-take run's), so no take gets a
+ * picture before the approval. The server's rule (convex/lib/video/customerRunView.ts noPictureBeforeApproval).
+ */
+function noPictureBeforeApproval(run: CustomerRun): boolean {
+  return run.stage === "review" && run.planHold?.atBoard === true && run.planHold.beforePictures !== true;
 }
 
 /**
@@ -190,6 +202,8 @@ export interface CustomerStoryboard {
   runId: string;
   stage: CustomerRunStage;
   scenes: CustomerRunScene[] | null;
+  /** COP-337: no take gets a picture before this approval, and the approve is open. Absent from older servers. */
+  noPictureBeforeApproval?: true;
 }
 
 export interface CustomerItem {
@@ -336,6 +350,34 @@ function stoppedLines(run: CustomerRun, page: string): string[] {
     : ["Something went wrong making this video. Start a new one from the Video page."];
 }
 
+/**
+ * COP-344: what the final approve does, said where the CLI offers it (the final watch's stop, a Guided video's "finish
+ * it") with the meaning of the run page's Finish here (run-clips.tsx) and the video skill's Approve line. A person's
+ * sign-off is stamped with its approver (convex workflows.ts claimRunForApprovalInner), so the delivery is not one a
+ * redo reopens (autoCut.ts reopenableDelivery), and a retry, a clip redo or an upload on it is refused. No code posts a
+ * video to an ad account. Never "nowhere": a delivery also goes to a Drive folder or a webhook its workflow names, and
+ * a video tester's to the eval app.
+ * A run from a template does not say it can't be undone: a preparation redo may reopen its delivery after the approve
+ * (convex templatePreparationJournal.ts reopenPreparationForMemberRedo, workflows.ts resetCheckpointNode).
+ */
+const FOR_GOOD = "It can't be undone; a change after it is a new run.";
+
+export function finalApproveLines(template: boolean): string[] {
+  return [
+    template ? "Approving makes this cut the run's finished video." : `Approving makes this cut the run's finished video. ${FOR_GOOD}`,
+    // The final watch's own guard (#1704): no pull or upload line beside a cut already in.
+    "Nothing is posted to an ad account; the video stays on its page.",
+  ];
+}
+
+/** COP-344: said once the final approve went through, in place of a bare "Approved.". */
+export function finalApprovedLines(template: boolean): string[] {
+  return [
+    template ? "Approved. This cut is now the run's finished video." : `Approved. This cut is now the run's finished video. ${FOR_GOOD}`,
+    "Nothing is posted to an ad account. The video stays on its page, and exodus video pull saves it.",
+  ];
+}
+
 /** Where the run is, in the run page's words. */
 export function customerStageLines(run: CustomerRun, page: string): string[] {
   const id = run.runId;
@@ -363,6 +405,13 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         `Watch it here: ${page}`,
       ];
     case "review":
+      if (noPictureBeforeApproval(run)) {
+        return [
+          "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
+          `Read them:    exodus video storyboard ${id}`,
+          `Approve them: exodus video approve ${id}`,
+        ];
+      }
       return [
         "Your storyboard is ready for your review.",
         `See it:      exodus video storyboard ${id}`,
@@ -381,6 +430,8 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         ...(run.video?.wordsOff
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),
+        // COP-344: after the cut's own notes, which a convex test reads right under the finish line.
+        ...(run.awaitingSignOff ? finalApproveLines(run.template === true) : []),
         `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
       ];
     case "failed":
@@ -422,6 +473,17 @@ export function customerStoryboardLines(board: CustomerStoryboard): string[] {
     return [
       "This video isn't waiting for you to review its storyboard right now.",
       `Check where it is: exodus video status ${id}`,
+    ];
+  }
+  // COP-337: a stop that draws no picture before its approval is the takes' script, with nothing to wait for.
+  if (board.noPictureBeforeApproval) {
+    return [
+      "Script",
+      ...board.scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]),
+      "",
+      "No take gets a picture before you approve.",
+      `approve with: exodus video approve ${id}`,
+      `pick voices: exodus video voices ${id}`,
     ];
   }
   const stillDrawing = board.scenes.some((s) => s.frameStatus === "pending" || s.frameStatus === "drawing");

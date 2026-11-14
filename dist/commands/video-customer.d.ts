@@ -61,6 +61,7 @@ export interface CustomerRun {
     templateApproval?: {
         audition?: AuditionReview;
     };
+    template?: true;
     awaitingSignOff?: boolean;
     waiting: {
         ahead: number;
@@ -101,6 +102,10 @@ export interface CustomerRun {
     spendStopped?: {
         sentence?: string;
     };
+    planHold?: {
+        atBoard?: boolean;
+        beforePictures: boolean;
+    };
 }
 export declare function spendAskLines(run: {
     spendAsk?: {
@@ -139,6 +144,7 @@ export interface CustomerStoryboard {
     runId: string;
     stage: CustomerRunStage;
     scenes: CustomerRunScene[] | null;
+    noPictureBeforeApproval?: true;
 }
 export interface CustomerItem {
     sceneIndex: number;
@@ -185,6 +191,8 @@ export declare function customerAnswer<T extends {
 export declare function customerRunPage(dashboardUrl: string, runId: string): string;
 export declare function onOwnDashboard(serverUrl: string, dashboardUrl: string): string;
 export declare function customerStageIsWorking(stage: CustomerRunStage): boolean;
+export declare function finalApproveLines(template: boolean): string[];
+export declare function finalApprovedLines(template: boolean): string[];
 export declare function customerStageLines(run: CustomerRun, page: string): string[];
 export declare function customerStatusLines(run: CustomerRun, dashboardUrl: string): string[];
 export declare function customerStoryboardLines(board: CustomerStoryboard): string[];

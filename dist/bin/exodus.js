@@ -118,11 +118,11 @@ async function main() {
     const { command, flags, occurrences } = parseArgs(process.argv);
     if (["--version", "-v", "-V", "version"].includes(command)) {
         console.log(getVersion());
-        process.exit(0);
+        return;
     }
     if (!command || command === "help") {
         console.log(await buildHelp());
-        process.exit(0);
+        return;
     }
     let commandModule;
     try {
@@ -131,17 +131,18 @@ async function main() {
     catch {
         console.error(`Unknown command: "${command}"\n`);
         console.log(await buildHelp());
-        process.exit(1);
+        process.exitCode = 1;
+        return;
     }
     if (flags["help"] === true) {
         if (commandModule.helpText) {
-            console.log(commandModule.helpText);
+            console.log(commandModule.subcommandHelp?.() ?? commandModule.helpText);
         }
         else {
             console.log(`No detailed help is available for "${command}" yet.\n`);
             console.log(await buildHelp());
         }
-        process.exit(0);
+        return;
     }
     if (typeof commandModule.run !== "function") {
         console.error(`Command "${command}" does not export a run() function.`);

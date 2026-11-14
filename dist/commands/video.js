@@ -12,7 +12,7 @@ import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/scrip
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
@@ -879,6 +879,11 @@ function parkedByBuilderCheckpoint(run) {
 function parkedAtStoryboardGate(run, pausedNode) {
     return !parkedByBuilderCheckpoint(run) && GATE_NODE_KINDS.has(pausedNode.kind);
 }
+function noPictureBeforeApproval(run, pausedNode) {
+    return (run.moduleKey === "script-video" &&
+        pausedNode.kind === "storyboard" &&
+        !run.nodes.some((n) => n.kind === "scene-frames" && n.status !== "out-of-scope"));
+}
 function parkedAtFinalWatch(run) {
     return (!parkedByBuilderCheckpoint(run) &&
         run.nodes.some((n) => n.kind === "video" && n.status === "done"));
@@ -940,6 +945,7 @@ export function classifyRun(run) {
                 ...(isShowAd(run) ? { showAd: true } : {}),
                 ...(held ? { heldReason: held } : {}),
                 ...(run.blockingMap === true ? { blockingMap: true } : {}),
+                ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true } : {}),
             };
         }
         if (parkedAtFinalWatch(run)) {
@@ -966,6 +972,7 @@ export function classifyRun(run) {
                 ...(run.cutFailure?.sentence ? { cutFailure: run.cutFailure.sentence } : {}),
                 ...(run.appCut === "making" ? { appMakesCut: true } : {}),
                 ...(appCutOutdates(run) ? { appOutdatesCut: true } : {}),
+                ...(run.launchDoor === "template" ? { fromTemplate: true } : {}),
             };
         }
         return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -1219,9 +1226,17 @@ export function stopLines(stop, runId, runUrl, videoPage) {
     if (stop.at === "storyboard-gate") {
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
-            "Parked: the storyboard is waiting for your yes.",
-            `Read it:    exodus video storyboard ${runId}`,
-            `Approve it: exodus video approve ${runId}`,
+            ...(stop.noPictureBeforeApproval
+                ? [
+                    "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+                    `Read them:    exodus video storyboard ${runId}`,
+                    `Approve them: exodus video approve ${runId}`,
+                ]
+                : [
+                    "Parked: the storyboard is waiting for your yes.",
+                    `Read it:    exodus video storyboard ${runId}`,
+                    `Approve it: exodus video approve ${runId}`,
+                ]),
         ];
         if (stop.showAd) {
             lines.push(`Send back:  exodus video flag ${runId} --note "what's wrong"`);
@@ -1276,6 +1291,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                 return [
                     "Parked: the app's cut is made and waiting for your approval.",
                     `Approve it:      exodus video approve ${runId}`,
+                    ...finalApproveLines(stop.fromTemplate === true),
                     `Watch it here:   ${runUrl}`,
                     "Changed your mind? A clip redo, where the run allows one, has the app make the cut again; a one-take take is filmed again only by a new run.",
                 ];
@@ -1283,6 +1299,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             return [
                 "Parked: your cut is uploaded and waiting for your approval.",
                 `Approve it:      exodus video approve ${runId}`,
+                ...finalApproveLines(stop.fromTemplate === true),
                 `Watch it here:   ${runUrl}`,
                 "Changed your mind? You can still redo a clip and upload a new cut.",
             ];
@@ -4560,6 +4577,21 @@ export async function quoteFlow(runId, json, deps, privateExport = false) {
                     : `AUTHORIZED RAW REQUEST REVIEW: ${JSON.stringify(privateView)}`] : []),
         ] };
 }
+async function waitsForFinalApprove(runId, deps) {
+    try {
+        const read = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
+        if (!read?.ok)
+            return null;
+        const customer = customerAnswer(read.data);
+        if (customer)
+            return customer.stage === "ready" && customer.awaitingSignOff === true ? { template: customer.template === true } : null;
+        const run = asVideoRun(read.data);
+        return classifyRun(run).at === "final-watch" ? { template: run.launchDoor === "template" } : null;
+    }
+    catch {
+        return null;
+    }
+}
 export async function approveFlow(runId, opts, deps) {
     let requestQuote;
     if (opts.requestQuoteHash !== undefined) {
@@ -4574,6 +4606,7 @@ export async function approveFlow(runId, opts, deps) {
         }
         requestQuote = { quotes: prepared };
     }
+    const final = opts.json ? null : await waitsForFinalApprove(runId, deps);
     const res = await deps.post(APPROVE_PATH, {
         runId,
         ...(opts.acceptFindings ? { acceptFindings: true } : {}),
@@ -4609,7 +4642,7 @@ export async function approveFlow(runId, opts, deps) {
     return {
         code: 0,
         lines: [
-            "Approved.",
+            ...(final ? finalApprovedLines(final.template) : ["Approved."]),
             ...warnings,
             ...(summary.length > 0 ? ["", ...summary, ""] : []),
             `See what happens next: exodus video status ${runId}`,
@@ -5642,19 +5675,25 @@ async function statusVoiceLines(runId, deps) {
         return [];
     const sheet = (res.data ?? {});
     const cast = Array.isArray(sheet.cast) ? sheet.cast : [];
-    const summary = voiceSummaryLines(cast, []);
+    const summary = voiceSummaryLines(cast, [], { checkSkipped: true });
     if (summary.length === 0)
         return [];
     const clash = cast.some((row) => row.fit?.clash === true);
-    return ["", ...summary, ...(clash ? [VOICE_CLASH_HINT] : [])];
+    const unchecked = cast.some((row) => Boolean(row.voice) && row.availability === undefined);
+    return [
+        "",
+        ...summary,
+        ...(unchecked ? [`ElevenLabs is not asked here. To check these voices: exodus video voices ${runId}`] : []),
+        ...(clash ? [VOICE_CLASH_HINT] : []),
+    ];
 }
-function voiceSummaryLines(cast, notices) {
+function voiceSummaryLines(cast, notices, opts = {}) {
     const rows = cast.filter((row) => row.spokenScenes > 0 || row.voice !== null);
     const width = Math.max(0, ...rows.map((row) => row.name.length));
     const lines = rows.length > 0 ? ["Voices"] : [];
     for (const row of rows) {
         lines.push(row.voice
-            ? `  ${row.name.padEnd(width)}  →  ${voiceWords(row)}  ${availabilityWords(row)}${fitWords(row)}`
+            ? `  ${row.name.padEnd(width)}  →  ${voiceWords(row)}${opts.checkSkipped && row.availability === undefined ? "" : `  ${availabilityWords(row)}`}${fitWords(row)}`
             : `  ${row.name.padEnd(width)}  →  no voice chosen (keeps the generated voice)`);
     }
     for (const notice of notices)
@@ -6558,6 +6597,27 @@ export function parsePositional(args = process.argv.slice(3)) {
     if (asSet[0] === "swipe" && asSet[1] === "sheet" && asSet[2] === "set")
         return asSet;
     return read(new Set());
+}
+export function subcommandHelp(words = parsePositional()) {
+    const block = helpText.slice(helpText.indexOf("\nUsage:\n") + "\nUsage:\n".length);
+    const entries = [];
+    for (const line of block.slice(0, block.indexOf("\n\n")).split("\n")) {
+        if (line.startsWith("  exodus video "))
+            entries.push([line]);
+        else if (line.startsWith("    ") && entries.length > 0)
+            entries[entries.length - 1].push(line);
+    }
+    const typed = words.filter((word) => !word.startsWith("-"));
+    for (let n = typed.length; n > 0; n--) {
+        const said = typed.slice(0, n).join(" ");
+        const own = entries.filter(([line]) => {
+            const rest = line.slice("  exodus video ".length);
+            return rest === said || rest.startsWith(`${said} `);
+        });
+        if (own.length > 0)
+            return ["Usage:", ...own.flat(), "", "exodus video --help shows everything."].join("\n");
+    }
+    return null;
 }
 function flagString(flags, name) {
     const value = flags[name];

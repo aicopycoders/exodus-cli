@@ -492,6 +492,7 @@ export interface SwipeRunOptions extends SwipeOpts {
     onJob?: (job: string) => void;
     beforePaidAsk?: () => void;
 }
+export declare function breakdownPage(dashboardUrl: string, breakdownId: string): string;
 export declare function swipeBreakdownFlow(source: SwipeSource, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps, full?: boolean): Promise<FlowResult>;
 export declare function fullLines(data: Record<string, unknown>): string[];

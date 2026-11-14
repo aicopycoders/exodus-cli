@@ -22,7 +22,7 @@ export function parseArgs(argv) {
                 flags[key.slice(3)] = false;
                 i++;
             }
-            else if (next !== undefined && !next.startsWith("--")) {
+            else if (next !== undefined && !next.startsWith("--") && next !== "-h") {
                 flags[key] = next;
                 i += 2;
             }

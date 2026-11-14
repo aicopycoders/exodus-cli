@@ -527,6 +527,10 @@ const VIDEO_TYPES = {
     ".webm": "video/webm",
 };
 const BREAKDOWN_MAX_POLLS = 300;
+export function breakdownPage(dashboardUrl, breakdownId) {
+    return `${dashboardUrl.replace(/\/+$/, "")}/video?door=swipe&breakdown=${encodeURIComponent(breakdownId)}`;
+}
+const pageLine = (dashboardUrl, breakdownId) => `Their ad on the dashboard: ${breakdownPage(dashboardUrl, breakdownId)}`;
 export async function swipeBreakdownFlow(source, opts, deps) {
     const { json } = opts;
     let file = null;
@@ -597,9 +601,12 @@ export async function swipeBreakdownFlow(source, opts, deps) {
     if (!started.breakdownId)
         return failed("The server did not say which breakdown it started.", json);
     const { breakdownId, existing } = started;
-    const head = existing
-        ? [`This ad already has a breakdown: ${breakdownId}. It cost nothing.`]
-        : [`Breakdown ${breakdownId} started. It reads the ad on the team's keys, in a few minutes.`];
+    const head = [
+        existing
+            ? `This ad already has a breakdown: ${breakdownId}. It cost nothing.`
+            : `Breakdown ${breakdownId} started. It reads the ad on the team's keys, in a few minutes.`,
+        pageLine(deps.dashboardUrl, breakdownId),
+    ];
     if (!opts.wait) {
         return {
             code: 0,
@@ -658,16 +665,16 @@ async function waitForBreakdown(breakdownId, opts, deps, say) {
         return { code: 1, lines: [error, hint], json: { error, mayStillFinish: hint } };
     }
     const { read } = ended.done;
-    return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read), json: { breakdown: read.breakdown, template: read.template } };
+    return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template } };
 }
-function breakdownEndLines({ breakdown, template }) {
+function breakdownEndLines({ breakdown, template }, dashboardUrl) {
     if (breakdown.status === "failed") {
         return [
             `The breakdown failed: ${breakdown.error ?? "no reason was given."}`,
             "Reading the ad again is paid too: run the same exodus video swipe command with --yes, after the member's yes.",
         ];
     }
-    return ["The breakdown is done.", ...spentLines(breakdown), ...nextAfterBreakdown(breakdown._id, template)];
+    return ["The breakdown is done.", pageLine(dashboardUrl, breakdown._id), ...spentLines(breakdown), ...nextAfterBreakdown(breakdown._id, template)];
 }
 function spentLines(breakdown) {
     if (breakdown.reused)
@@ -729,9 +736,9 @@ export async function swipeStatusFlow(breakdownId, opts, deps, full = false) {
         ...breakdown.steps.map((step) => `  ${step.status.padEnd(width)}  ${step.label}`),
     ];
     if (breakdown.status === "done" || breakdown.status === "failed")
-        lines.push(...breakdownEndLines(read));
+        lines.push(...breakdownEndLines(read, deps.dashboardUrl));
     else
-        lines.push(`Wait for it: exodus video swipe status ${breakdown._id} --wait`);
+        lines.push(pageLine(deps.dashboardUrl, breakdown._id), `Wait for it: exodus video swipe status ${breakdown._id} --wait`);
     if (full)
         lines.push(...fullLines(isRecord(res.data) ? res.data : {}));
     return { code: 0, lines };
@@ -2807,6 +2814,7 @@ async function runSheetSource(item, videos, ctx) {
                 say(started.existing === true
                     ? `  This ad already has a breakdown: ${src.breakdownId}. It cost nothing.`
                     : `  Breakdown ${src.breakdownId} started. It reads the ad on the team's keys, in a few minutes.`);
+                say(`  ${pageLine(deps.dashboardUrl, src.breakdownId)}`);
             }
             else {
                 say(`  Breakdown ${src.breakdownId}, from before.`);

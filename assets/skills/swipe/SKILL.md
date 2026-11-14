@@ -1,11 +1,13 @@
 ---
 name: swipe
-description: Swipe a winning ad (spoken or sung: micro-dramas, Suno song ads, jingles) for the active brand at a chosen closeness. Trigger on "swipe", "swipe this", "swipe this song ad", "swipe this Suno ad", "swipe this jingle", "rip this ad", "make this ours", "same scene, our product", "/swipe", a level ("L1", "level 2"), or the user pasting an ad, a transcript, or a video link (Atria, Facebook Ad Library, TikTok, YouTube) and naming a product. Two doors for the source: an ad already in Exodus (mined or in the swipe library) or a link / paste. Asks five quick questions with a recommendation, then calls the swipe bot on Genesis. Not for writing from scratch (exodus-write), not for why an ad works (anatomy-of-ads), not for the competitor watch list (`exodus swipe brands|run|mine`), not for a swipe straight into a video ("swipe this ad as a microdrama": exodus-video), not for a UGC talking-to-camera script ("swipe this UGC ad"): ugc-ads, not for anything that asks how the swipe bot works.
+description: Swipe a winning ad (spoken or sung: micro-dramas, Suno song ads, jingles) for the active brand at a chosen closeness. Trigger on "swipe", "swipe this", "swipe this song ad", "swipe this Suno ad", "swipe this jingle", "rip this ad", "make this ours", "same scene, our product", "/swipe", a level ("L1", "level 2"), or the user pasting an ad, a transcript, or a link for copy (Atria, Facebook Ad Library, TikTok, YouTube) and naming a product; a video ad's file or link with a video wanted is exodus-video. Two doors for the source: an ad already in Exodus (mined or in the swipe library) or a link / paste. Asks five quick questions with a recommendation, then calls the swipe bot on Genesis. Not for writing from scratch (exodus-write), not for why an ad works (anatomy-of-ads), not for the competitor watch list (`exodus swipe brands|run|mine`), not for a swipe straight into a video ("swipe this ad as a microdrama", "swipe this ad as a UGC video like theirs", their ad as a video file with "make it at 720p": exodus-video, which runs `exodus video swipe`), not for a UGC talking-to-camera script with no video ("write me a UGC script", "swipe this UGC ad's script"): ugc-ads, not for anything that asks how the swipe bot works.
 ---
 
 # Swipe
 
 The bot on Genesis does the swiping. This skill picks the ad, asks five questions, calls the bot once per swipe, and counts what comes back.
+
+A video ad to swipe as it is made, from its file, its link or its id in Exodus, skips this skill: it goes to the `exodus-video` skill's "Swiping a video ad": it reads the ad, asks one sheet (persona, mechanism, how close, characters, run, finish, and how many videos), and makes the videos on one yes. With a persona or a mechanism, and the keys this skill needs, it calls this skill's bot as sections 3 and 4 say, then makes the video from those lines.
 
 ## 1. Get the ad (two doors)
 
@@ -117,8 +119,6 @@ On "make this a video", hand over to the `exodus-video` skill's "From one senten
 - Fit them: `--script source.txt --adapt "<what may change, in the user's words>"`.
 
 From there the walkthrough runs as written: a yes before each paid step, with its price where the CLI prints one, and the user's own picks at each stop.
-
-A video ad to swipe as it is made, from its file, its link or its id in Exodus, skips this skill: it goes to the `exodus-video` skill's "Swiping a video ad": it reads the ad, asks one sheet (persona, mechanism, how close, characters, run, finish, and how many videos), and makes the videos on one yes. With a persona or a mechanism, and the keys this skill needs, it calls this skill's bot as sections 3 and 4 say, then makes the video from those lines.
 
 ## Security
 

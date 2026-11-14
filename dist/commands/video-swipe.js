@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatApiError } from "../lib/format.js";
 import { missingRouteLine } from "../lib/route-support.js";
-import { customerAnswer, customerStageIsWorking } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, onOwnDashboard } from "./video-customer.js";
 import { asVideoRun, describeFetchFailure, RUN_PATH, startedThenWait, waitFlow } from "./video.js";
 export const SWIPE_BREAKDOWNS_PATH = "/api/v2/video/breakdowns";
 export const SWIPE_UPLOAD_URL_PATH = "/api/v2/video/breakdowns/upload-url";
@@ -142,9 +142,11 @@ export function planSwipeCommand(rest, occurrences) {
         if (named !== "write")
             return usage(kindElsewhere(named));
     }
-    const peopleFlag = last("people-max-usd") !== undefined ? "people-max-usd" : last("people")?.flag === "no-people" ? "no-people" : null;
+    const verbNamed = rest.find((word) => VERBS.includes(word));
+    const sheetSet = verbNamed === "sheet" && rest.slice(rest.indexOf("sheet") + 1).find((word) => !ON_WORDS.has(word.toLowerCase()) && !OFF_WORDS.has(word.toLowerCase())) === "set";
+    const peopleFlag = last("people-max-usd") !== undefined && !sheetSet ? "people-max-usd" : last("people")?.flag === "no-people" ? "no-people" : null;
     if (peopleFlag !== null) {
-        const named = rest.find((word) => VERBS.includes(word));
+        const named = verbNamed;
         if (named !== "write") {
             const who = named === undefined ? "video swipe --file, --url and --ad" : `video swipe ${named}`;
             return usage(peopleFlag === "people-max-usd"
@@ -312,10 +314,28 @@ function planSheet(words, occurrences, opts) {
             return usage("video swipe sheet people --max-usd goes with --yes, after the price.");
         return { kind: "sheet-people", swipeId, count, maxUsd, opts };
     }
+    const setMost = given[0] === "set" ? occurrences.filter((o) => o.flag === "people-max-usd").at(-1) : undefined;
+    let peopleMaxUsd;
+    if (setMost) {
+        const other = typedFlag([...FIND_PAID_FLAGS.filter((flag) => flag !== "yes"), ...FIND_OTHER_FLAGS, "brand", "limit", "count"]);
+        if (other)
+            return usage(`video swipe sheet set takes no --${other}. Its flags: --yes with --people-max-usd, and --json.`);
+        const most = setMost.value !== undefined && !setMost.value.startsWith("--") && setMost.value.trim() ? setMost.value.trim() : null;
+        if (most === null)
+            return usage("video swipe sheet set --people-max-usd needs the most the price showed, such as 1.02.");
+        if (!/^\d+(\.\d{1,2})?$/.test(most))
+            return usage(`video swipe sheet set --people-max-usd takes a dollar amount, such as 1.02 (got "${setMost.value}").`);
+        if (!opts.yes)
+            return usage("video swipe sheet set --people-max-usd goes with --yes, after the price.");
+        peopleMaxUsd = Number(most);
+    }
     const peopleOnly = typedFlag(["count"]);
     if (peopleOnly)
         return usage(`Only video swipe sheet people takes --${peopleOnly}.`);
-    const paid = typedFlag(FIND_PAID_FLAGS);
+    if (given[0] === "set" && opts.yes && peopleMaxUsd === undefined) {
+        return usage("video swipe sheet set takes --yes only with --people-max-usd <n>, the most the price of a choice that buys showed. A set that buys nothing takes neither.");
+    }
+    const paid = typedFlag(peopleMaxUsd !== undefined ? FIND_PAID_FLAGS.filter((flag) => flag !== "yes") : FIND_PAID_FLAGS);
     if (paid)
         return usage(`video swipe sheet buys nothing, so it takes no --${paid}. Its only flag is --json.`);
     const other = typedFlag([...FIND_OTHER_FLAGS, "brand", "limit"]);
@@ -362,7 +382,7 @@ function planSheet(words, occurrences, opts) {
         const value = pair.slice(at + 1);
         picks[row] = value === "" ? null : value;
     }
-    return { kind: "sheet-set", swipeId, picks, opts };
+    return { kind: "sheet-set", swipeId, picks, ...(peopleMaxUsd !== undefined ? { peopleMaxUsd } : {}), opts };
 }
 const KIND_CHECKED = "A kind this ad can't be made as is refused, with the kinds it can be made as, before the write is paid.";
 const templateKindLine = (template, kind) => kind ? `Kind of ad: ${template.kind.label}, the template's pick; the write uses ${kind}, the sheet's kind.` : `Kind of ad: ${template.kind.label}.`;
@@ -1369,10 +1389,11 @@ export async function swipeListFlow(opts, deps) {
     };
 }
 const FROM_WORDS = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad", recommended: "recommended" };
-function sheetOf(data) {
+export { onOwnDashboard };
+function sheetOf(data, own = "") {
     if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections))
         return null;
-    return { sheet: data.sheet, dashboardUrl: typeof data.dashboardUrl === "string" ? data.dashboardUrl : "" };
+    return { sheet: data.sheet, dashboardUrl: onOwnDashboard(typeof data.dashboardUrl === "string" ? data.dashboardUrl : "", own) };
 }
 function optionLines(row, above, swipeId) {
     const lines = [];
@@ -1385,6 +1406,10 @@ function optionLines(row, above, swipeId) {
             const address = option.pictureUrl ? `picture: ${option.pictureUrl}` : option.sampleUrl ? `sample: ${option.sampleUrl}` : "";
             lines.push(`    ${option.id}: ${option.label}${address ? `  ${address}` : ""}`);
         }
+    }
+    else if (options.some((option) => option.line)) {
+        for (const option of options)
+            lines.push(`    ${option.id} (${option.label})${option.line ? `: ${option.line}` : ""}`);
     }
     else if (options.length > 0 || !row.optionsStatus) {
         const cost = row.optionsCostUsd ? ` (showing them costs ${usd(row.optionsCostUsd)})` : "";
@@ -1401,6 +1426,7 @@ function optionLines(row, above, swipeId) {
         lines.push(`    List the voices: exodus video swipe sheet voices ${swipeId}`);
     return lines;
 }
+const SIZE_ROW_CUT_LINE = "The takes are filmed at this size; the app cuts the finished video at 1080x1920.";
 export function sheetLines(sheet, dashboardUrl) {
     const { swipeId } = sheet;
     const page = dashboardUrl ? [`The swipe on the dashboard: ${dashboardUrl}`] : [];
@@ -1425,6 +1451,8 @@ export function sheetLines(sheet, dashboardUrl) {
                 lines.push(`    ${fromWords}${row.why ? `: ${row.why}` : ""}`);
             else if (row.why)
                 lines.push(`    ${row.why}`);
+            if (row.id === "size" && row.value !== null)
+                lines.push(`    ${SIZE_ROW_CUT_LINE}`);
             lines.push(...optionLines(row, section.rows[section.rows.indexOf(row) - 1], swipeId));
             lines.push(`    ${row.usedBy ? `read by: ${row.usedBy}` : "no step reads it yet"}`);
         }
@@ -1443,18 +1471,18 @@ export async function swipeSheetReadFlow(swipeId, opts, deps) {
     const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`);
     if (!res.ok)
         return swipeError(res, opts.json);
-    const read = sheetOf(res.data);
+    const read = sheetOf(res.data, deps.dashboardUrl);
     if (!read)
         return failed("The server's answer about this sheet could not be read.", opts.json);
     if (opts.json)
         return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
     return { code: 0, lines: sheetLines(read.sheet, read.dashboardUrl) };
 }
-export async function swipeSheetSetFlow(swipeId, picks, opts, deps) {
+export async function swipeSheetSetFlow(swipeId, picks, opts, deps, peopleMaxUsd) {
     const readAgain = `Whether it was saved is not known. Read the sheet again: exodus video swipe sheet ${swipeId}`;
     let res;
     try {
-        res = await deps.post(`${SWIPE_SHEET_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, picks });
+        res = await deps.post(`${SWIPE_SHEET_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, picks, ...(peopleMaxUsd !== undefined ? { peopleMostUsd: peopleMaxUsd } : {}) });
     }
     catch (err) {
         const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
@@ -1467,11 +1495,11 @@ export async function swipeSheetSetFlow(swipeId, picks, opts, deps) {
         const refused = res.status >= 400 && res.status < 500;
         if (opts.json)
             return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, saved: refused ? false : "unknown" })] };
-        if (refused && /Nothing was (set|saved)\.$/.test(error))
+        if (refused && (/Nothing was (set|saved)\.$/.test(error) || /Nothing was set or paid\./.test(error)))
             return { code: 1, lines: [error] };
         return { code: 1, lines: [error, refused ? "Nothing was saved." : readAgain] };
     }
-    const read = sheetOf(res.data);
+    const read = sheetOf(res.data, deps.dashboardUrl);
     if (!read)
         return failed("The sheet was saved, but the server's answer could not be read: exodus video swipe sheet " + swipeId, opts.json);
     if (opts.json)
@@ -1496,13 +1524,13 @@ export async function swipeSheetSetFlow(swipeId, picks, opts, deps) {
         said.push(read.sheet.notice);
     return { code: 0, lines: [said.join(" "), "", ...sheetLines(read.sheet, read.dashboardUrl)] };
 }
-function priceOf(data) {
+function priceOf(data, own = "") {
     if (!isRecord(data) || !isRecord(data.price) || typeof data.price.priced !== "boolean")
         return null;
     const price = data.price;
     if (price.priced && (!isRecord(price.picked) || !Array.isArray(price.options)))
         return null;
-    return { price, dashboardUrl: typeof data.dashboardUrl === "string" ? data.dashboardUrl : "" };
+    return { price, dashboardUrl: onOwnDashboard(typeof data.dashboardUrl === "string" ? data.dashboardUrl : "", own) };
 }
 const lineUsd = (value) => (Math.abs(value * 100 - Math.round(value * 100)) < 1e-6 ? usd(value) : `$${value.toFixed(3)}`);
 function filmWords(row, scriptTakes) {
@@ -1564,7 +1592,7 @@ export async function swipeSheetPriceFlow(swipeId, opts, deps) {
     const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
     if (!res.ok)
         return swipeError(res, opts.json);
-    const read = priceOf(res.data);
+    const read = priceOf(res.data, deps.dashboardUrl);
     if (!read)
         return failed("The server's answer about this price could not be read.", opts.json);
     if (opts.json)
@@ -1606,8 +1634,8 @@ async function startNeedsYes(swipeId, step, json, again, choice, deps) {
         ],
     };
 }
-function optionsAnswerOf(data) {
-    const read = sheetOf(data);
+function optionsAnswerOf(data, own = "") {
+    const read = sheetOf(data, own);
     if (!read || !isRecord(data) || (data.row !== "who" && data.row !== "voice"))
         return null;
     return { ...data, sheet: read.sheet, dashboardUrl: read.dashboardUrl };
@@ -1644,7 +1672,7 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
         const look = refused ? "Nothing was made." : `Whether they are being made is not known. Read the sheet before asking again: exodus video swipe sheet ${swipeId}`;
         return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, status: res.status, error, started: refused ? false : "unknown" })] : [error, look] };
     }
-    const answer = optionsAnswerOf(res.data);
+    const answer = optionsAnswerOf(res.data, deps.dashboardUrl);
     if (!answer?.price)
         return failed(`The server's answer about these people could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);
     if (!answer.started) {
@@ -1670,7 +1698,7 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
     const ended = await poll(() => deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}&${SHEET_SOURCES_QUERY}`), (read) => {
         if (!read.ok)
             return { done: { refused: read } };
-        const sheet = sheetOf(read.data);
+        const sheet = sheetOf(read.data, deps.dashboardUrl);
         if (!sheet)
             return null;
         return rowOfSheet(sheet.sheet, "who")?.optionsStatus?.making === true ? null : { done: sheet };
@@ -1721,7 +1749,7 @@ export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
     const res = await deps.post(`${SWIPE_SHEET_OPTIONS_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, row: "voice" });
     if (!res.ok)
         return swipeError(res, opts.json);
-    const answer = optionsAnswerOf(res.data);
+    const answer = optionsAnswerOf(res.data, deps.dashboardUrl);
     if (!answer)
         return failed(`The server's answer about the voices could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);
     const row = rowOfSheet(answer.sheet, "voice");
@@ -1836,10 +1864,10 @@ export const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export function alreadyStartedOf(res) {
     if (res.ok || res.status !== 409 || !isRecord(res.data) || !isRecord(res.data.error))
         return null;
-    const { code, runId, url } = res.data.error;
+    const { code, runId } = res.data.error;
     if (code !== SWIPE_ALREADY_STARTED_CODE || typeof runId !== "string" || !runId)
         return null;
-    return { runId, url: typeof url === "string" ? url : "" };
+    return { runId };
 }
 export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, waitPeople = false) {
     const { json } = opts;
@@ -1868,16 +1896,18 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
         ...(again ? { again: true } : {}),
         ...(ask.maxUsd !== undefined ? { maxUsd: ask.maxUsd } : {}),
     });
+    const pageOf = (runId) => customerRunPage(deps.dashboardUrl, runId);
     const held = alreadyStartedOf(res);
     if (held) {
         const error = `Swipe ${swipeId} already has a video, so nothing was started: run ${held.runId}.`;
+        const heldPage = { runId: held.runId, url: pageOf(held.runId) };
         if (json)
-            return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, alreadyStarted: held })] };
+            return { code: 1, lines: [JSON.stringify({ ok: false, status: res.status, error, alreadyStarted: heldPage })] };
         return {
             code: 1,
             lines: [
                 error,
-                held.url ? `Watch it: ${held.url}` : `Check it: exodus video status ${held.runId}`,
+                `Watch it: ${heldPage.url}`,
                 `A second video from this swipe is paid on its own. Only on the member's yes to a second video: exodus video swipe start ${swipeId} --again --yes`,
             ],
         };
@@ -1887,9 +1917,9 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
     const customer = customerAnswer(res.data);
     const data = isRecord(res.data) ? res.data : {};
     const runId = customer?.runId ?? (typeof data.runId === "string" ? data.runId : "");
-    const url = customer?.dashboardUrl ?? (typeof data.url === "string" ? data.url : "");
     if (!runId)
         return failed("The server started the ad but did not say which run it is.", json);
+    const url = pageOf(runId);
     const card = isRecord(data.card) ? data.card : null;
     const label = (value) => (isRecord(value) && typeof value.label === "string" ? value.label : null);
     const head = [
@@ -3639,7 +3669,7 @@ export async function runSwipePlan(plan, deps, onProgressLine) {
         case "sheet":
             return swipeSheetReadFlow(plan.swipeId, opts, deps);
         case "sheet-set":
-            return swipeSheetSetFlow(plan.swipeId, plan.picks, opts, deps);
+            return swipeSheetSetFlow(plan.swipeId, plan.picks, opts, deps, plan.peopleMaxUsd);
         case "sheet-price":
             return swipeSheetPriceFlow(plan.swipeId, opts, deps);
         case "sheet-people":

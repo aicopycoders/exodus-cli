@@ -57,6 +57,20 @@ export function customerAnswer(data) {
 export function customerRunPage(dashboardUrl, runId) {
     return `${dashboardUrl}/video/runs/${runId}`;
 }
+export function onOwnDashboard(serverUrl, dashboardUrl) {
+    if (serverUrl === "" || dashboardUrl === "")
+        return serverUrl;
+    try {
+        const url = new URL(serverUrl);
+        if (url.protocol !== "http:" && url.protocol !== "https:")
+            return serverUrl;
+    }
+    catch {
+        return serverUrl;
+    }
+    const rest = serverUrl.replace(/^https?:\/\/[^/?#]*/i, "");
+    return `${dashboardUrl.replace(/\/+$/, "")}${rest}`;
+}
 export function customerStageIsWorking(stage) {
     return (stage === "waiting" ||
         stage === "planning" ||

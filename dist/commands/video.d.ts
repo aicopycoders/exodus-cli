@@ -635,6 +635,7 @@ export type MusicChoice = {
 export declare function planMusicChoice(occurrences: FlagOccurrence[]): MusicChoice;
 export declare function planVideoStart(flags: Record<string, string | boolean>, occurrences: FlagOccurrence[]): VideoStartPlan;
 export declare function startScriptFlow(opts: ScriptStartOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare const WAIT_LOST_CODE = 2;
 export declare function waitFlow(runId: string, opts: {
     json: boolean;
     url?: string;

@@ -1,6 +1,6 @@
 ---
 name: ugc-preproduction
-description: Turn a UGC script into a realistic phone-filmed video with the UGC video kit's preproduction sheet. Use when someone pastes a talking-to-camera script and wants it made into a video, or says "run the preproduction sheet", "start the sheet" or "make this UGC script into a video".
+description: Turn a UGC script into a realistic phone-filmed video with the UGC video kit's preproduction sheet. Use when someone pastes a talking-to-camera script and wants it made into a video, or says "run the preproduction sheet", "start the sheet" or "make this UGC script into a video". Not for swiping their ad: their ad as a video file or a video link, made into a video for the member's product ("as a UGC video like theirs", "make it at 720p"), is `exodus-video` (`exodus video swipe`).
 ---
 
 # UGC preproduction

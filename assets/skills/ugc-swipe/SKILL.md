@@ -1,9 +1,11 @@
 ---
 name: ugc-swipe
-description: Swipe a UGC talking-head ad that already ran into a version for the user's product, at a closeness they pick (1 same script, 2 same beats with a new person, 3 same point with a fresh script). Trigger on "swipe this UGC", "swipe this yapper ad", "rewrite this creator ad for my product", "make this ad ours", a pasted UGC transcript with a product, or the ugc-ads front door routing here. The swiping happens in the ugc-swipe-agent bot on Genesis. Not for writing from scratch (ugc-write) or from a type (ugc-template).
+description: Swipe the SCRIPT of a UGC talking-head ad that already ran into a version for the user's product, text with no video, at a closeness they pick (1 same script, 2 same beats with a new person, 3 same point with a fresh script). Trigger on "swipe this UGC script", "swipe this yapper ad's script", "rewrite this creator ad's script for my product", a pasted UGC transcript with a product, or the ugc-ads front door routing here. The swiping happens in the ugc-swipe-agent bot on Genesis. Not for a video: their ad given as a video file or a video link, or a video asked for ("as a UGC video like theirs", "make it at 720p"), is `exodus-video` (`exodus video swipe`), unless the member asks for the script only. Not for writing from scratch (ugc-write) or from a type (ugc-template).
 ---
 
 # UGC swipe
+
+This writes a script; it films nothing. A member who gave their ad as a video file or a video link, or asked for a video ("make it at 720p"), wants `exodus-video`: `npx @aicopycoders/exodus video swipe`, given the file's full path or the link. Go there unless they asked for the script only, or Video is not switched on for them (`exodus video swipe` answers "Not found" then): swipe the script here instead of stopping.
 
 ## 1. Get the ad
 A pasted transcript is best. A link: get the transcript with `python3 -I .claude/skills/swipe/scripts/getad.py <link>` if that skill is installed (it needs ElevenLabs credit). A swipe number from the UGC swipe page: read its transcript from `research/ai-video-ads/ugc/1-swipe/ads-full.json` (field `n`) when that file is present. Save it to `ugc/<brand>/ad-<id>.txt`.

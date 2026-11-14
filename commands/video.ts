@@ -40,6 +40,7 @@ import {
   type CustomerVoices,
   type ScriptTidied,
   spendAskLines,
+  onOwnDashboard,
 } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 
@@ -232,6 +233,7 @@ The whole loop, in order:
 
 Usage:
   exodus video status <runId> [--rejected-draft] [--json]
+  exodus video wait <runId> [--json]
   exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
   exodus video song <runId> [--json]
   exodus video song approve <runId> --master <masterSha256> [--json]
@@ -273,6 +275,7 @@ Usage:
   exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
   exodus video swipe sheet <swipeId> [--json]
   exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...] [--json]
+  exodus video swipe sheet set <swipeId> <row>=<value> --yes --people-max-usd <n> [--json]
   exodus video swipe sheet price <swipeId> [--json]
   exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
   exodus video swipe sheet voices <swipeId> [--json]
@@ -597,7 +600,9 @@ swipe sheet is free too: the saved sheet, the choices the server keeps for a
 written swipe, and the swipe's page on the dashboard, which does not show the
 saved sheet yet. Each row says its value, where it comes from and why, and
 which step reads it. swipe sheet set <swipeId> <row>=<value> changes rows, all
-or none; <row>= clears one. The start copies the saved sheet into the video; a
+or none; <row>= clears one. A choice that buys something is refused with its
+price; set it again with --yes --people-max-usd <n>, the most that price
+showed. The start copies the saved sheet into the video; a
 change after it is for the next video. A kind of ad with no sheet has nothing
 to set. swipe sheet price <swipeId> is free: the price of the video at the
 sheet's rows and at each size and takes, with the most it can cost. swipe
@@ -1300,6 +1305,13 @@ export const defaultDeps: VideoDeps = {
   dashboardUrl: getDashboardUrl(),
 };
 
+/** The server's own sentence for a run that isn't the caller's (code RUN_NOT_FOUND), or undefined. */
+function runNotYoursMessage(res: ApiResponse<unknown>): string | undefined {
+  if (res.status !== 404) return undefined;
+  const err = (res.data as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+  return err && err.code === "RUN_NOT_FOUND" && typeof err.message === "string" ? err.message : undefined;
+}
+
 /** The video gate answers a plain 404 rather than a 403, so a key that may not
  *  use video and a run id that does not exist are the same answer on the wire.
  *  Both causes are named because neither can be ruled out from here. */
@@ -1312,6 +1324,9 @@ export const VIDEO_NOT_FOUND_MESSAGE =
 export function videoApiError(res: ApiResponse<unknown>): string {
   const behind = missingRouteLine(res, "exodus video");
   if (behind) return behind;
+  // #4625 proof: a server that knows the key may use video says plainly when the run isn't the caller's.
+  const notYours = runNotYoursMessage(res);
+  if (notYours) return notYours;
   if (res.status === 404) return VIDEO_NOT_FOUND_MESSAGE;
   return formatApiError(res);
 }
@@ -2068,6 +2083,16 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     // because the common case is that the cut is right. Nothing here promises
     // the approval will be allowed; the server decides that (#1856).
     if (stop.cutAttached) {
+      // COP-319: the app's own cut is not the member's upload; a redo has the app make it again.
+      if (stop.appCutOnRun) {
+        return [
+          "Parked: the app's cut is made and waiting for your approval.",
+          `Approve it:      exodus video approve ${runId}`,
+          `Watch it here:   ${runUrl}`,
+          // COP-319 review: a one-take take's redo is refused on the server (convex workflows.ts oneTakeSceneRedoRefused).
+          "Changed your mind? A clip redo, where the run allows one, has the app make the cut again; a one-take take is filmed again only by a new run.",
+        ];
+      }
       return [
         "Parked: your cut is uploaded and waiting for your approval.",
         `Approve it:      exodus video approve ${runId}`,
@@ -3350,7 +3375,8 @@ export async function startFlow(opts: StartOptions, deps: VideoDeps): Promise<Fl
     return { code: 1, lines: ["The server started the ad but did not say which run it is."] };
   }
   const runId = started.runId;
-  const url = started.url ?? reviewUrl(deps.dashboardUrl, { _id: runId });
+  // COP-319 review: the server's page, on the dashboard this CLI talks to.
+  const url = started.url ? onOwnDashboard(started.url, deps.dashboardUrl) : reviewUrl(deps.dashboardUrl, { _id: runId });
 
   if (!opts.wait) {
     const lines = [
@@ -5211,7 +5237,8 @@ export async function startScriptFlow(
     return { code: 1, lines: ["The server started the ad but did not say which run it is."] };
   }
   const runId = started.runId;
-  const url = typeof started.url === "string" ? started.url : "";
+  // COP-319 review: the server's page, on the dashboard this CLI talks to.
+  const url = typeof started.url === "string" ? onOwnDashboard(started.url, deps.dashboardUrl) : "";
   const card = isResolvedCard(started.card) ? started.card : null;
   const video = startedVideoChoice(started.videoChoice);
   const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
@@ -5266,7 +5293,9 @@ async function customerStartedResult(
   opts: ScriptStartOptions,
   deps: VideoDeps,
 ): Promise<FlowResult> {
-  const { runId, dashboardUrl } = started;
+  // COP-319 review: the video's own page on the dashboard this CLI talks to, not the server's host.
+  const { runId } = started;
+  const dashboardUrl = customerRunPage(deps.dashboardUrl, runId);
   const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
   const written = writtenOf(started.written);
   const rewritten = writtenOf(started.rewritten);
@@ -5304,6 +5333,10 @@ async function customerStartedResult(
 
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLLS = 720;
+/** COP-319 review: reads in a row that throw or answer 5xx or 429 before a wait stops; each waits the poll's pause. */
+const WAIT_MAX_MISSES = 3;
+/** The exit code of a wait the server stopped answering: the run goes on, so it is not a failed run's 1. */
+export const WAIT_LOST_CODE = 2;
 
 export async function waitFlow(
   runId: string,
@@ -5329,16 +5362,41 @@ export async function waitFlow(
     else lines.push(line);
   };
 
+  let misses = 0;
   for (let poll = 0; poll < maxPolls; poll++) {
-    if (poll > 0) await deps.sleep(interval);
-    const res = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
+    // One pause before every read but the first, a read tried again after a miss included.
+    if (poll > 0 || misses > 0) await deps.sleep(interval);
+    // COP-319 review: a dropped connection, a server error or a rate limit says nothing of the run, which goes on.
+    const res = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`).catch(() => null);
+    if (res === null || res.status >= 500 || res.status === 429) {
+      if (++misses < WAIT_MAX_MISSES) {
+        poll -= 1;
+        continue;
+      }
+      const lost = `The server did not answer three times in a row, so the wait stopped. The run goes on; look again with: exodus video wait ${runId}`;
+      return {
+        code: WAIT_LOST_CODE,
+        lines: opts.json ? [JSON.stringify({ runId, stop: { at: "running" }, lost: true })] : [...lines, lost],
+      };
+    }
+    misses = 0;
     if (!res.ok) {
       const failed = errorResult(res, opts.json);
-      return { code: failed.code, lines: [...lines, ...failed.lines] };
+      return { code: failed.code, lines: opts.json ? failed.lines : [...lines, ...failed.lines] };
     }
     const customer = customerAnswer<CustomerRun>(res.data);
     if (customer) {
       const page = customerRunPage(deps.dashboardUrl, runId);
+      // Landing review: the stop at the estimate keeps the run's working stage ("filming"), so it is asked first, or a
+      // wait would read on for its hour while the run waits for the member's answer.
+      if (customer.spendAsk) {
+        return {
+          code: 0,
+          lines: opts.json
+            ? [JSON.stringify(customer)]
+            : [...lines, ...spendAskLines(customer, runId), `Watch it on the dashboard: ${page}`],
+        };
+      }
       if (customerStageIsWorking(customer.stage) && !customer.templateApproval?.audition) {
         progress(customerStageLines(customer, page)[0]);
         continue;
@@ -5352,6 +5410,16 @@ export async function waitFlow(
     }
     const run = asVideoRun(res.data);
     const stop = classifyRun(run);
+    // Landing review: the stop at the estimate is a park ("spend") that waits for the member's answer, which a plain
+    // "waiting on someone" did not name.
+    if (run.spendAsk) {
+      return {
+        code: 0,
+        lines: opts.json
+          ? [JSON.stringify({ runId, stop, spendAsk: run.spendAsk, status: run.status, url: opts.url })]
+          : [...lines, ...spendAskLines(run, runId), `Open it: ${reviewUrl(deps.dashboardUrl, run)}`],
+      };
+    }
     if (stop.at === "running") {
       progress(
         stop.autoRedoScenes?.length
@@ -5429,14 +5497,55 @@ function itemWord(item: NodeItem | undefined): string {
   return ITEM_STATUS_WORD[item.status] ?? item.status;
 }
 
+/** COP-319: said under a delivered run's last line when the app made its cut. */
+const APP_CUT_SIZE_LINE = "The app's cut is 1080x1920, whatever size the clips were filmed at.";
+
+/**
+ * #4618: the choice a held One-take take's words end on (scout ugc-one-take-steps.ts keptTail, with
+ * video/lib/ugcOneTakeRedo.ts ONE_TAKE_HELD_CHOICE; a test reads both files). Once the take was kept, or the run
+ * delivered its film, the choice is made and the keep it asks for is refused, so status says it was kept.
+ */
+const HELD_CHOICE_TAIL = "is kept for you to watch: keep it as it is, or start a new run to film it again.";
+const KEPT_TAIL = "was kept as it is.";
+
+function heldChoiceMade(text: string): string {
+  return text.split(HELD_CHOICE_TAIL).join(KEPT_TAIL);
+}
+
+/**
+ * COP-319: a step's note that says the ad is as it was meant to be, which status's words leave out. The voiceover's note
+ * on an ad whose voices live in its scenes (a One-take run, an acted ad) says it has no narration track and is
+ * unaffected: byte for byte convex/lib/workflow/legacyWarnings.ts MODULE_NO_NARRATION_WARNING (a test reads both files).
+ */
+const BY_DESIGN_WARNINGS: ReadonlySet<string> = new Set([
+  "this ad has no narration track — its voices live in the scenes themselves, so there was nothing to voice over. Your ad is unaffected.",
+]);
+
+/**
+ * The run says by its own status that it has no narration by design, with no kind named: its voiceover step finished
+ * done and empty with that note, the one way that step settles on purpose with nothing (scout voiceover.ts, the silent
+ * plan; convex workflows.ts EMPTY_ON_PURPOSE_PRODUCER_KINDS counts it as no slot at all).
+ */
+function byDesign(node: VideoRun["nodes"][number] | undefined): boolean {
+  return (
+    node !== undefined &&
+    node.kind === "voiceover" &&
+    node.status === "done" &&
+    (node.outputs ?? []).length === 0 &&
+    node.warning !== undefined &&
+    BY_DESIGN_WARNINGS.has(node.warning)
+  );
+}
+
 /**
  * #1903: a queued run that has ALREADY worked — an approved gate, a retry, or a
  * long step handing itself to a fresh worker. "Queued" alone reads like nothing
  * has happened yet, which is what made a hand-over look like a loss. Same rule
- * and same words as the run page's queued sentence.
+ * as the run page's queued sentence. COP-319: no "finished" in it, which a
+ * member's status watch read as the end of the run.
  */
 const CARRYING_ON_LINE =
-  "Waiting for a worker to carry on. Everything finished so far is kept — the run picks up from there by itself.";
+  "Waiting for a worker to carry on. The run is still going: what it made so far is kept, and it picks up from there by itself.";
 
 function carryingOn(run: VideoRun): boolean {
   return (
@@ -5503,6 +5612,15 @@ export async function statusFlow(
   const warnings = run.nodes
     .filter((n) => n.warning)
     .map((n) => ({ nodeId: n.nodeId, step: n.kind, warning: n.warning }));
+  // #4618: a held take's choice is made once the run delivered its film, or once every take its words hold was kept.
+  const delivered = stop.at === "finished" && !runStopped(run);
+  const holdRows = items.filter((i) => i.itemKind === "clip" && i.findings?.some((f) => f.detail.includes(HELD_CHOICE_TAIL)));
+  const choiceMade = (row: NodeItem | undefined) => delivered || row?.acceptedAsIs !== undefined;
+  const everyHoldKept = delivered || (holdRows.length > 0 && holdRows.every((r) => r.acceptedAsIs !== undefined));
+  // COP-319 review: the words leave out a step's by-design note; --json keeps every warning.
+  const said = warnings
+    .filter((w) => !byDesign(run.nodes.find((n) => n.nodeId === w.nodeId)))
+    .map((w) => (everyHoldKept && w.warning ? { ...w, warning: heldChoiceMade(w.warning) } : w));
 
   if (json) {
     return {
@@ -5601,7 +5719,7 @@ export async function statusFlow(
     // healthy gated run was cancelled over exactly that.
     ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead)] : []),
     ...planFailureLines(failedStoryboard, runId),
-    ...warnings.map((w) => `Heads-up (${w.step}): ${w.warning}`),
+    ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
     ...(run.director ? ["", ...directorLines(run.director)] : []),
   ];
 
@@ -5643,7 +5761,8 @@ export async function statusFlow(
         printDisplacedHistory(lines, row.voiceover.lastRedo);
       }
       if (row.frame?.lastRedo) lines.push(`       picture: ${row.frame.lastRedo.label}`);
-      for (const finding of row.clip?.findings ?? []) {
+      for (const found of row.clip?.findings ?? []) {
+        const finding = choiceMade(row.clip) ? { ...found, detail: heldChoiceMade(found.detail) } : found;
         // Local night fix F1 and F2(b): the words a kept one-take take said in place of the script's, and its label
         // check, are the worker's own plain sentences for the member, printed as they are.
         if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
@@ -5707,9 +5826,13 @@ export async function statusFlow(
         ? "Final cut: made. This run delivers it by itself; look again in a minute."
         : hasFinal && appIsCutting(stop)
           ? "Final cut: the app makes it again now; look again in a minute."
-          : hasFinal
-            ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
-            : "Final cut: not uploaded yet.",
+          : hasFinal && stop.at === "final-watch" && stop.appCutOnRun
+            ? `Final cut: made by the app. Approve it with: exodus video approve ${runId}`
+            : hasFinal
+              ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
+              : "Final cut: not uploaded yet.",
+    // COP-319: the app cuts every film at 1080x1920 (first-cut.mjs WIDTH, HEIGHT), whatever the takes' size.
+    ...(hasFinal && stop.at === "finished" && hasAppCut(items) ? [APP_CUT_SIZE_LINE] : []),
     // COP-300: the cut's check against its own sound, under the cut it was made on.
     ...(run.cutCheck ?? []),
   );
@@ -8413,7 +8536,9 @@ export async function uploadFlow(
   if (!attached.ok) return errorResult(attached, json);
   const customerFinal = customerAnswer<CustomerFinal>(attached.data);
   if (customerFinal) {
-    const { finalWatchUrl, delivered } = customerFinal;
+    const { delivered } = customerFinal;
+    // COP-319 review: the server's page, on the dashboard this CLI talks to.
+    const finalWatchUrl = onOwnDashboard(customerFinal.finalWatchUrl, deps.dashboardUrl);
     if (json) {
       return {
         code: 0,
@@ -8429,7 +8554,7 @@ export async function uploadFlow(
     };
   }
   const final = attached.data as { finalWatchUrl?: string; delivered?: boolean };
-  const finalWatchUrl = final.finalWatchUrl ?? reviewUrl(deps.dashboardUrl, { _id: runId });
+  const finalWatchUrl = final.finalWatchUrl ? onOwnDashboard(final.finalWatchUrl, deps.dashboardUrl) : reviewUrl(deps.dashboardUrl, { _id: runId });
   // #2980: a One-shot run is delivered by the upload itself. Absent on older
   // backends, where the upload never delivers.
   const delivered = final.delivered === true;
@@ -8833,6 +8958,8 @@ const WRITE_VALUE_FLAGS = new Set(["kind", "people-max-usd"]);
 const START_VALUE_FLAGS = new Set(["max-usd"]);
 /** COP-265 part 7: --count and --max-usd take a value only on `swipe sheet people`. */
 const SHEET_PEOPLE_VALUE_FLAGS = new Set(["count", "max-usd"]);
+/** U13 (COP-302): --people-max-usd takes a value on `swipe sheet set` too (the most a choice that buys showed). */
+const SHEET_SET_VALUE_FLAGS = new Set(["people-max-usd"]);
 
 export function parsePositional(args = process.argv.slice(3)): string[] {
   const read = (valueFlags: ReadonlySet<string>): string[] => {
@@ -8860,6 +8987,8 @@ export function parsePositional(args = process.argv.slice(3)): string[] {
   if (asStart[0] === "swipe" && asStart[1] === "start") return asStart;
   const asPeople = read(SHEET_PEOPLE_VALUE_FLAGS);
   if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && asPeople[2] === "people") return asPeople;
+  const asSet = read(SHEET_SET_VALUE_FLAGS);
+  if (asSet[0] === "swipe" && asSet[1] === "sheet" && asSet[2] === "set") return asSet;
   return read(new Set());
 }
 
@@ -8945,6 +9074,7 @@ export async function run(
     "pick",
     "map",
     "move",
+    "wait",
   ];
   // Not `=== true`: `--catalog` typed before the run id takes the id as its
   // value in `flags`, though the id still reaches `rest` as a positional.
@@ -8995,6 +9125,10 @@ export async function run(
     return printResult(await songListenFlow(runId, json, defaultDeps));
   }
   if (sub === "storyboard") return printResult(await storyboardFlow(runId, json, defaultDeps));
+  // COP-319: the skill and `video pull` name it; the same wait as `start --wait`, for a run already started.
+  if (sub === "wait") {
+    return printResult(await waitFlow(runId, { json, onProgressLine: json ? undefined : (line) => console.log(line) }, defaultDeps));
+  }
   if (sub === "picks") {
     // Not `=== true`: --redo always carries its slot as a value.
     const redo = flagString(flags, "redo");

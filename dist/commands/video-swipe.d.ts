@@ -1,5 +1,6 @@
 import type { FlagOccurrence } from "../lib/args.js";
 import type { ApiResponse } from "../lib/client.js";
+import { onOwnDashboard } from "./video-customer.js";
 import { type FlowResult, type VideoDeps } from "./video.js";
 export declare const SWIPE_BREAKDOWNS_PATH = "/api/v2/video/breakdowns";
 export declare const SWIPE_UPLOAD_URL_PATH = "/api/v2/video/breakdowns/upload-url";
@@ -230,6 +231,13 @@ export interface SavedSheetRow {
         label: string;
         pictureUrl?: string;
         sampleUrl?: string;
+        line?: string;
+        price?: {
+            aboutUsd: number;
+            mostUsd: number;
+            title: string;
+            line: string;
+        };
     }> | null;
     optionsCostUsd: number | null;
     usedBy: string | null;
@@ -424,6 +432,7 @@ export type SwipePlan = {
     kind: "sheet-set";
     swipeId: string;
     picks: Record<string, string | null>;
+    peopleMaxUsd?: number;
     opts: SwipeOpts;
 } | {
     kind: "sheet-price";
@@ -532,9 +541,10 @@ export declare function swipeFindFlow(ask: FindAsk, opts: SwipeOpts, deps: Video
 export declare function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export { onOwnDashboard };
 export declare function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[];
 export declare function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
-export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps, peopleMaxUsd?: number): Promise<FlowResult>;
 export declare function priceLines(price: SwipePrice, dashboardUrl: string): string[];
 export declare function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetPeopleFlow(swipeId: string, count: number | null, maxUsd: number | null, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
@@ -544,7 +554,6 @@ export declare const ANIMAL_GOES_ON_LINE = "The animal is still being found or d
 export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     runId: string;
-    url: string;
 } | null;
 export declare function swipeStartFlow(swipeId: string, ask: StartAsk, opts: SwipeRunOptions, deps: VideoDeps, again?: boolean, waitPeople?: boolean): Promise<FlowResult>;
 export declare const SHEET_FIELDS: readonly ["sources", "product", "personas", "mechanism", "guidance", "mode", "closeness", "look", "script", "kind", "characters", "finish", "oneShot", "style", "title", "music"];
@@ -687,4 +696,3 @@ export declare function swipeSheetFlow(given: string, opts: SheetFlowOptions, de
 export declare function runSwipePlan(plan: Exclude<SwipePlan, {
     kind: "usage";
 }>, deps: VideoDeps, onProgressLine?: (line: string) => void): Promise<FlowResult>;
-export {};

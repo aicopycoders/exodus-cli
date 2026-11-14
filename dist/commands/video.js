@@ -12,7 +12,7 @@ import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/scrip
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
@@ -184,6 +184,7 @@ The whole loop, in order:
 
 Usage:
   exodus video status <runId> [--rejected-draft] [--json]
+  exodus video wait <runId> [--json]
   exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
   exodus video song <runId> [--json]
   exodus video song approve <runId> --master <masterSha256> [--json]
@@ -225,6 +226,7 @@ Usage:
   exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait] [--json]
   exodus video swipe sheet <swipeId> [--json]
   exodus video swipe sheet set <swipeId> <row>=<value> [<row>=<value> ...] [--json]
+  exodus video swipe sheet set <swipeId> <row>=<value> --yes --people-max-usd <n> [--json]
   exodus video swipe sheet price <swipeId> [--json]
   exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
   exodus video swipe sheet voices <swipeId> [--json]
@@ -549,7 +551,9 @@ swipe sheet is free too: the saved sheet, the choices the server keeps for a
 written swipe, and the swipe's page on the dashboard, which does not show the
 saved sheet yet. Each row says its value, where it comes from and why, and
 which step reads it. swipe sheet set <swipeId> <row>=<value> changes rows, all
-or none; <row>= clears one. The start copies the saved sheet into the video; a
+or none; <row>= clears one. A choice that buys something is refused with its
+price; set it again with --yes --people-max-usd <n>, the most that price
+showed. The start copies the saved sheet into the video; a
 change after it is for the next video. A kind of ad with no sheet has nothing
 to set. swipe sheet price <swipeId> is free: the price of the video at the
 sheet's rows and at each size and takes, with the most it can cost. swipe
@@ -779,6 +783,12 @@ export const defaultDeps = {
     now: () => Date.now(),
     dashboardUrl: getDashboardUrl(),
 };
+function runNotYoursMessage(res) {
+    if (res.status !== 404)
+        return undefined;
+    const err = res.data?.error;
+    return err && err.code === "RUN_NOT_FOUND" && typeof err.message === "string" ? err.message : undefined;
+}
 export const VIDEO_NOT_FOUND_MESSAGE = "video isn't enabled for this key\n" +
     "One of three things: that run id doesn't exist on this brand, this command is for admins only " +
     "(director, status --rejected-draft, retry-clip, revoice, broll), or video isn't " +
@@ -787,6 +797,9 @@ export function videoApiError(res) {
     const behind = missingRouteLine(res, "exodus video");
     if (behind)
         return behind;
+    const notYours = runNotYoursMessage(res);
+    if (notYours)
+        return notYours;
     if (res.status === 404)
         return VIDEO_NOT_FOUND_MESSAGE;
     return formatApiError(res);
@@ -1259,6 +1272,14 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             ];
         }
         if (stop.cutAttached) {
+            if (stop.appCutOnRun) {
+                return [
+                    "Parked: the app's cut is made and waiting for your approval.",
+                    `Approve it:      exodus video approve ${runId}`,
+                    `Watch it here:   ${runUrl}`,
+                    "Changed your mind? A clip redo, where the run allows one, has the app make the cut again; a one-take take is filmed again only by a new run.",
+                ];
+            }
             return [
                 "Parked: your cut is uploaded and waiting for your approval.",
                 `Approve it:      exodus video approve ${runId}`,
@@ -2075,7 +2096,7 @@ export async function startFlow(opts, deps) {
         return { code: 1, lines: ["The server started the ad but did not say which run it is."] };
     }
     const runId = started.runId;
-    const url = started.url ?? reviewUrl(deps.dashboardUrl, { _id: runId });
+    const url = started.url ? onOwnDashboard(started.url, deps.dashboardUrl) : reviewUrl(deps.dashboardUrl, { _id: runId });
     if (!opts.wait) {
         const lines = [
             `Started ad run ${runId}`,
@@ -3787,7 +3808,7 @@ export async function startScriptFlow(opts, deps) {
         return { code: 1, lines: ["The server started the ad but did not say which run it is."] };
     }
     const runId = started.runId;
-    const url = typeof started.url === "string" ? started.url : "";
+    const url = typeof started.url === "string" ? onOwnDashboard(started.url, deps.dashboardUrl) : "";
     const card = isResolvedCard(started.card) ? started.card : null;
     const video = startedVideoChoice(started.videoChoice);
     const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
@@ -3830,7 +3851,8 @@ export async function startScriptFlow(opts, deps) {
     return opts.json ? waitJsonWith(waited, facts) : waited;
 }
 async function customerStartedResult(started, opts, deps) {
-    const { runId, dashboardUrl } = started;
+    const { runId } = started;
+    const dashboardUrl = customerRunPage(deps.dashboardUrl, runId);
     const tidied = started.tidied === undefined ? null : scriptTidiedOf(started.tidied);
     const written = writtenOf(started.written);
     const rewritten = writtenOf(started.rewritten);
@@ -3868,6 +3890,8 @@ async function customerStartedResult(started, opts, deps) {
 }
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLLS = 720;
+const WAIT_MAX_MISSES = 3;
+export const WAIT_LOST_CODE = 2;
 export async function waitFlow(runId, opts, deps) {
     const interval = opts.intervalMs ?? POLL_INTERVAL_MS;
     const maxPolls = opts.maxPolls ?? MAX_POLLS;
@@ -3885,17 +3909,38 @@ export async function waitFlow(runId, opts, deps) {
         else
             lines.push(line);
     };
+    let misses = 0;
     for (let poll = 0; poll < maxPolls; poll++) {
-        if (poll > 0)
+        if (poll > 0 || misses > 0)
             await deps.sleep(interval);
-        const res = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
+        const res = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`).catch(() => null);
+        if (res === null || res.status >= 500 || res.status === 429) {
+            if (++misses < WAIT_MAX_MISSES) {
+                poll -= 1;
+                continue;
+            }
+            const lost = `The server did not answer three times in a row, so the wait stopped. The run goes on; look again with: exodus video wait ${runId}`;
+            return {
+                code: WAIT_LOST_CODE,
+                lines: opts.json ? [JSON.stringify({ runId, stop: { at: "running" }, lost: true })] : [...lines, lost],
+            };
+        }
+        misses = 0;
         if (!res.ok) {
             const failed = errorResult(res, opts.json);
-            return { code: failed.code, lines: [...lines, ...failed.lines] };
+            return { code: failed.code, lines: opts.json ? failed.lines : [...lines, ...failed.lines] };
         }
         const customer = customerAnswer(res.data);
         if (customer) {
             const page = customerRunPage(deps.dashboardUrl, runId);
+            if (customer.spendAsk) {
+                return {
+                    code: 0,
+                    lines: opts.json
+                        ? [JSON.stringify(customer)]
+                        : [...lines, ...spendAskLines(customer, runId), `Watch it on the dashboard: ${page}`],
+                };
+            }
             if (customerStageIsWorking(customer.stage) && !customer.templateApproval?.audition) {
                 progress(customerStageLines(customer, page)[0]);
                 continue;
@@ -3909,6 +3954,14 @@ export async function waitFlow(runId, opts, deps) {
         }
         const run = asVideoRun(res.data);
         const stop = classifyRun(run);
+        if (run.spendAsk) {
+            return {
+                code: 0,
+                lines: opts.json
+                    ? [JSON.stringify({ runId, stop, spendAsk: run.spendAsk, status: run.status, url: opts.url })]
+                    : [...lines, ...spendAskLines(run, runId), `Open it: ${reviewUrl(deps.dashboardUrl, run)}`],
+            };
+        }
         if (stop.at === "running") {
             progress(stop.autoRedoScenes?.length
                 ? autoRedoLine(stop.autoRedoScenes, stop.autoRedoReasons)
@@ -3974,7 +4027,24 @@ function itemWord(item) {
         return "flagged";
     return ITEM_STATUS_WORD[item.status] ?? item.status;
 }
-const CARRYING_ON_LINE = "Waiting for a worker to carry on. Everything finished so far is kept — the run picks up from there by itself.";
+const APP_CUT_SIZE_LINE = "The app's cut is 1080x1920, whatever size the clips were filmed at.";
+const HELD_CHOICE_TAIL = "is kept for you to watch: keep it as it is, or start a new run to film it again.";
+const KEPT_TAIL = "was kept as it is.";
+function heldChoiceMade(text) {
+    return text.split(HELD_CHOICE_TAIL).join(KEPT_TAIL);
+}
+const BY_DESIGN_WARNINGS = new Set([
+    "this ad has no narration track — its voices live in the scenes themselves, so there was nothing to voice over. Your ad is unaffected.",
+]);
+function byDesign(node) {
+    return (node !== undefined &&
+        node.kind === "voiceover" &&
+        node.status === "done" &&
+        (node.outputs ?? []).length === 0 &&
+        node.warning !== undefined &&
+        BY_DESIGN_WARNINGS.has(node.warning));
+}
+const CARRYING_ON_LINE = "Waiting for a worker to carry on. The run is still going: what it made so far is kept, and it picks up from there by itself.";
 function carryingOn(run) {
     return (run.status === "queued" &&
         run.nodes.some((n) => n.status !== "idle" && n.status !== "out-of-scope"));
@@ -4009,6 +4079,13 @@ export async function statusFlow(runId, json, deps) {
     const warnings = run.nodes
         .filter((n) => n.warning)
         .map((n) => ({ nodeId: n.nodeId, step: n.kind, warning: n.warning }));
+    const delivered = stop.at === "finished" && !runStopped(run);
+    const holdRows = items.filter((i) => i.itemKind === "clip" && i.findings?.some((f) => f.detail.includes(HELD_CHOICE_TAIL)));
+    const choiceMade = (row) => delivered || row?.acceptedAsIs !== undefined;
+    const everyHoldKept = delivered || (holdRows.length > 0 && holdRows.every((r) => r.acceptedAsIs !== undefined));
+    const said = warnings
+        .filter((w) => !byDesign(run.nodes.find((n) => n.nodeId === w.nodeId)))
+        .map((w) => (everyHoldKept && w.warning ? { ...w, warning: heldChoiceMade(w.warning) } : w));
     if (json) {
         return {
             code: 0,
@@ -4079,7 +4156,7 @@ export async function statusFlow(runId, json, deps) {
         ...guidance,
         ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead)] : []),
         ...planFailureLines(failedStoryboard, runId),
-        ...warnings.map((w) => `Heads-up (${w.step}): ${w.warning}`),
+        ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
         ...(run.director ? ["", ...directorLines(run.director)] : []),
     ];
     if (byScene.size === 0) {
@@ -4111,7 +4188,8 @@ export async function statusFlow(runId, json, deps) {
             }
             if (row.frame?.lastRedo)
                 lines.push(`       picture: ${row.frame.lastRedo.label}`);
-            for (const finding of row.clip?.findings ?? []) {
+            for (const found of row.clip?.findings ?? []) {
+                const finding = choiceMade(row.clip) ? { ...found, detail: heldChoiceMade(found.detail) } : found;
                 if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
                     if (finding.code === ONE_TAKE_LABEL_ALL_FLIPPED_CODE) {
                         if (allFlippedSaid)
@@ -4167,9 +4245,11 @@ export async function statusFlow(runId, json, deps) {
                 ? "Final cut: made. This run delivers it by itself; look again in a minute."
                 : hasFinal && appIsCutting(stop)
                     ? "Final cut: the app makes it again now; look again in a minute."
-                    : hasFinal
-                        ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
-                        : "Final cut: not uploaded yet.", ...(run.cutCheck ?? []));
+                    : hasFinal && stop.at === "final-watch" && stop.appCutOnRun
+                        ? `Final cut: made by the app. Approve it with: exodus video approve ${runId}`
+                        : hasFinal
+                            ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
+                            : "Final cut: not uploaded yet.", ...(hasFinal && stop.at === "finished" && hasAppCut(items) ? [APP_CUT_SIZE_LINE] : []), ...(run.cutCheck ?? []));
     let finalSpeech;
     for (const item of items)
         if (item.itemKind === "final" && item.status === "done")
@@ -6109,7 +6189,8 @@ export async function uploadFlow(runId, filePath, durationFlag, json, deps, opti
         return errorResult(attached, json);
     const customerFinal = customerAnswer(attached.data);
     if (customerFinal) {
-        const { finalWatchUrl, delivered } = customerFinal;
+        const { delivered } = customerFinal;
+        const finalWatchUrl = onOwnDashboard(customerFinal.finalWatchUrl, deps.dashboardUrl);
         if (json) {
             return {
                 code: 0,
@@ -6125,7 +6206,7 @@ export async function uploadFlow(runId, filePath, durationFlag, json, deps, opti
         };
     }
     const final = attached.data;
-    const finalWatchUrl = final.finalWatchUrl ?? reviewUrl(deps.dashboardUrl, { _id: runId });
+    const finalWatchUrl = final.finalWatchUrl ? onOwnDashboard(final.finalWatchUrl, deps.dashboardUrl) : reviewUrl(deps.dashboardUrl, { _id: runId });
     const delivered = final.delivered === true;
     if (json) {
         return {
@@ -6441,6 +6522,7 @@ const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
 const WRITE_VALUE_FLAGS = new Set(["kind", "people-max-usd"]);
 const START_VALUE_FLAGS = new Set(["max-usd"]);
 const SHEET_PEOPLE_VALUE_FLAGS = new Set(["count", "max-usd"]);
+const SHEET_SET_VALUE_FLAGS = new Set(["people-max-usd"]);
 export function parsePositional(args = process.argv.slice(3)) {
     const read = (valueFlags) => {
         const out = [];
@@ -6472,6 +6554,9 @@ export function parsePositional(args = process.argv.slice(3)) {
     const asPeople = read(SHEET_PEOPLE_VALUE_FLAGS);
     if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && asPeople[2] === "people")
         return asPeople;
+    const asSet = read(SHEET_SET_VALUE_FLAGS);
+    if (asSet[0] === "swipe" && asSet[1] === "sheet" && asSet[2] === "set")
+        return asSet;
     return read(new Set());
 }
 function flagString(flags, name) {
@@ -6553,6 +6638,7 @@ export async function run(flags, occurrences) {
         "pick",
         "map",
         "move",
+        "wait",
     ];
     if (sub === "voices" && flags["catalog"] !== undefined && flags["catalog"] !== false) {
         return printResult(await voiceCatalogFlow(runId, json, defaultDeps));
@@ -6599,6 +6685,9 @@ export async function run(flags, occurrences) {
     }
     if (sub === "storyboard")
         return printResult(await storyboardFlow(runId, json, defaultDeps));
+    if (sub === "wait") {
+        return printResult(await waitFlow(runId, { json, onProgressLine: json ? undefined : (line) => console.log(line) }, defaultDeps));
+    }
     if (sub === "picks") {
         const redo = flagString(flags, "redo");
         if (flags["redo"] !== undefined && !redo?.trim())

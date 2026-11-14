@@ -183,6 +183,7 @@ export declare function customerAnswer<T extends {
     view: "customer";
 }>(data: unknown): T | null;
 export declare function customerRunPage(dashboardUrl: string, runId: string): string;
+export declare function onOwnDashboard(serverUrl: string, dashboardUrl: string): string;
 export declare function customerStageIsWorking(stage: CustomerRunStage): boolean;
 export declare function customerStageLines(run: CustomerRun, page: string): string[];
 export declare function customerStatusLines(run: CustomerRun, dashboardUrl: string): string[];

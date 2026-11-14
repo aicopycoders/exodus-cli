@@ -241,6 +241,25 @@ export function customerRunPage(dashboardUrl: string, runId: string): string {
   return `${dashboardUrl}/video/runs/${runId}`;
 }
 
+/**
+ * COP-319: a link the server built, on the dashboard this CLI talks to (EXODUS_DASHBOARD_URL): its path and query
+ * kept, its host the CLI's, as the run links are. The server builds links on its own host, which a sandbox without
+ * DASHBOARD_URL gives as http://localhost:3000. Only an http or https link is moved; an empty, unreadable or other link
+ * is left as it is. The path, query and fragment are kept as the server wrote them, character for character (landing
+ * review: rebuilding them through URL re-encoded characters such as `<`).
+ */
+export function onOwnDashboard(serverUrl: string, dashboardUrl: string): string {
+  if (serverUrl === "" || dashboardUrl === "") return serverUrl;
+  try {
+    const url = new URL(serverUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return serverUrl;
+  } catch {
+    return serverUrl;
+  }
+  const rest = serverUrl.replace(/^https?:\/\/[^/?#]*/i, "");
+  return `${dashboardUrl.replace(/\/+$/, "")}${rest}`;
+}
+
 /** Stages a waiting CLI keeps polling through; any other stage needs the customer. */
 export function customerStageIsWorking(stage: CustomerRunStage): boolean {
   return (

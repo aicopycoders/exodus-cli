@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal. One sentence ("swipe this ad as a microdrama for my brand", "make this a UGC video") is walked through the template door stop by stop, with a yes asked before each paid step. A UGC script with no video ("write me a UGC script", "swipe this UGC ad" for a script) is `ugc-ads`, and the separate UGC video kit's sheet ("run the preproduction sheet") is `ugc-preproduction`, not this skill. A timeline ad asked for without "exodus" ("make me a timeline ad", "turn this winning ad into timeline ads") is `timeline-ad-factory`, on the member's own Kie.ai key; "exodus, make a skeleton timeline video" stays here. A competitor's video ad (a file, a link, or an ad in Exodus) is swiped with `exodus video swipe`, as Swipe a video does on the dashboard: broken down, matched to a kind of ad, read first, then one sheet of choices and one yes for the write and the whole video (or, when the member asks, step by step with a yes before each paid step). With no ad named ("find some ads to swipe for this product, give me options"), it first lists the video ads in the brand's swipe library with `exodus video swipe find` and offers at most six. The main path is script-first: run a saved video workflow with `npx @aicopycoders/exodus workflow run`. You read and approve the storyboard, pull every finished piece (per-scene clips, the narration track and per-scene voice, keyframes, cast identity stills, word timings, the music bed) into a folder with `exodus video pull`, and upload a finished cut for approval. Exodus makes the pieces; the cut is made outside it, in whatever editor the user wants — this skill hands over the pieces and the facts about them, it does not prescribe an editor. Use it whenever the user has invoked Exodus and wants anything to do with a video ad, an ad run's clips or storyboard, "pull the pieces", "stitch it together", "make the cut", "upload my cut", or checking on a video run ("exodus, make a video ad from this script", "exodus, is my video run done", "exodus, pull the clips for run X and cut them", "exodus, what's wrong with scene 3", "exodus video status"). Also use it when the user ran an `npx @aicopycoders/exodus video` command or the `exodus` hub skill routed here. Admins get every video command; beta testers with video switched on get start, swipe, status, storyboard, approve, voices, retry-frame, pull, upload and keep on their own brands (see "Beta testers"). "video isn't enabled for this key" means the run id is wrong, the command is admin-only, or video isn't switched on for that dashboard user, so check the id and then say so; do not retry. Never claim generic video-editing asks ("edit this mp4", "add captions to my reel") without Exodus context; in shared folders those belong to the user's other tools. Running or authoring workflows generally is `exodus-workflow`; static image ads are `exodus-image`; copy is `exodus-write`.
+description: Make a video ad with Exodus from the terminal, a UGC talking-head video included. A competitor's ad swiped into a video for the member's brand comes here, with or without the word "exodus": their ad given as a video file or a video link with a video wanted or an ad in Exodus, or a video or a size asked for with an ad to swipe ("swipe this ad for my brand as a UGC video like theirs: their-ad.mp4, make it at 720p"). It runs `exodus video swipe`, as Swipe a video does on the dashboard; with no ad named ("find some ads to swipe for this product") it offers ads from the brand's swipe library (`exodus video swipe find`). Also here: a video run checked or waited on ("exodus, is my video run done", `exodus video status`), its pieces pulled ("pull the pieces", `exodus video pull`), a cut made or uploaded ("make the cut", "upload my cut"), and the script-first run of a saved video workflow (`exodus workflow run`, "exodus, make a video ad from this script"). Admins get every video command; beta testers with Video switched on get the swipe and their own runs' commands. Not this skill: a UGC script with no video ("write me a UGC script") is `ugc-ads`; the UGC video kit's sheet ("run the preproduction sheet") is `ugc-preproduction`; a timeline ad asked for without "exodus" is `timeline-ad-factory` ("exodus, make a skeleton timeline video" stays here); a link for copy is `swipe`; generic editing ("edit this mp4") without Exodus context is not Exodus.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -376,7 +376,7 @@ the run started:
   the last held take, since that keep starts the cut. Say so at each. Give
   the member the run page to watch the film. A run that stopped at the
   storyboard waits for the member instead: on an admin key `status` says
-  "Final cut: uploaded. Approve it with: exodus video approve <runId>"; on a
+  "Final cut: made by the app. Approve it with: exodus video approve <runId>"; on a
   beta tester's key it says "Your video is ready to watch: <link>" and gives
   the line that finishes it, `exodus video approve <runId>` (the video's page
   finishes it too).
@@ -425,7 +425,9 @@ swipe command answers "Not found on this brand. The id is wrong or is another
 brand's, video isn't switched on for your dashboard user, or this is not the
 brand you meant (exodus brand current). Check the id first." Check the id and
 the brand. If both are right, tell the member Video isn't switched on for
-them, and stop.
+them, and offer `ugc-swipe` (the script) instead of stopping: it swipes their
+ad's words into a script for their product, with no video. Offer it too when
+they want only the words.
 
 This path has no picks stop and no pilot clip. The run goes from the start
 straight to the storyboard (stop 3), and approving the storyboard makes every
@@ -442,7 +444,7 @@ before each paid step gets "Step by step" below.
 **Long waits.** The CLI waits up to 25 minutes for a breakdown, 10 for a
 template, 15 for a write (the write always waits; it has no `--wait`) and 5
 more while the people a write makes are made (up to 20 in all), and 60 for
-`swipe start --wait`. A start first waits up to 5 minutes while people are
+`swipe start --wait` and for `video wait <runId>`. A start first waits up to 5 minutes while people are
 still being made for its swipe, then goes on and says what it films. Run these
 in the background, or leave `--wait` off and check in, so the shell's own time
 limit does not cut them off. A wait that was cut off or timed out is not a
@@ -881,6 +883,23 @@ a mug or a drink; `prop=` takes it back to its default.
 (`who=<n>`), or words in the row's own form, as `who="a white woman in her
 30s, grey hoodie"`. A row with no value at all prints "not set": then the
 script decides.
+**Their look.** When the member wants the person to look like their speaker
+("make her look like the woman in their ad", closer to, the same as), the row
+is "How close to their speaker" (`basedOn`): `type`, the default (a new person
+of their speaker's type), or `look`: new people who also have their
+speaker's hair, clothes, nails, skin tone, brows, makeup, freckles and build,
+read from their ad in our words, never their face, a name, a tattoo, a scar or
+a birthmark. Their age stays the type's. Never write `who` by hand for this.
+`exodus video swipe sheet set <swipeId> basedOn=look` with no `--yes` buys
+nothing: it prints the price (one read of their speaker's look on the member's
+OpenRouter key, then 4 new people and the check of their faces) and the line
+that says yes. Say that price to the member; only on their yes run it with
+`--yes --people-max-usd <the most it showed>`, then read the sheet a few
+minutes later and show the people made from it. `basedOn=type` goes back, free.
+When the row offers only `type`, it says why (no OpenRouter key, a well-known or
+named speaker, their ad's video not kept, a read that failed): say that reason
+and do not work around it. A sheet with no `basedOn` row has no such choice for
+this swipe: say so, and keep `who`.
 `filmed`, `pose`, `prop`, `moves`, `place`, `look`, `time`, `placeNote`: how
 and where it is filmed, each with its default's reason; set one only when the
 member asks (`time=dusk`). `notes` end every take's prompt.
@@ -1376,6 +1395,8 @@ exodus video swipe start <swipeId> [--style <look>] [--title "<name>"] [--music]
 exodus video swipe sheet <swipeId>                        the saved sheet the server keeps for a swipe (free);
                                                           no dashboard page shows it yet
 exodus video swipe sheet set <swipeId> <row>=<value> ...  change rows of the saved sheet, all or none; <row>= clears one (free)
+exodus video swipe sheet set <swipeId> basedOn=look --yes --people-max-usd <n>
+                                                          their look: run it first without --yes for its price
 exodus video swipe sheet price <swipeId>                  the video's price at the saved sheet's rows and at each size and takes (free)
 exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>]
                                                           new people to pick from (paid on the member's keys: the
@@ -1425,6 +1446,8 @@ CLI words it the way the run page does. On their own brands they can:
   `--json` prints the server's answer as it came; a held video says
   `"stage": "failed"` with the held scenes in `cutHolds`, and a newer server
   also sends `cutHeldScenes` (each held scene's number and its sentence).
+- `video wait <runId>`: reads the video until it stops for them, is ready
+  or stops, then prints where it stands and its page.
 - `video storyboard <runId>`: each scene's line and picture, while the
   storyboard waits for review.
 - `video approve <runId>`: approves the storyboard. At an audition stop,
@@ -1487,6 +1510,11 @@ exodus workflow run <workflowId|name> --input <field>=@script.txt --voices @voic
 exodus workflow run <workflowId|name> --input <field>=@script.txt --voice-treatment @voice-treatment.json --wait
                                                           same, with the video model speaking voices you WROTE
 exodus video status <runId>                               where it is, per scene
+exodus video wait <runId>                                 waits until the run stops for the member, fails or is
+                                                          delivered (up to an hour), through the app's cut, and
+                                                          prints where the run stopped and the next step, as the
+                                                          first lines of `status` do; a server that stops
+                                                          answering ends it with exit 2, and the run goes on
 exodus video start --script <file> --conceit <kind> --style <look> [--direction "…"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice native] [--music] [--broll] [--one-shot] [--director] [--stop-at-script] [--rewrite-to-fit] [--wait]
                                                           start from a script and the kinds the server offers.
                                                           The file can be a plain transcript, a draft or a

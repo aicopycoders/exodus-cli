@@ -487,7 +487,7 @@ one.
                          1 mirror        Mirror
                                          Same lines in the same order. Only your brand, product and claims change.
                          2 close         Close
-                                         Same parts in the same order, each line said in new words.
+                                         Same parts in the same order, with the same kind of line in each, in new words.
                          3 same-beats    Same beats
                                          Same job for each part, in the same order. New words and new examples.
                          4 same-arc      Same arc
@@ -4007,7 +4007,8 @@ export async function statusFlow(runId, json, deps) {
     if (run.nodes.some((n) => n.kind === "storyboard" && n.status === "done")) {
         lines.push(...(await statusVoiceLines(runId, deps)));
     }
-    lines.push("", hasFinal && stop.at === "finished"
+    const cost = runCostLine(run, items);
+    lines.push("", ...(cost ? [cost] : []), hasFinal && stop.at === "finished"
         ? "Final cut: approved and delivered."
         : hasFinal
             ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
@@ -4019,6 +4020,29 @@ export async function statusFlow(runId, json, deps) {
     if (hasFinal && finalSpeech)
         lines.push("Final speech:", ...speechSummaryLines(finalSpeech));
     return { code: 0, lines };
+}
+export const ONE_TAKE_FILMED_AGAIN_CODE = "one-take-filmed-again";
+export const COST_LEAVES_OUT = "Not in it: what was made before the run, such as a swipe's script and people.";
+export function runCostLine(run, items) {
+    const total = run.costUsd;
+    if (typeof total !== "number" || !Number.isFinite(total) || total <= 0)
+        return null;
+    const finished = run.costScope === undefined ? run.isTerminal === true : run.costScope === "final";
+    const filmed = new Map();
+    for (const item of items) {
+        if (item.itemKind !== "clip" || !isPullSceneIndex(item.sceneIndex))
+            continue;
+        if (!(item.findings ?? []).some((f) => f.code === ONE_TAKE_FILMED_AGAIN_CODE))
+            continue;
+        const times = item.artifact?.type === "video" ? item.artifact.qc?.attempts : undefined;
+        if (typeof times === "number" && Number.isInteger(times))
+            filmed.set(item.sceneIndex, Math.max(filmed.get(item.sceneIndex) ?? 0, times));
+    }
+    const again = [...filmed.entries()]
+        .filter(([, times]) => times > 1)
+        .sort(([a], [b]) => a - b)
+        .map(([scene, times]) => `scene ${scene} was filmed ${times} times`);
+    return `${finished ? "Cost" : "Cost so far"}: $${total.toFixed(2)}${again.length > 0 ? ` (${again.join(", ")})` : ""}. ${COST_LEAVES_OUT}`;
 }
 export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
 export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held", "one-take-label-flipped-all"];

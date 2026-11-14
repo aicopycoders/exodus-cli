@@ -143,6 +143,8 @@ export interface SwipeDraft {
   direction: string;
   note: { kept: string; changed: string };
   lengthGap?: { ours: number; theirs: number };
+  /** COP-301: on a Mirror or Close script, the server's one sentence on how close it came to their ad; absent on any other. */
+  howClose?: { sentence: string };
 }
 
 export interface SwipeView {
@@ -286,7 +288,7 @@ export const SWIPE_MODES: ReadonlyArray<{ flag: string; mode: ServerMode; label:
 /** The closeness dial, by number and by name, with the dashboard's name and line for each step. */
 export const SWIPE_CLOSENESS: ReadonlyArray<{ step: number; flag: string; name: string; line: string }> = [
   { step: 1, flag: "mirror", name: "Mirror", line: "Same lines in the same order. Only your brand, product and claims change." },
-  { step: 2, flag: "close", name: "Close", line: "Same parts in the same order, each line said in new words." },
+  { step: 2, flag: "close", name: "Close", line: "Same parts in the same order, with the same kind of line in each, in new words." },
   { step: 3, flag: "same-beats", name: "Same beats", line: "Same job for each part, in the same order. New words and new examples." },
   {
     step: 4,
@@ -1652,6 +1654,8 @@ function swipeLines(swipe: SwipeView, after: "write" | "show"): string[] {
     `Kept: ${draft.note.kept}`,
     `Changed: ${draft.note.changed}`,
     ...(draft.lengthGap ? [`Length: ours is about ${draft.lengthGap.ours} s, theirs about ${draft.lengthGap.theirs} s.`] : []),
+    // COP-301: the server's sentence on how close a Mirror or Close script came to their ad, printed as it comes.
+    ...(draft.howClose ? [draft.howClose.sentence] : []),
     costLine(swipe),
     "",
     swipe.workflowRunId && swipe.runHoldsStart === false

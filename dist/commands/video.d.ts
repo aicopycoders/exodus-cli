@@ -196,6 +196,8 @@ export interface VideoRun {
     status: string;
     isTerminal: boolean;
     error?: string;
+    costUsd?: number;
+    costScope?: "soFar" | "final";
     pauseReason?: BuilderPauseReason | "pilot";
     pausedNodeId?: string;
     pilot?: {
@@ -607,6 +609,9 @@ export declare function waitFlow(runId: string, opts: {
     onProgressLine?: (line: string) => void;
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function statusFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare const ONE_TAKE_FILMED_AGAIN_CODE = "one-take-filmed-again";
+export declare const COST_LEAVES_OUT = "Not in it: what was made before the run, such as a swipe's script and people.";
+export declare function runCostLine(run: Pick<VideoRun, "costUsd" | "costScope" | "isTerminal">, items: readonly NodeItem[]): string | null;
 export declare const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
 export declare const ONE_TAKE_LABEL_CODES: readonly ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held", "one-take-label-flipped-all"];
 export declare const ONE_TAKE_SAID_WRONG_CODES: readonly ["one-take-said-wrong", "one-take-second-listen-failed"];

@@ -26,7 +26,7 @@ export const SWIPE_MODES = [
 ];
 export const SWIPE_CLOSENESS = [
     { step: 1, flag: "mirror", name: "Mirror", line: "Same lines in the same order. Only your brand, product and claims change." },
-    { step: 2, flag: "close", name: "Close", line: "Same parts in the same order, each line said in new words." },
+    { step: 2, flag: "close", name: "Close", line: "Same parts in the same order, with the same kind of line in each, in new words." },
     { step: 3, flag: "same-beats", name: "Same beats", line: "Same job for each part, in the same order. New words and new examples." },
     {
         step: 4,
@@ -1112,6 +1112,7 @@ function swipeLines(swipe, after) {
         `Kept: ${draft.note.kept}`,
         `Changed: ${draft.note.changed}`,
         ...(draft.lengthGap ? [`Length: ours is about ${draft.lengthGap.ours} s, theirs about ${draft.lengthGap.theirs} s.`] : []),
+        ...(draft.howClose ? [draft.howClose.sentence] : []),
         costLine(swipe),
         "",
         swipe.workflowRunId && swipe.runHoldsStart === false

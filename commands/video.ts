@@ -534,7 +534,7 @@ one.
                          1 mirror        Mirror
                                          Same lines in the same order. Only your brand, product and claims change.
                          2 close         Close
-                                         Same parts in the same order, each line said in new words.
+                                         Same parts in the same order, with the same kind of line in each, in new words.
                          3 same-beats    Same beats
                                          Same job for each part, in the same order. New words and new examples.
                          4 same-arc      Same arc
@@ -1023,6 +1023,10 @@ export interface VideoRun {
   status: string;
   isTerminal: boolean;
   error?: string;
+  /** #1081/#1857: what the run has spent, the server's own roll-up (a live run's is summed from its rows at read time);
+   *  absent when nothing is recorded. `costScope` says whether it is the last word or the figure so far. */
+  costUsd?: number;
+  costScope?: "soFar" | "final";
   /** Stop 4: "pilot" is the pilot clip's park, on the final-watch Video step but not the final watch. */
   pauseReason?: BuilderPauseReason | "pilot";
   pausedNodeId?: string;
@@ -5423,8 +5427,10 @@ export async function statusFlow(
     lines.push(...(await statusVoiceLines(runId, deps)));
   }
 
+  const cost = runCostLine(run, items);
   lines.push(
     "",
+    ...(cost ? [cost] : []),
     hasFinal && stop.at === "finished"
       ? "Final cut: approved and delivered."
       : hasFinal
@@ -5437,6 +5443,46 @@ export async function statusFlow(
   for (const item of items) if (item.itemKind === "final" && item.status === "done") finalSpeech = item.speech;
   if (hasFinal && finalSpeech) lines.push("Final speech:", ...speechSummaryLines(finalSpeech));
   return { code: 0, lines };
+}
+
+/**
+ * COP-308: the finding the One-take video step writes on a take it filmed more than once (scout ugc-one-take-steps.ts;
+ * convex/lib/video/customerRunView.ts ONE_TAKE_FILMED_AGAIN_CODE, which the run page reads).
+ */
+export const ONE_TAKE_FILMED_AGAIN_CODE = "one-take-filmed-again";
+
+/** COP-308: what the run's own cost does not hold, said after it (runCostLine): it is paid on the swipe. */
+export const COST_LEAVES_OUT = "Not in it: what was made before the run, such as a swipe's script and people.";
+
+/**
+ * COP-308: what the run has cost, in one line: the run's own cost as the server records it (`costUsd` on the run read:
+ * its rows and every step's own spend, the text calls and the cut's sounds and listens among them), the same roll-up
+ * the dashboard shows, so the CLI and the page give one number for one run. A run's rows alone leave out the step
+ * spend (the first cut of this line summed them). No figure is not "nothing spent": with none recorded there is no
+ * line (#1857). What was made before the run is paid on the swipe, and the run read carries no sign of a swipe, so
+ * "such as" is said for every run.
+ *
+ * A scene filmed more than once is named only where the One-take video step says so: its clip carries the step's
+ * "filmed again" finding and the step's own count of stored takes (`qc.attempts`). The row's `attempt` proves no
+ * filming: every redo claim adds one to it, a voice-only redo, a redo that failed and kept its take, and an order the
+ * video service failed included (review A).
+ */
+export function runCostLine(run: Pick<VideoRun, "costUsd" | "costScope" | "isTerminal">, items: readonly NodeItem[]): string | null {
+  const total = run.costUsd;
+  if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) return null;
+  const finished = run.costScope === undefined ? run.isTerminal === true : run.costScope === "final";
+  const filmed = new Map<number, number>();
+  for (const item of items) {
+    if (item.itemKind !== "clip" || !isPullSceneIndex(item.sceneIndex)) continue;
+    if (!(item.findings ?? []).some((f) => f.code === ONE_TAKE_FILMED_AGAIN_CODE)) continue;
+    const times = item.artifact?.type === "video" ? item.artifact.qc?.attempts : undefined;
+    if (typeof times === "number" && Number.isInteger(times)) filmed.set(item.sceneIndex, Math.max(filmed.get(item.sceneIndex) ?? 0, times));
+  }
+  const again = [...filmed.entries()]
+    .filter(([, times]) => times > 1)
+    .sort(([a], [b]) => a - b)
+    .map(([scene, times]) => `scene ${scene} was filmed ${times} times`);
+  return `${finished ? "Cost" : "Cost so far"}: $${total.toFixed(2)}${again.length > 0 ? ` (${again.join(", ")})` : ""}. ${COST_LEAVES_OUT}`;
 }
 
 /**

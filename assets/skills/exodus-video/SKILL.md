@@ -8,14 +8,17 @@ description: Make a video ad with Exodus from the terminal. One sentence ("swipe
 Exodus makes the PIECES of a video ad, not the finished ad. From a script, a run
 writes a storyboard, draws one picture per scene, records the voice, renders one
 video clip per scene, and generates a music bed. Then it parks and waits for a
-cut.
+cut (the app makes it for some runs, below).
 
-There is no server-side stitch and no server-side mix. Nothing joins the clips,
-nothing sets levels, nothing burns in captions
+On a run you cut (an admin's run started with `exodus video start` or
+`workflow run`), there is no server-side stitch and no server-side mix.
+Nothing joins the clips, nothing sets levels, nothing burns in captions
 (`scout/src/workflow/video/music-bed.ts` states the ruling: "the cut, and the
 mix, happen outside from the pieces the CLI pulls"). You pull the pieces, cut
 them wherever you like, and upload the result. Approving the upload is what
-makes it the ad.
+makes it the ad. The app cuts the others itself: a swiped video, a video from
+the dashboard's Video page and a beta tester's run ("End: watch and
+approve").
 
 Your job in this skill is to drive that loop, hand over the pieces with the
 facts about them, and make whatever cut the user asked for. **How to edit is the
@@ -42,7 +45,7 @@ wrong one.
 server's list is the truth, and nothing prints it on request. Pass a key it
 doesn't offer and the refusal names every key it does: `video start --conceit
 must be one of …`. Nothing is spent on a refused start. Today the server offers
-15 formats and then Custom:
+these formats and then Custom (One-take UGC to admins only, for now):
 
 | Key | Kind |
 |---|---|
@@ -61,7 +64,26 @@ must be one of …`. Nothing is spent on a refused start. Today the server offer
 | `infomercial` | Infomercial |
 | `dating-show` | Dating Show |
 | `game-show` | Game Show |
+| `doorbell-cam` | Doorbell Cam |
+| `reality-confessional` | Reality Confessional |
+| `movie-trailer` | Movie Trailer |
+| `sitcom-skit` | Sitcom Skit |
+| `press-conference` | Press Conference |
+| `stand-up-special` | Stand-up Special |
+| `whisper-asmr` | Whisper ASMR |
+| `unboxing` | Unboxing |
+| `doctor-consult` | Doctor's Office Consult |
+| `documentary-sit-down` | Documentary Sit-down |
+| `microdrama` | Microdrama |
+| `pixar-song` | Suno Pixar Song |
+| `skeleton-timeline` | Skeleton / Claymation |
+| `authority-yapper` | Authority Yapper |
+| `ugc-ultra-realistic` | UGC Ultra-Realistic |
+| `ugc-one-take` | One-take UGC |
 | `custom` | Custom |
+
+A swipe's template prints its kind by one of these keys
+(`ugc-ultra-realistic`, say).
 
 Custom builds the ad from the script itself. A script with no `CAST:` runs as a
 voice-over, and a script with people runs as a scene. Voice-over and Scene are
@@ -83,7 +105,11 @@ The member types one sentence, such as "swipe this ad as a microdrama for my
 brand". You drive the run through its stops and wait for the member at each
 one. When the sentence names a video ad to swipe as it is made (a video file,
 a link to the ad, or an ad in Exodus) and the member asks for no format of
-their own, go to "Swiping a video ad" below instead. The Golden Six formats start on the template door, which needs
+their own, go to "Swiping a video ad" below instead. Words that say how their
+ad is made are not a format of their own: "as a UGC video, one person talking
+to the camera, like theirs" goes to the swipe, whose template reads the kind
+from the ad. A format of their own is one their ad is not made as, or a
+template the member names as one ("the UGC template"). The Golden Six formats start on the template door, which needs
 Templates switched on for the member's account. Without it the CLI answers
 "video isn't enabled for this key" or "Templates aren't available on your
 account. Ask an admin if you need it." Tell the member that and stop. A beta
@@ -129,8 +155,8 @@ does offer, and nothing is spent.
      Exodus or behind a link (the `swipe` skill's section 1 gets them). Save
      the words to `source.txt`. A video ad the member wants swiped whole, its
      kind and look and shots as well as its words, goes to "Swiping a video
-     ad" below. That path picks the kind itself, so a member set on one of the
-     Golden Six stays here.
+     ad" below. That path picks the kind itself, so a member set on a format
+     of their own (as above), one of the Golden Six among them, stays here.
    - the format: the table above.
    - the brand: `exodus brand current`.
 2. `exodus video start --input-options --conceit <key>` prints the template's
@@ -331,10 +357,41 @@ the audition scenes and prints what to run next:
 ### End: watch and approve
 
 At the final watch, follow the block `status` prints ("Where a run can
-stop"). When the cut is already uploaded, give the member the run page to
-watch it. When the run waits for a cut: `exodus video pull <runId> --out ./ad-<runId>`, make the
-cut ("Cutting the ad"), `exodus video upload <runId> --file <cut.mp4>`, and
-give the member the run page. Ask: approve, redo a clip, or stop here.
+stop"). Who makes the cut, and whether the member approves it, depends on how
+the run started:
+
+- **The app makes the cut** of a swiped video, a video from the dashboard's
+  Video page and a beta tester's run, once every clip is made and no scene is
+  held. On a run started with `--one-shot` that cut is delivered by itself,
+  with no approve: on an admin key `status` then says "Final cut: approved
+  and delivered.", and on a beta tester's key "Your video is ready: <link>".
+  Only when the app's check of the finished film against its own sound fails
+  (One-take UGC checks it) does a One-shot cut wait instead, as a Guided one
+  does, with the check's sentences under it in `status`. The member's last say is before that: the One-shot yes, and the yes to keep
+  the last held take, since that keep starts the cut. Say so at each. Give
+  the member the run page to watch the film. A run that stopped at the
+  storyboard waits for the member instead: on an admin key `status` says
+  "Final cut: uploaded. Approve it with: exodus video approve <runId>"; on a
+  beta tester's key it says "Your video is ready to watch: <link>" and gives
+  the line that finishes it, `exodus video approve <runId>` (the video's page
+  finishes it too).
+- **You make the cut** of any other run (an admin's `video start` or
+  `workflow run`). When the cut is already uploaded, give the member the run
+  page to watch it. When the run waits for a cut: `exodus video pull <runId>
+  --out ./ad-<runId>`, make the cut ("Cutting the ad"), `exodus video upload
+  <runId> --file <cut.mp4>`, and give the member the run page. On a run
+  started with `--one-shot` the upload is delivered by itself, as above.
+
+When the cut waits for the member, ask: approve, redo a clip, or stop here.
+On a One-take run no take is made again on its own (every redo door refuses
+it): ask approve, a new run that films every take again at its full price
+(for a swiped video, `exodus video swipe start <swipeId> --again`, its price
+first), or stop here.
+
+On an admin key, `pull` writes the pieces only, never the finished video,
+even once the app has made and delivered it: give the member the run page to
+watch it. On a beta tester's key, `pull` also writes `video.<ext>` once the
+finished video is ready.
 
 - Approve: `exodus video approve <runId>` makes the cut the ad. It is one-way.
 - Redo a clip: `retry-clip` as at stop 4, after their yes. Then pull, cut
@@ -617,12 +674,19 @@ The rows:
   admins only for now: for anyone else the CLI refuses it, so don't offer it
   to them. Use it when the member asks for a one-take UGC video or names
   Luke's UGC method, and then the sheet's first line says the swipe makes
-  one-take UGC. When the template prints "Also fits their ad: One-take UGC
-  (ugc-one-take). …", name it in the sheet's first line as one option beside
-  the kind the swipe makes, with the reason that line gives. The line comes
-  only for an ad its write takes and a member who may start it. Add `--kind
-  ugc-one-take` to the write only on the member's yes; never choose it
-  unasked. A reply that picks it is not the yes yet: run its write line with
+  one-take UGC. Use it too when the template prints "Also fits their ad:
+  One-take UGC (ugc-one-take). …" and the member asked for a UGC video of one
+  person talking to the camera, in any words: the word "one-take" is not
+  needed. Then take it: in the sheet's first line, in place of "The swipe
+  makes that kind of ad.", say in one line that the swipe makes One-take UGC,
+  with the reason the template's line gives; One-take UGC is then the kind
+  made. The write carries `--kind ugc-one-take`, its dry run first (People,
+  below), and the sheet's yes is the yes to it. The line comes only for an ad
+  its write takes and a member who may start it. When the line comes and the
+  member asked for nothing it fits, name it in the sheet's first line as one
+  option beside the kind the swipe makes, with the reason that line gives.
+  Then add `--kind ugc-one-take` to the write only on the member's yes; never
+  choose it unasked. A reply that picks it is not the yes yet: run its write line with
   `--kind ugc-one-take` and no `--yes` (free; People, below) for the people's
   price, send the sheet again with **It buys:** in the saved sheet's form, and
   wait for the yes. A sheet run (`exodus video swipe run --sheet <file>`) of
@@ -635,7 +699,15 @@ The rows:
   key; it needs their ElevenLabs key and their Kie key. Its price is the
   server's estimate, known once the swipe is written: `exodus video swipe
   sheet price <swipeId>` (free) prints it at 720p or a 480p draft, the whole
-  video or the first take only, each with the most it can cost.
+  video or the first take only, each with the most it can cost. The "about"
+  films each take once. A take filmed again (as when a filming left out
+  script words that matter) is paid again, so the run can cost more than
+  "about"; the "at most" counts each take and picture made twice. On an admin
+  key, plain `exodus video status` prints a line that starts "Cost so far:"
+  or "Cost:" once the run has spent anything: that is the run's own cost, the
+  figure the dashboard shows, and the line says what is not in it (what the
+  swipe paid for before the run). When it prints none, no cost is recorded
+  yet: say so, and never call the run free.
 - **The saved sheet** (a kind that has one; One-take UGC today). The server
   keeps one for each swipe of such a kind, made after its write. For such a
   video this sheet's yes covers the write and its people only, and **It
@@ -651,7 +723,10 @@ The rows:
   ("About $… for new people: …" and "At most $… in all: …") and the line to
   run: "On their yes, run the same command with --yes --people-max-usd
   <most>". Put that most on the sheet, as above: the sheet's yes is the yes to
-  it. When it prints no people's price, the write makes none. When the member
+  it. When the member gave a money limit and the people's most, added over
+  every video on the sheet, is already over it, say so on the sheet and ask:
+  no write goes out until what it can cost fits. When it prints no people's
+  price, the write makes none. When the member
   wants no people, the write takes `--no-people`, and the sheet says so. Two
   more writes make none, and nothing is paid for them. A member's own
   script (`their-format`) that keeps its own person (the "Persona and
@@ -698,7 +773,9 @@ The rows:
   has its person picked on the saved sheet, in step 4.
 - **Run.** With "stop at the storyboard", the line reads **It buys:** <n>
   scripts, and <n> storyboards with their pictures; the voices and clips
-  wait for your yes at each storyboard.
+  wait for your yes at each storyboard. With "one shot", the film is
+  delivered by itself once the app's cut is made, with no final approve: say
+  so in **My picks** when one shot is picked.
 - **Finish.** `swipe start` takes `--music` and nothing else for the finish.
   Music is made on the member's own ElevenLabs key. Caption style, speed,
   jump cuts and the end card come with a later update.
@@ -710,7 +787,14 @@ The rows:
   sheet says exactly that: no number, no range, no guess. A kind with a saved
   sheet (One-take UGC today) gets its price after the write, with its saved
   sheet (step 4). The people its write makes are priced before it (People,
-  above). The Director block of `exodus video
+  above). A kind with no saved sheet prints no price before its write or its
+  start, so the member sees no figure before the yes: say so on the sheet.
+  When the member gave a money limit ("under $27"), say too that this kind
+  prints no price, so the limit cannot be checked against one before the yes.
+  Only when the template offered One-take UGC for this ad ("Also fits their
+  ad: …"), say that it prints a price before its start, and that its start is
+  refused when it can cost more than the "at most" shown. Ask how they want to
+  go on, and wait. The Director block of `exodus video
   status` prints "Spent: $… of $12.00": the $12.00 is the Director's limit
   for its redos on that video, not a price and not a ceiling for the first
   pass. Never quote it as the cost.
@@ -762,9 +846,12 @@ for the next video.
 worked out for this swipe. Today that can be the person (`who`), the voice
 (`voice`), what the person holds (`prop`), the kind of opening (`hookKind`)
 and the text card at the start (`headline`). Show each with its reason. "Let
-it run" here is the yes to the starts with the sheets as they stand: set
-nothing, since a start with no pick films every recommended value and every
-other row's default. When people were made but the person row recommends none,
+it run" here, said in reply to these saved sheets and their prices, is the yes
+to the starts with the sheets as they stand: set nothing (a size a money
+limit needs is set before the sheets are shown, below), since a start with no pick films every recommended value
+and every other row's default. A "let it run" said before them, as in the
+first message, is not this yes: the writes went on the yes to step 3's sheet,
+and the starts wait for a reply to these. When people were made but the person row recommends none,
 a start with no pick films a new person, not one of them: the write and the
 start say so, and the member picks with `who=<n>` if they want one of them. A
 member's pick wins (the row then reads `from you:`). `<row>=` clears a pick,
@@ -795,6 +882,27 @@ price again after a set. The first take only is a cheap check of the method
 and the size, not of the final person: the whole video after it is a second
 start, paid on its own (`takes=all`, then `swipe start <swipeId> --again`),
 and it casts the person and draws the pictures again. Say so before that yes.
+**A money limit.** When the member gave one ("keep the whole thing under
+$15"), hold it before the start: add the people's most when the dry write
+printed one (its "At most $… in all"), what the write cost when the limit is
+for everything, and the start's "at most" (never its "about": a take filmed
+again is paid again), and compare the sum with the limit. The text calls the
+price leaves out are in no figure: say so, and leave room for them. Over it,
+nothing starts. When a smaller size the price lists fits (its whole video,
+every take, and the start does not refuse it), set it before you show the
+saved sheets (`exodus video swipe sheet set <swipeId> size=480p`, free), read
+the price again, and say on the sheet in one line that it is a 480p draft,
+the size that fits their limit: their yes to that sheet is the yes to it. A
+limit given after they saw the sheets: name the 480p draft and wait for their
+yes. With a money limit and no "at most" printed, the limit cannot be
+checked: stop and ask. For example, with a limit for everything:
+when the write's cost, the people's most and 720p's "at most" add up to more
+than the limit, and the same sum with 480p's "at most" is under it, set
+480p. Every figure in that sum is the one the CLI printed for this swipe,
+never one from memory. When no size fits, stop and ask; when the price lists the first take
+only (`takes=first`), you may name it as a smaller thing they can choose,
+never as the whole video. The `--max-usd` you start with is the "at most" the
+price shows, so it is never above what is left of the member's limit.
 
 A write that carried the people's most makes the first people to pick from
 (People, step 3). Offer more people, or voices to pick from, only when the
@@ -815,8 +923,11 @@ video swipe sheet voices <swipeId>` lists them again: one read of the voice
 list on the member's ElevenLabs key, and no speech is made, so it buys
 nothing. It prints the voices that fit the person, best fit first, each with
 its age and accent when known ("Sarah · young · American") and a sample to
-hear, then "Recommended: <n> (…)" and why, or why none is. A voice row with no
-voice prints "List the voices: exodus video swipe sheet voices <swipeId>". A
+hear, then "Recommended: <n> (…). <why> A start with no pick films it."; after
+the member's pick, "Recommended: <n> (…). You picked it, so a start films it."
+or "… You picked <m>, so a start films your pick."; or why none is. A voice
+row with no voice prints "List the voices: exodus video swipe sheet voices
+<swipeId>". A
 pick is a set (`who=<n>`, `voice=<n>`), and the video is filmed with that
 person, their face and that voice. If the server says these choices are not
 switched on yet, say so and go on with the sheet as it is.
@@ -878,7 +989,9 @@ every video has started:
    `--one-shot` when the member chose to stop at the storyboard, and with
    `--music` when they chose music. For a kind with a saved sheet whose price
    printed a number, add `--max-usd <n>` with the "at most" it showed: a
-   start that can now cost more is refused, and nothing is started. No
+   start that can now cost more is refused, and nothing is started. With a
+   money limit, start only once that "at most" fits what is left of it ("A
+   money limit", above). No
    number printed: no `--max-usd`, and never a guessed one. When the sheet
    has people, the start says first whom it films ("A start with no pick
    films person N, the recommended one.", or the member's pick). While they
@@ -887,9 +1000,13 @@ every video has started:
    were asked for, then starts and says whom it films. Give the member the
    `Watch it:` link at once. Then go on to the next video.
 3. When every video has started, follow each run with `exodus video status
-   <runId>` and do what it prints. A one-shot run that waits for a cut goes
-   to "End: watch and approve" (pull, cut, upload, the run page). A run that
-   stopped at the storyboard goes to stop 3, then the end.
+   <runId>` and do what it prints. The app makes a swiped video's cut ("End:
+   watch and approve"), so make no cut of your own. A one-shot run is
+   delivered by itself once that cut is made: give the member its run page.
+   While the app makes it, `status` may still say "Parked: every piece is
+   made and the run is waiting for a cut." for a short while: read `status`
+   again before anything else. A run that stopped at the storyboard goes to
+   stop 3, then the end.
 
 **Never start the same swipe twice.** One swipe is one video. A start of a
 swipe that already has a video is refused, starts nothing, and names the run:
@@ -905,10 +1022,15 @@ row marked refused is that write's refusal: report it as a refused write. When
 no such row is there yet, the write may still finish: check again later.
 
 At the end, report each video on one line: its ad and persona, its run id
-and its `Watch it:` link, or why it stopped.
+and its `Watch it:` link, or why it stopped. For a One-take video, add what it
+cost (the "Cost:" line of `status`), beside the "about" shown before the
+yes.
 
-**The final approve** is asked for each video as at "End: watch and
-approve". It is one way. A redo of a clip there needs its own yes.
+**The end of each video** is as "End: watch and approve" says. A one-shot
+video is delivered by itself once the app's cut is made, with no final
+approve, unless the film's check against its own sound fails ("End: watch and
+approve"). A video that stopped at the storyboard asks the final approve, which
+is one way. A redo of a clip there needs its own yes.
 
 **A refusal or a failed check stops that video only.** The others go on, and
 every video is in the report at the end. A refused write prints "The writer
@@ -1280,7 +1402,9 @@ CLI words it the way the run page does. On their own brands they can:
   until the storyboard is approved.
 - `video retry-frame <runId> --scene <n>`: redraws one scene's picture while
   the storyboard waits. No `--node`; the server finds the step.
-- `video pull <runId> --out <dir>`: the finished video (`video.<ext>`), each
+- `video pull <runId> --out <dir>`: the finished video (`video.<ext>`) once
+  it is ready (until then it says "The finished video isn't ready yet, so
+  only the scene pieces came down."), each
   scene's clip (`scene-NN.<ext>`) and voice (`scene-NN.voice.<ext>`), and the
   music (`music.<ext>`), with a `manifest.json` holding only `runId`,
   `pulledAt`, `dashboardUrl`, `scenes` (`index`, `clip`, `voice`), `music` and
@@ -1522,8 +1646,9 @@ under it:
   it instead (`stop.missingScenes` in `--json`) and approval is refused until
   it has one. A scene whose picture the video service refused needs
   `retry-frame --note` before `retry-clip`; the clip redo alone resends the
-  refused picture. On a video started from the dashboard, the app makes the
-  cut itself; when a scene's clip still has a drawing fault after it was made
+  refused picture. On a video the app cuts itself (one started from the
+  dashboard, a swiped video, a beta tester's run: "End: watch and approve"),
+  the app makes the cut; when a scene's clip still has a drawing fault after it was made
   again, the stop block says `Held:` and names the scene
   (`stop.heldScenes` in `--json`). No cut is made until each held scene is
   made again with `retry-clip`, or kept as it is with `exodus video keep
@@ -1535,7 +1660,8 @@ under it:
   cannot be made again on its own, so no `retry-clip` is offered. Show the user the sentence
   and ask them to watch the take. With their yes, `exodus video keep <runId>
   --scene <n>` keeps it as it is: it orders nothing, and keeping the last held
-  take starts the cut. Otherwise a new run films it again.
+  take starts the cut. Otherwise a new run films it again. On a One-shot run
+  that cut is delivered by itself: say so before the last keep.
   A take held for its label has a sentence that begins "The label check
   read the product's label as mirror writing in take N", says why it was not
   fixed (a flip would turn the room around against the other takes, the take
@@ -2191,7 +2317,8 @@ length. Do not invent a number.
 `pull` writes a flat folder and a `manifest.json` that indexes it. The manifest
 is the data you decide from; the filenames are its values. Scene numbers are the
 run's own. Every `pull` re-downloads and overwrites every file, so running it
-again is always safe.
+again is always safe. It never writes the finished video the app made ("End:
+watch and approve").
 
 ```
 storyboard.json          the whole storyboard envelope (see below)

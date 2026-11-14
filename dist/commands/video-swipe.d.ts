@@ -167,6 +167,9 @@ export interface SwipeDraft {
         ours: number;
         theirs: number;
     };
+    howClose?: {
+        sentence: string;
+    };
 }
 export interface SwipeView {
     _id: string;

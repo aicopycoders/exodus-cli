@@ -5,4 +5,5 @@ export const ONE_TAKE_HOLD_CODES = [
     "one-take-words-unchecked",
     "one-take-label-held",
     "one-take-said-wrong",
+    "one-take-sideways",
 ];

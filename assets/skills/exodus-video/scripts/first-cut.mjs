@@ -630,12 +630,21 @@ function spokenWords(word) {
   return spokenForms(word).flatMap((t) => SPOKEN_FORMS.get(t) ?? [t]).map((t) => SAME_WORD_SPELLINGS.get(t) ?? t);
 }
 
+/**
+ * COP-311: a scribe writes two words it heard as one with a slash ("probiotic/an" for "probiotic and"): the
+ * aligners read them as the words they are, as scout scribe.ts slashParts. A number ("1/2", "24/7") stays whole.
+ */
+function slashParts(word) {
+  const parts = String(word ?? "").split("/").filter(Boolean);
+  return parts.length > 1 && parts.every((p) => /\p{L}/u.test(p)) ? parts : [word];
+}
+
 /** { tokens, sourceIndex }: tokens[i] came from written word sourceIndex[i]. */
-function spokenTokens(words) {
+function spokenTokens(words, partsOf = (word) => [word]) {
   const tokens = [];
   const sourceIndex = [];
   words.forEach((word, i) => {
-    for (const token of spokenWords(word)) {
+    for (const token of partsOf(word).flatMap(spokenWords)) {
       tokens.push(token);
       sourceIndex.push(i);
     }
@@ -727,6 +736,24 @@ const soundKey = (token) =>
     .replace(/(?<=[aeiou])z$/, "s");
 
 /**
+ * The script's and the heard words' tokens as the aligner compares them, and
+ * its word match: matches(e, h) when script token e is said by heard token h.
+ * `slash`: both sides read a word written with a slash as its words (COP-311).
+ */
+function scriptTokens(words, written, slash = true) {
+  const partsOf = slash ? slashParts : undefined;
+  const scripted = spokenTokens(written, partsOf);
+  const heardWords = spokenTokens(words.map((w) => w.w), partsOf);
+  const nameLike = nameLikeWords(written);
+  const names = scripted.tokens.filter((_, t) => nameLike[scripted.sourceIndex[t]]);
+  const heard = joinSplitWords(heardWords, scripted.tokens, names);
+  const expected = joinSplitWords(scripted, heard.tokens);
+  const matches = (e, h) =>
+    h < heard.tokens.length && sameWord(expected.tokens[e], heard.tokens[h], nameLike[expected.sourceIndex[e]]);
+  return { heardWords, heard, expected, matches };
+}
+
+/**
  * Where the script's first complete, in-order delivery sits in the heard
  * words, or null. heardTokenOf/heardWordOf give the heard token and word that
  * deliver each (joined) script token; spokenWords lists every heard word that
@@ -735,15 +762,13 @@ const soundKey = (token) =>
  * exact delivery wins. Mirrors scout scribe.ts alignScript.
  */
 function alignScript(words, written) {
-  const scripted = spokenTokens(written);
-  const heardWords = spokenTokens(words.map((w) => w.w));
-  const nameLike = nameLikeWords(written);
-  const names = scripted.tokens.filter((_, t) => nameLike[scripted.sourceIndex[t]]);
-  const heard = joinSplitWords(heardWords, scripted.tokens, names);
-  const expected = joinSplitWords(scripted, heard.tokens);
+  // COP-311: read with the slash words split, else as written, so a take found before ("salt and/or pepper"
+  // said "salt and pepper") is still found. Mirrors scout scribe.ts alignScript.
+  return alignTokens(scriptTokens(words, written, true)) ?? alignTokens(scriptTokens(words, written, false));
+}
+
+function alignTokens({ heardWords, heard, expected, matches }) {
   if (expected.tokens.length === 0 || heard.tokens.length === 0) return null;
-  const matches = (e, h) =>
-    h < heard.tokens.length && sameWord(expected.tokens[e], heard.tokens[h], nameLike[expected.sourceIndex[e]]);
   const pair = (allowMisheard) => {
     const tokenOf = [];
     let j = 0;
@@ -764,6 +789,90 @@ function alignScript(words, written) {
     heardWordOf: heardTokenOf.map((j) => heard.sourceIndex[j]),
     spokenWords: [...new Set(heardWords.sourceIndex)],
   };
+}
+
+/** scriptTimes: sounds a speaker makes between words; one never stands in the place of a script word. */
+const FILLER_TOKENS = new Set(["um", "umm", "uhm", "uh", "uhh", "er", "erm", "ah", "hmm", "mm", "mhm"]);
+/** scriptTimes: a take with fewer of its script's tokens heard as written than this share is not the script misheard. */
+const MIN_HEARD_SHARE = 0.5;
+
+/**
+ * COP-311, Mario's "Fix the text, never the times", for a take where
+ * alignScript finds no delivery of the whole script in order: the script's
+ * tokens and the heard ones are paired by their longest common run, with the
+ * aligner's word match. The script tokens left between two pairs take the
+ * time of the heard words left in their place, a filler ("um") never one of
+ * them: one heard token each when the counts are the same, else, with one
+ * heard token more (a word heard as two), the span of them shared evenly by
+ * the script words there. Before the first pair or after the last, only one
+ * heard token each: a lead-in ("Okay so") or a sign-off ("Thanks guys") is
+ * not told apart from a misheard first or last word, so neither is shown.
+ * Every other place times nothing: a script word dropped, or said over words
+ * the script does not have, is not shown, and a heard word with no script
+ * word in its place times nothing. A take with fewer than MIN_HEARD_SHARE of
+ * its script tokens heard as written says something else: only those are
+ * timed. A script word with a digit ("$23.08", "30%") is timed only where
+ * its number words are heard as written ("dollars" may be heard as "oh"),
+ * so a number said otherwise is never shown. `times[e]` is script token e's [start, end] on the heard words'
+ * clock, or null.
+ */
+function scriptTimes(words, written) {
+  const { heard, expected, matches } = scriptTokens(words, written);
+  const n = expected.tokens.length;
+  const m = heard.tokens.length;
+  // run[e * (m + 1) + h]: the longest common run of script tokens e.. and heard tokens h..
+  const run = new Int32Array((n + 1) * (m + 1));
+  const at = (e, h) => run[e * (m + 1) + h];
+  for (let e = n - 1; e >= 0; e--) {
+    for (let h = m - 1; h >= 0; h--) {
+      run[e * (m + 1) + h] = matches(e, h) ? at(e + 1, h + 1) + 1 : Math.max(at(e + 1, h), at(e, h + 1));
+    }
+  }
+  // Each script token on its earliest heard token that keeps the run longest.
+  const pairs = [[-1, -1]];
+  for (let e = 0, h = 0; e < n && h < m; ) {
+    if (matches(e, h)) pairs.push([e++, h++]);
+    else if (at(e, h + 1) >= at(e + 1, h)) h++;
+    else e++;
+  }
+  pairs.push([n, m]);
+  const span = (from, to) => [words[heard.sourceIndex[from]].s, words[heard.lastSourceIndex[to]].e];
+  const times = new Array(n).fill(null);
+  const scriptHeard = pairs.length - 2 >= n * MIN_HEARD_SHARE;
+  for (let k = 0; k + 1 < pairs.length; k++) {
+    const [e0, h0] = pairs[k];
+    const [e1, h1] = pairs[k + 1];
+    if (e0 >= 0) times[e0] = span(h0, h0);
+    const left = e1 - e0 - 1;
+    if (!scriptHeard || left === 0) continue;
+    const places = [];
+    for (let h = h0 + 1; h < h1; h++) if (!FILLER_TOKENS.has(heard.tokens[h])) places.push(h);
+    // At an end, a heard word more is a lead-in or a sign-off as likely as a word heard as two.
+    if ((e0 < 0 || e1 === n) && places.length !== left) continue;
+    if (places.length === left) {
+      for (let i = 0; i < left; i++) times[e0 + 1 + i] = span(places[i], places[i]);
+    } else if (places.length === left + 1) {
+      const [gapStart, gapEnd] = span(places[0], places.at(-1));
+      const owners = [...new Set(expected.sourceIndex.slice(e0 + 1, e1))];
+      const share = (gapEnd - gapStart) / owners.length;
+      for (let t = e0 + 1; t < e1; t++) {
+        const u = owners.indexOf(expected.sourceIndex[t]);
+        times[t] = [gapStart + u * share, gapStart + (u + 1) * share];
+      }
+    }
+  }
+  // A number token of a script word with a digit not heard as written: that word is not shown.
+  const paired = new Set(pairs.slice(1, -1).map(([e]) => e));
+  const numberToken = (token) => NUMBER_WORDS.has(token) || /\p{N}/u.test(token);
+  const unheardNumbers = new Set();
+  for (let e = 0; e < n; e++) {
+    if (paired.has(e) || !numberToken(expected.tokens[e])) continue;
+    for (let i = expected.sourceIndex[e]; i <= expected.lastSourceIndex[e]; i++) if (/\p{N}/u.test(written[i])) unheardNumbers.add(i);
+  }
+  for (let e = 0; e < n; e++) {
+    for (let i = expected.sourceIndex[e]; i <= expected.lastSourceIndex[e]; i++) if (unheardNumbers.has(i)) times[e] = null;
+  }
+  return { expected, times };
 }
 
 /**
@@ -4611,14 +4720,14 @@ export function lineCaptionScreens(words, cap = null) {
 
 /**
  * captionsByLine: the cut's words in its own time, each with the script line
- * it belongs to. Where a segment's script is heard in order (alignScript),
- * they are the script's words as written, each timed by the heard words that
- * say it; elsewhere they are the heard words, each on the line its place among
- * the script's words gives it, the way a cue line is found (lineInSegment).
+ * it belongs to. They are the script's words as written, never a heard word
+ * the script does not have (COP-311). Where a segment's script is heard in
+ * order (alignScript), each is timed by the heard words that say it;
+ * elsewhere by the heard words in its place (scriptTimes), and a script word
+ * with nothing heard in its place is left out.
  */
 export function lineWords(timeline, storyboard) {
   const texts = new Map((storyboard?.script ?? []).map((line) => [line?.lineId, line?.text]));
-  const counts = lineWordCounts(storyboard);
   const rows = [];
   for (const seg of timeline.spine) {
     const heard = seg.words ?? [];
@@ -4638,19 +4747,48 @@ export function lineWords(timeline, storyboard) {
       });
       continue;
     }
-    const ends = [];
-    let n = 0;
-    for (const id of seg.lineIds) ends.push((n += counts.get(id) ?? 0));
-    heard.forEach((w, i) => {
-      const text = (w.w ?? "").trim();
-      const start = at(w.s);
-      const end = at(w.e);
-      if (!text || end <= start) return;
-      const j = ends.findIndex((last) => Math.min(i, n - 1) < last);
-      rows.push({ text, start, end, line: seg.lineIds[j] ?? seg.lineIds.at(-1) ?? `scene ${seg.sceneIndex}` });
+    // COP-311: the script's words still, each on the time of what was heard in its place (scriptTimes).
+    const lineOf = lines.flatMap((ws, j) => ws.map(() => seg.lineIds[j]));
+    const { expected, times } = scriptTimes(heard, lines.flat());
+    lines.flat().forEach((text, i) => {
+      const said = times.filter((time, e) => time && expected.sourceIndex[e] <= i && i <= expected.lastSourceIndex[e]);
+      if (said.length === 0) return;
+      const start = at(said[0][0]);
+      const end = at(said.at(-1)[1]);
+      if (end > start) rows.push({ text, start, end, line: lineOf[i] });
     });
   }
-  return rows;
+  return sharedHeardWords(rows);
+}
+
+/**
+ * lineWords: script words that start on one heard word but are not timed
+ * alike ("probiotics/and" ending one line and starting the next) take that
+ * word's time (to the earliest of their ends) in turn, so no caption screen
+ * is cleared before its word is said. A word that runs on past it keeps its
+ * own end. Words timed alike on one line stay on one screen
+ * (lineCaptionScreens).
+ */
+function sharedHeardWords(rows) {
+  const out = [];
+  for (let i = 0; i < rows.length; ) {
+    let j = i + 1;
+    while (j < rows.length && rows[j].start === rows[i].start) j++;
+    const run = rows.slice(i, j);
+    const keys = [...new Set(run.map((r) => `${r.line}|${r.end}`))];
+    if (keys.length === 1) out.push(...run);
+    else {
+      const start = run[0].start;
+      const shared = Math.min(...run.map((r) => r.end));
+      const slot = (shared - start) / keys.length;
+      for (const r of run) {
+        const u = keys.indexOf(`${r.line}|${r.end}`);
+        out.push({ ...r, start: roundMs(start + u * slot), end: r.end > shared ? r.end : roundMs(start + (u + 1) * slot) });
+      }
+    }
+    i = j;
+  }
+  return out;
 }
 
 /**

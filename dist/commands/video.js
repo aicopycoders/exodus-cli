@@ -703,6 +703,17 @@ export function asVideoRun(data) {
     const run = (data ?? {});
     return { ...run, nodes: Array.isArray(run.nodes) ? run.nodes : [] };
 }
+export function checkDownloadSize(received, headers) {
+    if (received === 0)
+        throw new Error("the download was empty");
+    const encoding = headers.get("content-encoding");
+    if (encoding && encoding !== "identity")
+        return;
+    const stated = Number(headers.get("content-length") ?? "");
+    if (Number.isFinite(stated) && stated > 0 && stated !== received) {
+        throw new Error(`the download came to ${received} bytes, not the ${stated} the server sent`);
+    }
+}
 export const defaultDeps = {
     get: (p) => apiGet(p),
     post: (p, body) => apiPost(p, body),
@@ -714,7 +725,17 @@ export const defaultDeps = {
         const res = await fetch(url);
         if (!res.ok)
             throw new Error(`HTTP ${res.status}`);
-        fs.writeFileSync(filePath, Buffer.from(await res.arrayBuffer()));
+        const bytes = Buffer.from(await res.arrayBuffer());
+        checkDownloadSize(bytes.length, res.headers);
+        const part = `${filePath}.part`;
+        try {
+            fs.writeFileSync(part, bytes);
+            fs.renameSync(part, filePath);
+        }
+        catch (err) {
+            fs.rmSync(part, { force: true });
+            throw err;
+        }
     },
     readFile: (filePath) => fs.readFileSync(filePath, "utf-8"),
     readFileBytes: (filePath) => fs.readFileSync(filePath),
@@ -917,6 +938,8 @@ export function classifyRun(run) {
                 ...(missingScenes.length > 0 && framesNodeId ? { framesNodeId } : {}),
                 ...(run.cutHeldScenes?.length ? { heldScenes: run.cutHeldScenes } : {}),
                 ...(run.cutFailure?.sentence ? { cutFailure: run.cutFailure.sentence } : {}),
+                ...(run.appCut === "making" ? { appMakesCut: true } : {}),
+                ...(appCutOutdates(run) ? { appOutdatesCut: true } : {}),
             };
         }
         return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -943,13 +966,33 @@ export function heldTakesOf(scenes, items) {
     if (!scenes?.length || !items)
         return [];
     return scenes.flatMap((sceneIndex) => {
-        const latest = items
-            .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
-            .reduce((best, i) => (!best || (i.attempt ?? 0) >= (best.attempt ?? 0) ? i : best), undefined);
-        const said = (latest?.findings ?? [])
-            .filter((f) => ONE_TAKE_HOLD_CODES.includes(f.code) && f.detail.trim())
-            .map((f) => f.detail.trim());
-        return said.length > 0 ? [{ sceneIndex, sentence: said.join(" ") }] : [];
+        const said = holdSentenceOf(latestClipRow(items, sceneIndex));
+        return said !== null ? [{ sceneIndex, sentence: said }] : [];
+    });
+}
+function latestClipRow(items, sceneIndex) {
+    return items
+        .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
+        .reduce((best, i) => (!best || (i.attempt ?? 0) >= (best.attempt ?? 0) ? i : best), undefined);
+}
+function holdSentenceOf(row) {
+    const said = (row?.findings ?? [])
+        .filter((f) => ONE_TAKE_HOLD_CODES.includes(f.code) && f.detail.trim())
+        .map((f) => f.detail.trim());
+    return said.length > 0 ? said.join(" ") : null;
+}
+export function flaggedHeldTakesOf(items) {
+    if (!items)
+        return [];
+    const scenes = [...new Set(items.filter((i) => i.itemKind === "clip" && isPullSceneIndex(i.sceneIndex)).map((i) => i.sceneIndex))];
+    return scenes
+        .sort((a, b) => a - b)
+        .flatMap((sceneIndex) => {
+        const latest = latestClipRow(items, sceneIndex);
+        if (!latest || latest.status !== "done" || latest.flagged !== true || latest.acceptedAsIs)
+            return [];
+        const said = holdSentenceOf(latest);
+        return said !== null ? [{ sceneIndex, sentence: said }] : [];
     });
 }
 export function resolveStop(stop, cutAttached, items) {
@@ -962,8 +1005,36 @@ export function resolveStop(stop, cutAttached, items) {
     }
     if (stop.at !== "final-watch")
         return stop;
-    const heldTakes = heldTakesOf(stop.heldScenes, items);
-    return { ...stop, cutAttached, ...(heldTakes.length > 0 ? { heldTakes } : {}) };
+    const named = heldTakesOf(stop.heldScenes, items);
+    const fromRows = cutAttached === false
+        ? flaggedHeldTakesOf(items).filter((t) => !(stop.heldScenes ?? []).includes(t.sceneIndex))
+        : [];
+    const heldTakes = fromRows.length > 0 ? [...named, ...fromRows].sort((a, b) => a.sceneIndex - b.sceneIndex) : named;
+    const heldScenes = fromRows.length > 0
+        ? [...(stop.heldScenes ?? []), ...fromRows.map((t) => t.sceneIndex)].sort((a, b) => a - b)
+        : stop.heldScenes;
+    return {
+        ...stop,
+        cutAttached,
+        ...(heldScenes?.length ? { heldScenes } : {}),
+        ...(heldTakes.length > 0 ? { heldTakes } : {}),
+        ...(items && hasAppCut(items) ? { appCutOnRun: true } : {}),
+    };
+}
+export function appCutOutdates(run) {
+    return run.appCut === "making" && run.moduleKey === "script-video";
+}
+function hasAppCut(items) {
+    return items.some((i) => i.itemKind === "final" && i.status === "done" && i.artifact?.type === "video" && i.artifact.autoCut === true);
+}
+export function appIsCutting(stop) {
+    return (stop.at === "final-watch" &&
+        stop.appMakesCut === true &&
+        !stop.missingScenes?.length &&
+        !stop.heldScenes?.length &&
+        !stop.cutFailure &&
+        stop.cutAttached !== null &&
+        (!stop.cutAttached || (stop.appCutOnRun === true && stop.appOutdatesCut === true)));
 }
 export async function resolveStopAtPark(stop, runId, deps) {
     if (stop.at !== "final-watch" && stop.at !== "pilot")
@@ -1156,6 +1227,21 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             return [
                 "Parked: every piece is made.",
                 `Couldn't check whether a cut is already uploaded. See where it stands: exodus video status ${runId}`,
+                `Watch it here:   ${runUrl}`,
+            ];
+        }
+        if (appIsCutting(stop)) {
+            if (stop.redoingScenes?.length) {
+                const many = stop.redoingScenes.length > 1;
+                return [
+                    `Scene${many ? "s" : ""} ${stop.redoingScenes.join(", ")} ${many ? "are" : "is"} being made again. The app cuts the video again once ${many ? "they are" : "it is"} made; look again in a few minutes: exodus video status ${runId}`,
+                    `Watch it here:   ${runUrl}`,
+                ];
+            }
+            return [
+                stop.cutAttached
+                    ? `Every piece is made. The app makes the cut again now; look again in a minute: exodus video status ${runId}`
+                    : `Every piece is made. The app makes the cut now; look again in a minute: exodus video status ${runId}`,
                 `Watch it here:   ${runUrl}`,
             ];
         }
@@ -1732,6 +1818,8 @@ export function planPull(run, items, opts) {
         };
     });
     const { cast, downloads: castDownloads } = planCastRefs(run, items, castVoicePins(storyboardArtifact));
+    const finishedUrl = opts.piecesOnly || appCutOutdates(run) ? undefined : finishedVideoUrl(items);
+    const finished = finishedUrl ? { file: `video.${extFor(finishedUrl, "video")}`, url: finishedUrl } : null;
     const downloads = [
         ...(reference ? [reference] : []),
         ...(productSheet ? [productSheet] : []),
@@ -1743,6 +1831,7 @@ export function planPull(run, items, opts) {
         ...[...clipByScene.values()].map((c) => c.download),
         ...(music ? [music] : []),
         ...castDownloads,
+        ...(finished ? [finished] : []),
     ];
     return {
         downloads,
@@ -1788,11 +1877,40 @@ export function planPull(run, items, opts) {
             ...(run.videoChoice?.videoModel === "template-video" && run.heldSong === true
                 ? { wholeVoice: true, templateMotion: { enabled: true } } : {}),
             ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
+            ...(finished ? { video: finished.file } : {}),
         },
     };
 }
+function finishedVideoUrl(items) {
+    const finals = items.filter((i) => i.itemKind === "final" && i.status === "done" && i.artifact?.type === "video");
+    return finals.length === 1 && finals[0].artifact?.type === "video" ? finals[0].artifact.videoUrl || undefined : undefined;
+}
+function appCutsRun(run, items) {
+    return run.appCut !== undefined || hasAppCut(items);
+}
+function fingerprintInFolder(dir, file, deps) {
+    if (!file || deps.statFile(path.join(dir, file)) === null)
+        return null;
+    return createHash("sha256").update(deps.readFileBytes(path.join(dir, file))).digest("hex");
+}
+function replacedVideoLines(dir, file, before, deps) {
+    if (!file || before === null)
+        return [];
+    const after = fingerprintInFolder(dir, file, deps);
+    return after !== null && after !== before
+        ? [`A different ${file} was already in ${dir}; the pull replaced it with this run's finished video.`]
+        : [];
+}
+function runStopped(run) {
+    return run.status === "failed" || run.status === "cancelled" || run.status === "canceled";
+}
+function deliveredLine(dir, video) {
+    return video ? `This run is delivered. The finished video is ${path.join(dir, video)}.` : "This run is delivered.";
+}
 export function markPullFailure(manifest, failure) {
     manifest.failed.push(failure);
+    if (manifest.video === failure.file)
+        manifest.video = null;
     if (manifest.storyboard === failure.file)
         manifest.storyboard = null;
     if (manifest.reference === failure.file)
@@ -3802,6 +3920,10 @@ export async function waitFlow(runId, opts, deps) {
             }
         }
         const resolved = resolveStop(stop, items ? hasAttachedCut(items) : null, items);
+        if (appIsCutting(resolved)) {
+            progress("Working: the app makes the cut…");
+            continue;
+        }
         if (opts.json) {
             return {
                 code: stop.at === "failed" ? 1 : 0,
@@ -3844,6 +3966,9 @@ function carryingOn(run) {
     return (run.status === "queued" &&
         run.nodes.some((n) => n.status !== "idle" && n.status !== "out-of-scope"));
 }
+function cutDeliversItself(run, stop) {
+    return run.storyboardAutoApprove === true && stop.at === "running";
+}
 export async function statusFlow(runId, json, deps) {
     const runRes = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
     if (!runRes.ok)
@@ -3861,7 +3986,9 @@ export async function statusFlow(runId, json, deps) {
         return errorResult(itemsRes, json);
     const items = itemsRes.data.items ?? [];
     const hasFinal = hasAttachedCut(items);
-    const stop = resolveStop(classifyRun(run), hasFinal, items);
+    const resolved = resolveStop(classifyRun(run), hasFinal, items);
+    const redoingScenes = resolved.at === "final-watch" ? scenesBeingRedone(run, items) : [];
+    const stop = resolved.at === "final-watch" && redoingScenes.length > 0 ? { ...resolved, redoingScenes } : resolved;
     const failedStoryboard = failedStoryboardNode(run);
     const guidance = stopLines(stop.at === "failed" && errorEchoesReasons(stop.error, failedStoryboard?.planFailure)
         ? { ...stop, error: undefined }
@@ -4019,11 +4146,17 @@ export async function statusFlow(runId, json, deps) {
         lines.push(...(await statusVoiceLines(runId, deps)));
     }
     const cost = runCostLine(run, items);
-    lines.push("", ...(cost ? [cost] : []), hasFinal && stop.at === "finished"
-        ? "Final cut: approved and delivered."
-        : hasFinal
-            ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
-            : "Final cut: not uploaded yet.", ...(run.cutCheck ?? []));
+    lines.push("", ...(cost ? [cost] : []), runStopped(run)
+        ? hasFinal ? "Final cut: on the run, which stopped before it was delivered." : "Final cut: none. This run stopped before one was made."
+        : hasFinal && stop.at === "finished"
+            ? "Final cut: approved and delivered."
+            : hasFinal && cutDeliversItself(run, stop)
+                ? "Final cut: made. This run delivers it by itself; look again in a minute."
+                : hasFinal && appIsCutting(stop)
+                    ? "Final cut: the app makes it again now; look again in a minute."
+                    : hasFinal
+                        ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
+                        : "Final cut: not uploaded yet.", ...(run.cutCheck ?? []));
     let finalSpeech;
     for (const item of items)
         if (item.itemKind === "final" && item.status === "done")
@@ -5511,6 +5644,7 @@ async function customerPullFlow(run, dir, json, deps) {
         dashboardUrl: deps.dashboardUrl,
     });
     deps.mkdirp(dir);
+    const videoBefore = fingerprintInFolder(dir, manifest.video, deps);
     const failures = (await runPool(downloads.map((download) => () => downloadWithRetry(download, dir, deps)), PULL_CONCURRENCY)).filter((f) => f !== null);
     const landed = (file) => file !== null && !failures.some((f) => f.file === file) ? file : null;
     for (const scene of manifest.scenes) {
@@ -5539,6 +5673,7 @@ async function customerPullFlow(run, dir, json, deps) {
         lines: [
             `Pulled ${downloads.length - failures.length + 1} files into ${dir}`,
             `Every piece is listed in ${manifestPath}.`,
+            ...replacedVideoLines(dir, manifest.video, videoBefore, deps),
             ...(manifest.video ? [] : ["The finished video isn't ready yet, so only the scene pieces came down."]),
             ...(failures.length > 0
                 ? [
@@ -5548,10 +5683,12 @@ async function customerPullFlow(run, dir, json, deps) {
                     "Run the same command again to retry.",
                 ]
                 : []),
-            "",
-            `When your cut is ready: exodus video upload ${runId} --file cut.mp4`,
+            ...(customerDelivered(run) ? ["", deliveredLine(dir, manifest.video)] : []),
         ],
     };
+}
+function customerDelivered(run) {
+    return run.stage === "ready" && run.awaitingSignOff !== true;
 }
 export async function pullFlow(runId, dir, json, deps) {
     const runRes = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
@@ -5568,6 +5705,7 @@ export async function pullFlow(runId, dir, json, deps) {
     const plan = planPull(run, items, {
         pulledAt: new Date(deps.now()).toISOString(),
         dashboardUrl: deps.dashboardUrl,
+        ...(deps.piecesOnly ? { piecesOnly: true } : {}),
     });
     deps.mkdirp(dir);
     if (plan.downloads.length === 0 && plan.texts.length === 0) {
@@ -5582,6 +5720,7 @@ export async function pullFlow(runId, dir, json, deps) {
     for (const text of plan.texts) {
         deps.writeFile(path.join(dir, text.file), text.body);
     }
+    const videoBefore = fingerprintInFolder(dir, plan.manifest.video, deps);
     const failures = await runPool(plan.downloads.map((download) => () => downloadWithRetry(download, dir, deps)), PULL_CONCURRENCY);
     for (const failure of failures) {
         if (failure)
@@ -5601,6 +5740,7 @@ export async function pullFlow(runId, dir, json, deps) {
     const lines = [
         `Pulled ${wrote} files into ${dir}`,
         `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
+        ...replacedVideoLines(dir, plan.manifest.video, videoBefore, deps),
         ...musicLines(plan.manifest),
     ];
     if (plan.manifest.dropped.length > 0) {
@@ -5634,7 +5774,15 @@ export async function pullFlow(runId, dir, json, deps) {
             lines.push(`  ${failure.file}: ${failure.error}`);
         lines.push("Run the same command again to retry just those.");
     }
-    lines.push("", `When your cut is ready: exodus video upload ${runId} --file cut.mp4`);
+    if (runStopped(run)) {
+        lines.push("", "This run stopped before it was delivered, so no cut can be uploaded to it now.");
+    }
+    else if (hasAttachedCut(items) && classifyRun(run).at === "finished") {
+        lines.push("", deliveredLine(dir, plan.manifest.video));
+    }
+    else if (!appCutsRun(run, items)) {
+        lines.push("", `When your cut is ready: exodus video upload ${runId} --file cut.mp4`);
+    }
     return { code: failed.length > 0 ? 1 : 0, lines };
 }
 const BOX_HEADER = 8;

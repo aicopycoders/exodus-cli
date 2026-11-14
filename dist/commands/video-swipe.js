@@ -3133,6 +3133,8 @@ function runStateWord(data) {
         return "failed";
     if (run.isTerminal)
         return "done";
+    if (run.appCut === "making")
+        return "running";
     if (run.status === "awaiting-approval" || run.status === "awaiting-review") {
         const parked = run.nodes.find((node) => node.nodeId === run.pausedNodeId);
         return run.pauseReason === undefined && parked && ["scene-frames", "storyboard"].includes(parked.kind) ? "storyboard" : "waiting";

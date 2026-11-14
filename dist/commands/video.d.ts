@@ -107,6 +107,7 @@ export type ArtifactSubset = {
     words?: ClipWord[];
     qc?: ClipQc;
     final?: boolean;
+    autoCut?: boolean;
     revoiced?: boolean;
     speechTrimmed?: boolean;
     tailTrimmed?: boolean;
@@ -225,6 +226,9 @@ export interface VideoRun {
     };
     workflowId?: string;
     cutHeldScenes?: number[];
+    appCut?: "making" | "needs-person";
+    storyboardAutoApprove?: boolean;
+    moduleKey?: string;
     cutFailure?: {
         sentence: string;
     };
@@ -256,6 +260,9 @@ export interface NodeItem {
     error?: string;
     attempt?: number;
     flagged?: boolean;
+    acceptedAsIs?: {
+        at: number;
+    };
     findings?: ClipFinding[];
     speech?: SpeechSummary;
     staleClaim?: boolean;
@@ -290,12 +297,14 @@ export interface FlowResult {
     lines: string[];
     usage?: true;
 }
+export declare function checkDownloadSize(received: number, headers: Pick<Headers, "get">): void;
 export interface VideoDeps {
     get: (path: string) => Promise<ApiResponse<unknown>>;
     post: (path: string, body: unknown) => Promise<ApiResponse<unknown>>;
     mkdirp: (dir: string) => void;
     writeFile: (filePath: string, text: string) => void;
     downloadToFile: (url: string, filePath: string) => Promise<void>;
+    piecesOnly?: true;
     readFile: (filePath: string) => string;
     readFileBytes: (filePath: string) => Uint8Array;
     statFile: (filePath: string) => {
@@ -334,6 +343,10 @@ export type RunStop = {
     heldScenes?: number[];
     heldTakes?: HeldTake[];
     cutFailure?: string;
+    appMakesCut?: true;
+    appCutOnRun?: true;
+    appOutdatesCut?: true;
+    redoingScenes?: number[];
 } | {
     at: "pilot";
     nodeId?: string;
@@ -388,7 +401,10 @@ export interface HeldTake {
     sentence: string;
 }
 export declare function heldTakesOf(scenes: readonly number[] | undefined, items: readonly NodeItem[] | null | undefined): HeldTake[];
+export declare function flaggedHeldTakesOf(items: readonly NodeItem[] | null | undefined): HeldTake[];
 export declare function resolveStop(stop: RunStop, cutAttached: boolean | null, items?: NodeItem[] | null): ResolvedStop;
+export declare function appCutOutdates(run: Pick<VideoRun, "appCut" | "moduleKey">): boolean;
+export declare function appIsCutting(stop: ResolvedStop): boolean;
 export declare function resolveStopAtPark(stop: RunStop, runId: string, deps: Pick<VideoDeps, "get">): Promise<ResolvedStop>;
 export declare function stageWord(stage: string): string;
 export declare function stepName(kind: string | undefined): string;
@@ -502,6 +518,7 @@ export interface VideoManifest {
         file: string | null;
         reason?: string;
     };
+    video?: string | null;
 }
 export interface RunShots {
     frame?: string;
@@ -520,6 +537,7 @@ export declare function scenePrefix(sceneIndex: number): string;
 export declare function planPull(run: VideoRun, items: NodeItem[], opts: {
     pulledAt: string;
     dashboardUrl: string;
+    piecesOnly?: true;
 }): PullPlan;
 export declare function markPullFailure(manifest: VideoManifest, failure: PullFailure): void;
 export declare function missingSetupLabels(progress: ShowRow["setupProgress"]): string[];

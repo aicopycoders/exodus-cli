@@ -881,6 +881,8 @@ export type ArtifactSubset =
       words?: ClipWord[];
       qc?: ClipQc;
       final?: boolean;
+      /** COP-312: on a final cut, the app made it (written only by the worker's attach, scout auto-cut.ts). */
+      autoCut?: boolean;
       /** #1708: the cast voice was applied over the generated voice. */
       revoiced?: boolean;
       /** #1708: the clip was trimmed to its spoken words. */
@@ -1081,6 +1083,20 @@ export interface VideoRun {
    */
   cutHeldScenes?: number[];
   /**
+   * COP-312: where the app's own cut of this run stands while it is parked at its final watch (convex workflows.ts
+   * getRun, lib/video/autoCut.ts appCutOf): "making" while the app joins the takes, or waits on a redo first;
+   * "needs-person" when its cut gave up or a scene has no clip. Absent on a run whose cut its member makes, on any other
+   * stop, once the app's cut waits for its member's sign-off, and from older backends.
+   */
+  appCut?: "making" | "needs-person";
+  /**
+   * COP-312: the run was started One-shot (convex workflows.ts projectRun). A cut attached to such a run signs it off by
+   * itself (deliverAtFinalWatch "auto"), unless the sign-off is refused, and then the run stays at its final watch.
+   */
+  storyboardAutoApprove?: boolean;
+  /** The module the run's workflow belongs to ("script-video" for the Video page, a swipe and a beta tester's run). */
+  moduleKey?: string;
+  /**
    * #4573: the app's last cut was refused and nothing answered it: why, in the member's words (convex workflows.ts
    * getRun). Absent otherwise, and from older backends.
    */
@@ -1127,6 +1143,8 @@ export interface NodeItem {
   error?: string;
   attempt?: number;
   flagged?: boolean;
+  /** COP-312: a person kept this clip as it is (exodus video keep, or the page's Keep it); it holds nothing since. */
+  acceptedAsIs?: { at: number };
   findings?: ClipFinding[];
   speech?: SpeechSummary;
   /** #1870: the server's own verdict that this row has been "running" so long
@@ -1171,12 +1189,31 @@ export interface FlowResult {
   usage?: true;
 }
 
+/**
+ * A pulled file is whole: some bytes came, and as many as the server said it sent. A body the server compressed is
+ * counted after it is unpacked, so its stated size is not compared.
+ */
+export function checkDownloadSize(received: number, headers: Pick<Headers, "get">): void {
+  if (received === 0) throw new Error("the download was empty");
+  const encoding = headers.get("content-encoding");
+  if (encoding && encoding !== "identity") return;
+  const stated = Number(headers.get("content-length") ?? "");
+  if (Number.isFinite(stated) && stated > 0 && stated !== received) {
+    throw new Error(`the download came to ${received} bytes, not the ${stated} the server sent`);
+  }
+}
+
 export interface VideoDeps {
   get: (path: string) => Promise<ApiResponse<unknown>>;
   post: (path: string, body: unknown) => Promise<ApiResponse<unknown>>;
   mkdirp: (dir: string) => void;
   writeFile: (filePath: string, text: string) => void;
   downloadToFile: (url: string, filePath: string) => Promise<void>;
+  /**
+   * #4589 landing review: the worker's own cut (scout auto-cut.ts) pulls the pieces it cuts from, never a finished
+   * video, whatever the run says of its cut.
+   */
+  piecesOnly?: true;
   readFile: (filePath: string) => string;
   readFileBytes: (filePath: string) => Uint8Array;
   statFile: (filePath: string) => { size: number } | null;
@@ -1201,7 +1238,17 @@ export const defaultDeps: VideoDeps = {
   downloadToFile: async (url, filePath) => {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    fs.writeFileSync(filePath, Buffer.from(await res.arrayBuffer()));
+    const bytes = Buffer.from(await res.arrayBuffer());
+    checkDownloadSize(bytes.length, res.headers);
+    // Written beside the file first, so a download that fails never leaves part of a file where a whole one was.
+    const part = `${filePath}.part`;
+    try {
+      fs.writeFileSync(part, bytes);
+      fs.renameSync(part, filePath);
+    } catch (err) {
+      fs.rmSync(part, { force: true });
+      throw err;
+    }
   },
   readFile: (filePath) => fs.readFileSync(filePath, "utf-8"),
   readFileBytes: (filePath) => fs.readFileSync(filePath),
@@ -1280,7 +1327,11 @@ export type RunStop =
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; cutFailure?: string }
+  // COP-312: `appMakesCut` is the server's word that the app is making this run's cut now (`appCut: "making"`).
+  // `appCutOnRun`, filled by resolveStop from the rows, says the cut on the run is the app's own. `appOutdatesCut` says
+  // the server's "making" also means any cut on the run is not one to keep (a script-video run, see appCutOutdates).
+  // `redoingScenes`, filled by status from the rows (scenesBeingRedone), are the scenes being made again before that cut.
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[] }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
@@ -1524,6 +1575,8 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(missingScenes.length > 0 && framesNodeId ? { framesNodeId } : {}),
         ...(run.cutHeldScenes?.length ? { heldScenes: run.cutHeldScenes } : {}),
         ...(run.cutFailure?.sentence ? { cutFailure: run.cutFailure.sentence } : {}),
+        ...(run.appCut === "making" ? { appMakesCut: true as const } : {}),
+        ...(appCutOutdates(run) ? { appOutdatesCut: true as const } : {}),
       };
     }
     return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -1584,19 +1637,50 @@ export interface HeldTake {
 export function heldTakesOf(scenes: readonly number[] | undefined, items: readonly NodeItem[] | null | undefined): HeldTake[] {
   if (!scenes?.length || !items) return [];
   return scenes.flatMap((sceneIndex) => {
-    const latest = items
-      .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
-      .reduce<NodeItem | undefined>((best, i) => (!best || (i.attempt ?? 0) >= (best.attempt ?? 0) ? i : best), undefined);
-    const said = (latest?.findings ?? [])
-      .filter((f) => ONE_TAKE_HOLD_CODES.includes(f.code) && f.detail.trim())
-      .map((f) => f.detail.trim());
-    return said.length > 0 ? [{ sceneIndex, sentence: said.join(" ") }] : [];
+    const said = holdSentenceOf(latestClipRow(items, sceneIndex));
+    return said !== null ? [{ sceneIndex, sentence: said }] : [];
   });
+}
+
+/** COP-277: a scene's latest clip row (highest attempt), as the server's cutHeldScenesOf reads it. */
+function latestClipRow(items: readonly NodeItem[], sceneIndex: number): NodeItem | undefined {
+  return items
+    .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
+    .reduce<NodeItem | undefined>((best, i) => (!best || (i.attempt ?? 0) >= (best.attempt ?? 0) ? i : best), undefined);
+}
+
+/** COP-277: every One-take hold finding's words on a clip row, in the order the video step wrote them; null with none. */
+function holdSentenceOf(row: NodeItem | undefined): string | null {
+  const said = (row?.findings ?? [])
+    .filter((f) => ONE_TAKE_HOLD_CODES.includes(f.code) && f.detail.trim())
+    .map((f) => f.detail.trim());
+  return said.length > 0 ? said.join(" ") : null;
+}
+
+/**
+ * COP-312: the One-take takes held by their own clip rows: the scene's latest clip row is made, flagged, not kept as it
+ * is, and carries a hold finding. The video step writes that finding with the take, seconds before the app's cut task
+ * writes `cutHeldScenes`, and the worker's assembly gate holds the app's cut for exactly these rows (scout auto-cut.ts
+ * oneTakeHolds). A keep clears `flagged` (convex videoModule.ts keepFlaggedSceneAsIs), so a kept take is not one.
+ */
+export function flaggedHeldTakesOf(items: readonly NodeItem[] | null | undefined): HeldTake[] {
+  if (!items) return [];
+  const scenes = [...new Set(items.filter((i) => i.itemKind === "clip" && isPullSceneIndex(i.sceneIndex)).map((i) => i.sceneIndex))];
+  return scenes
+    .sort((a, b) => a - b)
+    .flatMap((sceneIndex) => {
+      const latest = latestClipRow(items, sceneIndex);
+      if (!latest || latest.status !== "done" || latest.flagged !== true || latest.acceptedAsIs) return [];
+      const said = holdSentenceOf(latest);
+      return said !== null ? [{ sceneIndex, sentence: said }] : [];
+    });
 }
 
 /** #1704: fill in the one fact `classifyRun` cannot see. `cutAttached` comes
  *  from `hasAttachedCut`, or is null when the ledger could not be read.
- *  COP-277: the scene rows also say which held scenes are One-take takes. */
+ *  COP-277: the scene rows also say which held scenes are One-take takes.
+ *  COP-312: and, while no cut is on the run, which takes their own rows hold before the cut task names them. A hold
+ *  holds only the app's cut, so with a cut on the run the rows name no held take of their own. */
 export function resolveStop(
   stop: RunStop,
   cutAttached: boolean | null,
@@ -1613,8 +1697,54 @@ export function resolveStop(
     return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
   }
   if (stop.at !== "final-watch") return stop;
-  const heldTakes = heldTakesOf(stop.heldScenes, items);
-  return { ...stop, cutAttached, ...(heldTakes.length > 0 ? { heldTakes } : {}) };
+  const named = heldTakesOf(stop.heldScenes, items);
+  const fromRows = cutAttached === false
+    ? flaggedHeldTakesOf(items).filter((t) => !(stop.heldScenes ?? []).includes(t.sceneIndex))
+    : [];
+  const heldTakes = fromRows.length > 0 ? [...named, ...fromRows].sort((a, b) => a.sceneIndex - b.sceneIndex) : named;
+  const heldScenes = fromRows.length > 0
+    ? [...(stop.heldScenes ?? []), ...fromRows.map((t) => t.sceneIndex)].sort((a, b) => a - b)
+    : stop.heldScenes;
+  return {
+    ...stop,
+    cutAttached,
+    ...(heldScenes?.length ? { heldScenes } : {}),
+    ...(heldTakes.length > 0 ? { heldTakes } : {}),
+    ...(items && hasAppCut(items) ? { appCutOnRun: true as const } : {}),
+  };
+}
+
+/**
+ * #4589 landing review: the app is making this run's cut, and so no cut on the run is one to keep: a cut on it is one a
+ * redo outdated. The server's "making" says that only of a script-video run (convex lib/video/autoCut.ts appCutOf, which
+ * returns early on a cut to keep only where customerSignsOffCut holds); on a member's own workflow launched from a form it
+ * reads "making" even beside the app's fresh cut, which waits there for its approve, so such a run keeps its approve.
+ */
+export function appCutOutdates(run: Pick<VideoRun, "appCut" | "moduleKey">): boolean {
+  return run.appCut === "making" && run.moduleKey === "script-video";
+}
+
+/** COP-312: a made final cut on the run is the app's own (`autoCut`, written only by the worker's attach). */
+function hasAppCut(items: readonly NodeItem[]): boolean {
+  return items.some((i) => i.itemKind === "final" && i.status === "done" && i.artifact?.type === "video" && i.artifact.autoCut === true);
+}
+
+/**
+ * COP-312: the app is making this run's cut now (`appCut` "making") and nothing else is named first: no scene is missing,
+ * no take or scene is held, no refused cut, and the ledger was read. The run has no cut, or only the app's own, which a
+ * redo outdated (the server no longer counts it as one to keep, and refuses its approve). A person's own upload is not
+ * one: it waits for its approve. Status says the app makes the cut, and wait keeps waiting.
+ */
+export function appIsCutting(stop: ResolvedStop): boolean {
+  return (
+    stop.at === "final-watch" &&
+    stop.appMakesCut === true &&
+    !stop.missingScenes?.length &&
+    !stop.heldScenes?.length &&
+    !stop.cutFailure &&
+    stop.cutAttached !== null &&
+    (!stop.cutAttached || (stop.appCutOnRun === true && stop.appOutdatesCut === true))
+  );
 }
 
 /**
@@ -1891,6 +2021,24 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
       return [
         "Parked: every piece is made.",
         `Couldn't check whether a cut is already uploaded. See where it stands: exodus video status ${runId}`,
+        `Watch it here:   ${runUrl}`,
+      ];
+    }
+    // COP-312: the app makes this run's cut now (the server's `appCut`), or makes it again after a redo outdated its own
+    // cut, so there is nothing to pull, cut, upload or approve. Read status again in a minute.
+    if (appIsCutting(stop)) {
+      // #4589 landing review: a scene the app waits on is still being made, so not every piece is made yet.
+      if (stop.redoingScenes?.length) {
+        const many = stop.redoingScenes.length > 1;
+        return [
+          `Scene${many ? "s" : ""} ${stop.redoingScenes.join(", ")} ${many ? "are" : "is"} being made again. The app cuts the video again once ${many ? "they are" : "it is"} made; look again in a few minutes: exodus video status ${runId}`,
+          `Watch it here:   ${runUrl}`,
+        ];
+      }
+      return [
+        stop.cutAttached
+          ? `Every piece is made. The app makes the cut again now; look again in a minute: exodus video status ${runId}`
+          : `Every piece is made. The app makes the cut now; look again in a minute: exodus video status ${runId}`,
         `Watch it here:   ${runUrl}`,
       ];
     }
@@ -2238,6 +2386,11 @@ export interface VideoManifest {
    * means the run had no lineage to tell.
    */
   lineage?: { file: string | null; reason?: string };
+  /**
+   * COP-312: the run's finished video, under the name a beta tester's pull gives it (`video.<ext>`), or null when its
+   * download failed. Written only when the run has one, so a manifest of a run without one is unchanged.
+   */
+  video?: string | null;
 }
 
 /** #3304: the run's Frame ("pov") and Pacing ("jump-cuts", "long-take", "montage"). */
@@ -2574,7 +2727,7 @@ function withReplannedPrompts(raw: string, replanned: Map<number, { framePrompt:
 export function planPull(
   run: VideoRun,
   items: NodeItem[],
-  opts: { pulledAt: string; dashboardUrl: string },
+  opts: { pulledAt: string; dashboardUrl: string; piecesOnly?: true },
 ): PullPlan {
   const texts: PullTextFile[] = [];
   const clipAudio = run.videoChoice?.videoModel === "template-video"
@@ -2831,6 +2984,11 @@ export function planPull(
     castVoicePins(storyboardArtifact),
   );
 
+  // COP-312: the finished video, as a beta tester's pull saves it. Not while the app makes the cut: the one the run
+  // holds then is the cut a redo outdated, about to be replaced. Never for the worker's own cut, which cuts the pieces.
+  const finishedUrl = opts.piecesOnly || appCutOutdates(run) ? undefined : finishedVideoUrl(items);
+  const finished: PullDownload | null = finishedUrl ? { file: `video.${extFor(finishedUrl, "video")}`, url: finishedUrl } : null;
+
   const downloads: PullDownload[] = [
     ...(reference ? [reference] : []),
     ...(productSheet ? [productSheet] : []),
@@ -2842,6 +3000,7 @@ export function planPull(
     ...[...clipByScene.values()].map((c) => c.download),
     ...(music ? [music] : []),
     ...castDownloads,
+    ...(finished ? [finished] : []),
   ];
 
   return {
@@ -2888,12 +3047,61 @@ export function planPull(
       ...(run.videoChoice?.videoModel === "template-video" && run.heldSong === true
         ? { wholeVoice: true as const, templateMotion: { enabled: true as const } } : {}),
       ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
+      ...(finished ? { video: finished.file } : {}),
     },
   };
 }
 
+/**
+ * COP-312: the run's finished video: the one made final cut's file, the row #1704's hasAttachedCut counts. The items
+ * read names no track, so a run with two finals (#720's master and spine) has none it can name.
+ */
+function finishedVideoUrl(items: readonly NodeItem[]): string | undefined {
+  const finals = items.filter((i) => i.itemKind === "final" && i.status === "done" && i.artifact?.type === "video");
+  // #4589 landing review: two finals are an old run's master and spine, which the read cannot tell apart, so neither is
+  // called the finished video.
+  return finals.length === 1 && finals[0].artifact?.type === "video" ? finals[0].artifact.videoUrl || undefined : undefined;
+}
+
+/**
+ * COP-312: the app cuts this run: the server says it is making the cut or its cut waits on a person (`appCut`), or the
+ * cut on the run is the app's own. A run still filming says neither, so its pull keeps the upload line.
+ */
+function appCutsRun(run: Pick<VideoRun, "appCut">, items: readonly NodeItem[]): boolean {
+  return run.appCut !== undefined || hasAppCut(items);
+}
+
+/** #4589 landing review: the sha-256 of a file already in the pull's folder, null when there is none. */
+function fingerprintInFolder(dir: string, file: string | null | undefined, deps: VideoDeps): string | null {
+  if (!file || deps.statFile(path.join(dir, file)) === null) return null;
+  return createHash("sha256").update(deps.readFileBytes(path.join(dir, file))).digest("hex");
+}
+
+/**
+ * #4589 landing review: the pull saves the finished video over a file of that name already in the folder (a member's
+ * own edit, say), so it says so when the file it found held other bytes. A pull run again over the same film says nothing.
+ */
+function replacedVideoLines(dir: string, file: string | null | undefined, before: string | null, deps: VideoDeps): string[] {
+  if (!file || before === null) return [];
+  const after = fingerprintInFolder(dir, file, deps);
+  return after !== null && after !== before
+    ? [`A different ${file} was already in ${dir}; the pull replaced it with this run's finished video.`]
+    : [];
+}
+
+/** #4589 landing review: the run ended without finishing: it failed, or someone cancelled it. */
+function runStopped(run: Pick<VideoRun, "status">): boolean {
+  return run.status === "failed" || run.status === "cancelled" || run.status === "canceled";
+}
+
+/** COP-312: the last line of a delivered run's pull: it is delivered, and where its film landed when it did. */
+function deliveredLine(dir: string, video: string | null | undefined): string {
+  return video ? `This run is delivered. The finished video is ${path.join(dir, video)}.` : "This run is delivered.";
+}
+
 export function markPullFailure(manifest: VideoManifest, failure: PullFailure): void {
   manifest.failed.push(failure);
+  if (manifest.video === failure.file) manifest.video = null;
   if (manifest.storyboard === failure.file) manifest.storyboard = null;
   if (manifest.reference === failure.file) manifest.reference = null;
   if (manifest.productSheet === failure.file) manifest.productSheet = null;
@@ -5152,6 +5360,11 @@ export async function waitFlow(
       }
     }
     const resolved = resolveStop(stop, items ? hasAttachedCut(items) : null, items);
+    // COP-312: the app is making the cut, so the run is still working, as a beta tester's wait reads its "editing".
+    if (appIsCutting(resolved)) {
+      progress("Working: the app makes the cut…");
+      continue;
+    }
     if (opts.json) {
       return {
         code: stop.at === "failed" ? 1 : 0,
@@ -5211,6 +5424,15 @@ function carryingOn(run: VideoRun): boolean {
   );
 }
 
+/**
+ * COP-312: a One-shot run (`storyboardAutoApprove`) with a cut, carrying on by itself: the cut's attach signed it off
+ * (convex workflows.ts deliverAtFinalWatch "auto"), so it finishes with no approve. A One-shot run whose sign-off was
+ * refused stays parked at its final watch and waits for a person, so it is not one.
+ */
+function cutDeliversItself(run: Pick<VideoRun, "storyboardAutoApprove">, stop: ResolvedStop): boolean {
+  return run.storyboardAutoApprove === true && stop.at === "running";
+}
+
 export async function statusFlow(
   runId: string,
   json: boolean,
@@ -5234,7 +5456,10 @@ export async function statusFlow(
   // #1704: one fact, read once, driving the guidance block, the footer and the
   // `hasFinal` field alike — the three used to be able to contradict each other.
   const hasFinal = hasAttachedCut(items);
-  const stop = resolveStop(classifyRun(run), hasFinal, items);
+  const resolved = resolveStop(classifyRun(run), hasFinal, items);
+  // #4589 landing review: a redo the app's cut waits on, which wait already reads from the same rows.
+  const redoingScenes = resolved.at === "final-watch" ? scenesBeingRedone(run, items) : [];
+  const stop: ResolvedStop = resolved.at === "final-watch" && redoingScenes.length > 0 ? { ...resolved, redoingScenes } : resolved;
 
   // #1902: what happened to a storyboard that failed. Read once, printed below
   // and reported in --json from the one node, so the screen and the machine
@@ -5449,11 +5674,18 @@ export async function statusFlow(
   lines.push(
     "",
     ...(cost ? [cost] : []),
-    hasFinal && stop.at === "finished"
+    // #4589 landing review: a cancelled or failed run takes no upload and no approve, and was not delivered.
+    runStopped(run)
+      ? hasFinal ? "Final cut: on the run, which stopped before it was delivered." : "Final cut: none. This run stopped before one was made."
+      : hasFinal && stop.at === "finished"
       ? "Final cut: approved and delivered."
-      : hasFinal
-        ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
-        : "Final cut: not uploaded yet.",
+      : hasFinal && cutDeliversItself(run, stop)
+        ? "Final cut: made. This run delivers it by itself; look again in a minute."
+        : hasFinal && appIsCutting(stop)
+          ? "Final cut: the app makes it again now; look again in a minute."
+          : hasFinal
+            ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
+            : "Final cut: not uploaded yet.",
     // COP-300: the cut's check against its own sound, under the cut it was made on.
     ...(run.cutCheck ?? []),
   );
@@ -7587,6 +7819,7 @@ async function customerPullFlow(
   });
 
   deps.mkdirp(dir);
+  const videoBefore = fingerprintInFolder(dir, manifest.video, deps);
   const failures = (
     await runPool(
       downloads.map((download) => () => downloadWithRetry(download, dir, deps)),
@@ -7623,6 +7856,7 @@ async function customerPullFlow(
     lines: [
       `Pulled ${downloads.length - failures.length + 1} files into ${dir}`,
       `Every piece is listed in ${manifestPath}.`,
+      ...replacedVideoLines(dir, manifest.video, videoBefore, deps),
       ...(manifest.video ? [] : ["The finished video isn't ready yet, so only the scene pieces came down."]),
       ...(failures.length > 0
         ? [
@@ -7632,10 +7866,16 @@ async function customerPullFlow(
             "Run the same command again to retry.",
           ]
         : []),
-      "",
-      `When your cut is ready: exodus video upload ${runId} --file cut.mp4`,
+      // COP-312: the app cuts every beta tester's video (convex lib/video/autoCut.ts isCustomerVideoRun), so there is
+      // never a cut to upload here: a delivered video says so and where its film landed, any other ends above.
+      ...(customerDelivered(run) ? ["", deliveredLine(dir, manifest.video)] : []),
     ],
   };
+}
+
+/** COP-312: the video is delivered: "ready" (finished, or finishing after its sign-off) and not waiting for one. */
+function customerDelivered(run: CustomerRun): boolean {
+  return run.stage === "ready" && run.awaitingSignOff !== true;
 }
 
 export async function pullFlow(
@@ -7657,6 +7897,7 @@ export async function pullFlow(
   const plan = planPull(run, items, {
     pulledAt: new Date(deps.now()).toISOString(),
     dashboardUrl: deps.dashboardUrl,
+    ...(deps.piecesOnly ? { piecesOnly: true as const } : {}),
   });
 
   deps.mkdirp(dir);
@@ -7677,6 +7918,7 @@ export async function pullFlow(
     deps.writeFile(path.join(dir, text.file), text.body);
   }
 
+  const videoBefore = fingerprintInFolder(dir, plan.manifest.video, deps);
   const failures = await runPool(
     plan.downloads.map((download) => () => downloadWithRetry(download, dir, deps)),
     PULL_CONCURRENCY,
@@ -7700,6 +7942,7 @@ export async function pullFlow(
   const lines = [
     `Pulled ${wrote} files into ${dir}`,
     `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
+    ...replacedVideoLines(dir, plan.manifest.video, videoBefore, deps),
     ...musicLines(plan.manifest),
   ];
   if (plan.manifest.dropped.length > 0) {
@@ -7744,7 +7987,16 @@ export async function pullFlow(
     for (const failure of failed) lines.push(`  ${failure.file}: ${failure.error}`);
     lines.push("Run the same command again to retry just those.");
   }
-  lines.push("", `When your cut is ready: exodus video upload ${runId} --file cut.mp4`);
+  // COP-312: the last line follows the run. A delivered run says so and where its film landed (the same reading as
+  // status's "Final cut: approved and delivered."); a run the app cuts gets no upload line; any other waits for a cut.
+  // #4589 landing review: a cancelled or failed run was not delivered, and the server takes no cut for it.
+  if (runStopped(run)) {
+    lines.push("", "This run stopped before it was delivered, so no cut can be uploaded to it now.");
+  } else if (hasAttachedCut(items) && classifyRun(run).at === "finished") {
+    lines.push("", deliveredLine(dir, plan.manifest.video));
+  } else if (!appCutsRun(run, items)) {
+    lines.push("", `When your cut is ready: exodus video upload ${runId} --file cut.mp4`);
+  }
   return { code: failed.length > 0 ? 1 : 0, lines };
 }
 

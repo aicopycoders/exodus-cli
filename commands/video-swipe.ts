@@ -4276,6 +4276,8 @@ function runStateWord(data: unknown): SheetVideoState {
   const run = asVideoRun(data);
   if (run.status === "failed" || run.status === "cancelled") return "failed";
   if (run.isTerminal) return "done";
+  // COP-312: parked at its final watch while the app makes the cut: nothing waits for the member.
+  if (run.appCut === "making") return "running";
   if (run.status === "awaiting-approval" || run.status === "awaiting-review") {
     const parked = run.nodes.find((node) => node.nodeId === run.pausedNodeId);
     return run.pauseReason === undefined && parked && ["scene-frames", "storyboard"].includes(parked.kind) ? "storyboard" : "waiting";

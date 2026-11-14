@@ -362,10 +362,15 @@ the run started:
 
 - **The app makes the cut** of a swiped video, a video from the dashboard's
   Video page and a beta tester's run, once every clip is made and no scene is
-  held. On a run started with `--one-shot` that cut is delivered by itself,
+  held. While it makes it, `status` on an admin key says "Every piece is
+  made. The app makes the cut now; look again in a minute: exodus video
+  status <runId>": make no cut of your own, and read `status` again in a
+  minute. `exodus video wait <runId>` waits through it. On a run started with `--one-shot` that cut is delivered by itself,
   with no approve: on an admin key `status` then says "Final cut: approved
   and delivered.", and on a beta tester's key "Your video is ready: <link>".
-  Only when the app's check of the finished film against its own sound fails
+  In the minute between the cut and the delivery, `status` on an admin key
+  says "Final cut: made. This run delivers it by itself; look again in a
+  minute.": read it again then, and send no approve. Only when the app's check of the finished film against its own sound fails
   (One-take UGC checks it) does a One-shot cut wait instead, as a Guided one
   does, with the check's sentences under it in `status`. The member's last say is before that: the One-shot yes, and the yes to keep
   the last held take, since that keep starts the cut. Say so at each. Give
@@ -388,14 +393,18 @@ it): ask approve, a new run that films every take again at its full price
 (for a swiped video, `exodus video swipe start <swipeId> --again`, its price
 first), or stop here.
 
-On an admin key, `pull` writes the pieces only, never the finished video,
-even once the app has made and delivered it: give the member the run page to
-watch it. On a beta tester's key, `pull` also writes `video.<ext>` once the
-finished video is ready.
+`pull` also writes the finished video as `video.<ext>` once the run has one,
+on an admin key as on a beta tester's. On a delivered run it ends "This run
+is delivered. The finished video is <file>.": give the member that file and
+the run page to watch it. On a run the app cuts, once every piece is made
+and until it is delivered, it ends with no upload line: make no cut of your
+own, unless `status` says the app's cut didn't work and offers you to cut it
+yourself, and the member says yes.
 
 - Approve: `exodus video approve <runId>` makes the cut the ad. It is one-way.
-- Redo a clip: `retry-clip` as at stop 4, after their yes. Then pull, cut
-  and upload again.
+- Redo a clip: `retry-clip` as at stop 4, after their yes. On a run the app
+  cuts, it cuts again by itself (read `status`); on any other, pull, cut and
+  upload again.
 
 **On the song format**, tell the member this before they approve: "The song
 made here is for review. Before this video runs as a paid ad, make the same
@@ -1003,9 +1012,9 @@ every video has started:
    <runId>` and do what it prints. The app makes a swiped video's cut ("End:
    watch and approve"), so make no cut of your own. A one-shot run is
    delivered by itself once that cut is made: give the member its run page.
-   While the app makes it, `status` may still say "Parked: every piece is
-   made and the run is waiting for a cut." for a short while: read `status`
-   again before anything else. A run that stopped at the storyboard goes to
+   While the app makes it, `status` says "Every piece is made. The app makes
+   the cut now; look again in a minute: exodus video status <runId>": read
+   `status` again in a minute. A run that stopped at the storyboard goes to
    stop 3, then the end.
 
 **Never start the same swipe twice.** One swipe is one video. A start of a
@@ -1648,7 +1657,10 @@ under it:
   `retry-frame --note` before `retry-clip`; the clip redo alone resends the
   refused picture. On a video the app cuts itself (one started from the
   dashboard, a swiped video, a beta tester's run: "End: watch and approve"),
-  the app makes the cut; when a scene's clip still has a drawing fault after it was made
+  the app makes the cut. While it makes it, the stop block says "Every piece
+  is made. The app makes the cut now; look again in a minute: exodus video
+  status <runId>" and names no pull, upload or `retry-clip`: read `status`
+  again in a minute. When a scene's clip still has a drawing fault after it was made
   again, the stop block says `Held:` and names the scene
   (`stop.heldScenes` in `--json`). No cut is made until each held scene is
   made again with `retry-clip`, or kept as it is with `exodus video keep
@@ -1657,7 +1669,8 @@ under it:
   A One-take take held for its words, for a picture that came out turned on
   its side or upside down, or for a product label that came out backwards and
   could not be fixed, is named under `Held:` with its own
-  sentence, every reason it was held for (`stop.heldTakes` in `--json`). It
+  sentence, every reason it was held for (`stop.heldTakes` in `--json`), from
+  the moment the take is made. It
   cannot be made again on its own, so no `retry-clip` is offered. Show the user the sentence
   and ask them to watch the take. With their yes, `exodus video keep <runId>
   --scene <n>` keeps it as it is: it orders nothing, and keeping the last held
@@ -2318,8 +2331,10 @@ length. Do not invent a number.
 `pull` writes a flat folder and a `manifest.json` that indexes it. The manifest
 is the data you decide from; the filenames are its values. Scene numbers are the
 run's own. Every `pull` re-downloads and overwrites every file, so running it
-again is always safe. It never writes the finished video the app made ("End:
-watch and approve").
+again is always safe. Once the run has a finished video, it writes that too,
+as `video.<ext>` ("End: watch and approve"), except while the app makes the
+cut again after a redo: the one on the run then is about to be replaced. When
+a different `video.<ext>` was already in the folder, it says it replaced it.
 
 ```
 storyboard.json          the whole storyboard envelope (see below)
@@ -2334,6 +2349,7 @@ narration.mp3            one continuous narrator take of the whole script
 narration.json           that take's settings, master-timeline words, and the
                          per-scene ranges it was cut into
 music.<ext>              the music bed
+video.<ext>              the finished video, once the run has one
 manifest.json            the index below
 ```
 
@@ -2413,6 +2429,8 @@ provenance                           which saved rulebook this run followed:
                                      rig is a copy. Names, ids and a version
                                      only — never the rules themselves
 failed[]                             files that did not download: {file, url, error}
+video                                the finished video's filename; null when it
+                                     did not download. Absent when the run has none
 ```
 
 ### What each piece is

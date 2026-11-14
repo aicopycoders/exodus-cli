@@ -921,6 +921,20 @@ only (`takes=first`), you may name it as a smaller thing they can choose,
 never as the whole video. The `--max-usd` you start with is the "at most" the
 price shows, so it is never above what is left of the member's limit.
 
+**A video that reached its estimate.** A regular video (not One-take) keeps
+the estimate it showed before the start. When its next take would cost more
+than that, it stops before ordering it and waits for the member. `exodus
+video status` then prints a line that starts "Waiting for you:", with what
+the video has cost so far, its estimate, what it wants to film next and
+about what that costs, and under it two commands: `exodus video keep-going
+<runId>` and `exodus video stop-here <runId>`. That choice is the member's,
+never yours: show them that line word for word, and run the command they
+pick only after they answer. A money limit they gave you, or a `--max-usd`,
+does not answer it for them. Nothing is paid while it waits, and it waits
+until they answer. Keep going films on and asks again if it passes the next
+whole estimate. Stop here orders nothing more: each scene keeps the clip it
+has, and a scene with none is named; status says what was kept.
+
 A write that carried the people's most makes the first people to pick from
 (People, step 3). Offer more people, or voices to pick from, only when the
 member asks for options. More people are paid on the member's keys: run
@@ -1622,6 +1636,10 @@ exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "…"] [--
 exodus video revoice <runId> --all | --scene <n>          redo only the voice; no new video
 exodus video keep <runId> --scene <n>                     keep a held scene as it is; orders nothing;
                                                           only after the member's yes
+exodus video keep-going <runId>                           a video waiting at its estimate films on;
+                                                          only after the member's own yes
+exodus video stop-here <runId>                            a video waiting at its estimate orders nothing
+                                                          more; only on the member's own answer
                                                           … make the cut (your choice of tool)
 exodus video upload <runId> --file ./ad-<runId>/cut.mp4   attach it
 exodus video review <runId> --file ./ad-<runId>/cut.mp4 --accept | --reject

@@ -12,7 +12,7 @@ import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/scrip
 import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
@@ -164,6 +164,13 @@ The whole loop, in order:
        video's page does. It orders nothing. Once no scene is held, the app's
        own cut goes on and makes the final video.
 
+     exodus video keep-going <runId>
+     exodus video stop-here <runId>
+       A video that reached the estimate it showed before the start stops
+       and waits ("Waiting for you:" in status). Run one of these only on
+       the member's own answer: keep-going films on (it asks again at the
+       next whole estimate); stop-here orders nothing more.
+
   9. Make your cut from those files.
 
   10. exodus video upload <runId> --file cut.mp4
@@ -195,6 +202,8 @@ Usage:
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video keep <runId> --scene <n> [--json]
+  exodus video keep-going <runId> [--json]
+  exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
@@ -649,6 +658,7 @@ const REVOICE_NOT_ON_THIS_SERVER = "This Exodus server does not have the voice r
     "was spent. It arrives with the next server update.";
 export const FINAL_PATH = "/api/v2/video/final";
 export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
+export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
 export const PICKS_PATH = "/api/v2/video/picks";
 export const MAP_PATH = "/api/v2/video/map";
@@ -4149,7 +4159,7 @@ export async function statusFlow(runId, json, deps) {
         lines.push(...(await statusVoiceLines(runId, deps)));
     }
     const cost = runCostLine(run, items);
-    lines.push("", ...(cost ? [cost] : []), runStopped(run)
+    lines.push("", ...(cost ? [cost] : []), ...(run.estimateUsd !== undefined ? [`Estimate shown before the start: $${run.estimateUsd.toFixed(2)}`] : []), ...spendAskLines(run, runId), runStopped(run)
         ? hasFinal ? "Final cut: on the run, which stopped before it was delivered." : "Final cut: none. This run stopped before one was made."
         : hasFinal && stop.at === "finished"
             ? "Final cut: approved and delivered."
@@ -5253,6 +5263,30 @@ export async function keepFlow(runId, sceneIndex, json, deps) {
         lines: [
             `Kept scene ${sceneIndex} as it is. Nothing was ordered.`,
             "If the final video was waiting on this scene alone, the app makes it now.",
+            `See where it stands: exodus video status ${runId}`,
+        ],
+    };
+}
+const SPEND_ANSWER_NOT_ON_THIS_SERVER = "This Exodus server cannot take this answer from the command line, so nothing changed. Answer on the video's page:";
+export async function spendAnswerFlow(runId, answer, json, deps) {
+    const res = await deps.post(SPEND_ANSWER_PATH, { runId, answer });
+    if (missingRouteLine(res, answer === "go" ? "exodus video keep-going" : "exodus video stop-here")) {
+        const line = `${SPEND_ANSWER_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+        return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+    }
+    if (!res.ok)
+        return errorResult(res, json);
+    const clearedToUsd = res.data?.clearedToUsd;
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, answer, ...(typeof clearedToUsd === "number" ? { clearedToUsd } : {}) })] };
+    return {
+        code: 0,
+        lines: [
+            answer === "go"
+                ? typeof clearedToUsd === "number"
+                    ? `Keeping going. It will ask again before it spends past $${clearedToUsd.toFixed(2)}.`
+                    : "Keeping going."
+                : "Stopped at the estimate. Nothing more will be filmed. Every scene with a clip is kept.",
             `See where it stands: exodus video status ${runId}`,
         ],
     };
@@ -6506,6 +6540,8 @@ export async function run(flags, occurrences) {
         "retry-clip",
         "revoice",
         "keep",
+        "keep-going",
+        "stop-here",
         "voices",
         "pull",
         "upload",
@@ -6642,6 +6678,9 @@ export async function run(flags, occurrences) {
             usage(`video retry-clip --scene must be a whole scene number, not "${sceneRaw}".`);
         }
         return printResult(await retryClipFlow(runId, { sceneIndex, nodeId: flagString(flags, "node") }, { note: flagString(flags, "note"), voiceFirst: flags["voice-first"] === true }, json, defaultDeps));
+    }
+    if (sub === "keep-going" || sub === "stop-here") {
+        return printResult(await spendAnswerFlow(runId, sub === "keep-going" ? "go" : "stop", json, defaultDeps));
     }
     if (sub === "keep") {
         const sceneRaw = flagString(flags, "scene");

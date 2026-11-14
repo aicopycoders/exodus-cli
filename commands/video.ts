@@ -39,6 +39,7 @@ import {
   type CustomerStoryboard,
   type CustomerVoices,
   type ScriptTidied,
+  spendAskLines,
 } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 
@@ -211,6 +212,13 @@ The whole loop, in order:
        video's page does. It orders nothing. Once no scene is held, the app's
        own cut goes on and makes the final video.
 
+     exodus video keep-going <runId>
+     exodus video stop-here <runId>
+       A video that reached the estimate it showed before the start stops
+       and waits ("Waiting for you:" in status). Run one of these only on
+       the member's own answer: keep-going films on (it asks again at the
+       next whole estimate); stop-here orders nothing more.
+
   9. Make your cut from those files.
 
   10. exodus video upload <runId> --file cut.mp4
@@ -242,6 +250,8 @@ Usage:
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video keep <runId> --scene <n> [--json]
+  exodus video keep-going <runId> [--json]
+  exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
@@ -709,6 +719,8 @@ const REVOICE_NOT_ON_THIS_SERVER =
 export const FINAL_PATH = "/api/v2/video/final";
 // COP-277: the run page's "Use scene N as-is", from the command line. An older server answers 404 here.
 export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
+/** #4582: the member's answer to a video that reached its estimate. */
+export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
 // Stop 2: the picks a run drew before its storyboard (GET), a pick or a redo (POST).
 export const PICKS_PATH = "/api/v2/video/picks";
@@ -1032,6 +1044,12 @@ export interface VideoRun {
    *  absent when nothing is recorded. `costScope` says whether it is the last word or the figure so far. */
   costUsd?: number;
   costScope?: "soFar" | "final";
+  /** #4582: the estimate shown before the paid start; absent on a run that kept none (older runs, One-take, templates). */
+  estimateUsd?: number;
+  /** #4582: the stop at the estimate (spendAskLines). Absent from older servers. */
+  spendAsk?: { sentence: string };
+  spendWentOn?: { sentence: string };
+  spendStopped?: { at: number; sentence?: string };
   /** Stop 4: "pilot" is the pilot clip's park, on the final-watch Video step but not the final watch. */
   pauseReason?: BuilderPauseReason | "pilot";
   pausedNodeId?: string;
@@ -5677,6 +5695,9 @@ export async function statusFlow(
   lines.push(
     "",
     ...(cost ? [cost] : []),
+    // #4582: the price shown before the start, and the stop at it.
+    ...(run.estimateUsd !== undefined ? [`Estimate shown before the start: $${run.estimateUsd.toFixed(2)}`] : []),
+    ...spendAskLines(run, runId),
     // #4589 landing review: a cancelled or failed run takes no upload and no approve, and was not delivered.
     runStopped(run)
       ? hasFinal ? "Final cut: on the run, which stopped before it was delivered." : "Final cut: none. This run stopped before one was made."
@@ -7254,6 +7275,35 @@ export async function keepFlow(runId: string, sceneIndex: number, json: boolean,
     lines: [
       `Kept scene ${sceneIndex} as it is. Nothing was ordered.`,
       "If the final video was waiting on this scene alone, the app makes it now.",
+      `See where it stands: exodus video status ${runId}`,
+    ],
+  };
+}
+
+/** #4582: what an older server, with no answer route, leaves the member: the page's own buttons. */
+const SPEND_ANSWER_NOT_ON_THIS_SERVER = "This Exodus server cannot take this answer from the command line, so nothing changed. Answer on the video's page:";
+
+/**
+ * #4582: `exodus video keep-going <runId>` / `exodus video stop-here <runId>`, the run page's two buttons when a
+ * regular video reached the estimate it showed before the start. Run only on the member's own answer.
+ */
+export async function spendAnswerFlow(runId: string, answer: "go" | "stop", json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(SPEND_ANSWER_PATH, { runId, answer });
+  if (missingRouteLine(res, answer === "go" ? "exodus video keep-going" : "exodus video stop-here")) {
+    const line = `${SPEND_ANSWER_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+    return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+  }
+  if (!res.ok) return errorResult(res, json);
+  const clearedToUsd = (res.data as { clearedToUsd?: unknown } | null)?.clearedToUsd;
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, answer, ...(typeof clearedToUsd === "number" ? { clearedToUsd } : {}) })] };
+  return {
+    code: 0,
+    lines: [
+      answer === "go"
+        ? typeof clearedToUsd === "number"
+          ? `Keeping going. It will ask again before it spends past $${clearedToUsd.toFixed(2)}.`
+          : "Keeping going."
+        : "Stopped at the estimate. Nothing more will be filmed. Every scene with a clip is kept.",
       `See where it stands: exodus video status ${runId}`,
     ],
   };
@@ -8882,6 +8932,8 @@ export async function run(
     "retry-clip",
     "revoice",
     "keep",
+    "keep-going",
+    "stop-here",
     "voices",
     "pull",
     "upload",
@@ -9035,6 +9087,10 @@ export async function run(
         defaultDeps,
       ),
     );
+  }
+
+  if (sub === "keep-going" || sub === "stop-here") {
+    return printResult(await spendAnswerFlow(runId, sub === "keep-going" ? "go" : "stop", json, defaultDeps));
   }
 
   if (sub === "keep") {

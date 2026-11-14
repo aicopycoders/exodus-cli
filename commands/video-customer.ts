@@ -96,7 +96,38 @@ export interface CustomerRun {
    * with `exodus video keep`, never made again on its own). Absent from older servers.
    */
   cutHeldScenes?: Array<{ sceneIndex: number; sentence: string; take: boolean }>;
+  /** #4582: what the run has spent (the server's own figure, "so far" while it works) beside its estimate. */
+  spend?: { spentUsd: number; estimateUsd: number | null; final: boolean; line: string };
+  /** #4582: the video reached its estimate and waits on the member's answer, in the server's sentence. */
+  spendAsk?: { sentence: string };
+  /** #4582: the member's last keep going. */
+  spendWentOn?: { sentence: string };
+  /** #4582: the member said stop here. */
+  spendStopped?: { sentence?: string };
 }
+
+/**
+ * #4582: a regular video that reached its estimate waits on the member: the server's sentence, then the two commands.
+ * Read by both status prints (the beta tester's and the admin's). A member's Claude shows these to the member and runs
+ * one only on the member's own answer (workspace/.claude/skills/exodus-video/SKILL.md).
+ */
+export function spendAskLines(
+  run: { spendAsk?: { sentence: string }; spendWentOn?: { sentence: string }; spendStopped?: { at?: number; sentence?: string } },
+  runId: string,
+): string[] {
+  if (run.spendAsk) {
+    return [
+      `Waiting for you: ${run.spendAsk.sentence}`,
+      `Keep going: exodus video keep-going ${runId}`,
+      `Stop here:  exodus video stop-here ${runId}`,
+    ];
+  }
+  if (run.spendStopped) return [run.spendStopped.sentence ?? SPEND_STOPPED_LINE];
+  if (run.spendWentOn) return [run.spendWentOn.sentence];
+  return [];
+}
+
+export const SPEND_STOPPED_LINE = "You stopped this video at its estimate. Nothing more will be filmed.";
 
 /** #4257: the final cut waits for the customer to keep or remake a scene. */
 export function customerCutHeld(run: CustomerRun): boolean {
@@ -348,6 +379,8 @@ export function customerStatusLines(run: CustomerRun, dashboardUrl: string): str
     run.mode === "guided" ? "Storyboard first" : "In one go",
     "",
     ...customerStageLines(run, page),
+    ...(run.spend ? [run.spend.line] : []),
+    ...spendAskLines(run, run.runId),
     ...(run.scenes ?? []).flatMap(scene => scene.clip?.speech
       ? [`Scene ${scene.sceneIndex} speech:`, ...speechSummaryLines(scene.clip.speech).map(line => `  ${line}`)] : []),
     "",

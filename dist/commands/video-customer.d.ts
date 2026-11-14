@@ -86,7 +86,35 @@ export interface CustomerRun {
         sentence: string;
         take: boolean;
     }>;
+    spend?: {
+        spentUsd: number;
+        estimateUsd: number | null;
+        final: boolean;
+        line: string;
+    };
+    spendAsk?: {
+        sentence: string;
+    };
+    spendWentOn?: {
+        sentence: string;
+    };
+    spendStopped?: {
+        sentence?: string;
+    };
 }
+export declare function spendAskLines(run: {
+    spendAsk?: {
+        sentence: string;
+    };
+    spendWentOn?: {
+        sentence: string;
+    };
+    spendStopped?: {
+        at?: number;
+        sentence?: string;
+    };
+}, runId: string): string[];
+export declare const SPEND_STOPPED_LINE = "You stopped this video at its estimate. Nothing more will be filmed.";
 export declare function customerCutHeld(run: CustomerRun): boolean;
 export interface ScriptTidied {
     setAside: string[];

@@ -7,6 +7,21 @@ export function speechSummaryLines(speech) {
         "speech-issue": "Speech issue — review required", unverified: "Speech not verified" };
     return [labels[speech.status], ...speech.issues.map(speechIssueText)];
 }
+export function spendAskLines(run, runId) {
+    if (run.spendAsk) {
+        return [
+            `Waiting for you: ${run.spendAsk.sentence}`,
+            `Keep going: exodus video keep-going ${runId}`,
+            `Stop here:  exodus video stop-here ${runId}`,
+        ];
+    }
+    if (run.spendStopped)
+        return [run.spendStopped.sentence ?? SPEND_STOPPED_LINE];
+    if (run.spendWentOn)
+        return [run.spendWentOn.sentence];
+    return [];
+}
+export const SPEND_STOPPED_LINE = "You stopped this video at its estimate. Nothing more will be filmed.";
 export function customerCutHeld(run) {
     return (run.cutHolds?.length ?? 0) > 0;
 }
@@ -172,6 +187,8 @@ export function customerStatusLines(run, dashboardUrl) {
         run.mode === "guided" ? "Storyboard first" : "In one go",
         "",
         ...customerStageLines(run, page),
+        ...(run.spend ? [run.spend.line] : []),
+        ...spendAskLines(run, run.runId),
         ...(run.scenes ?? []).flatMap(scene => scene.clip?.speech
             ? [`Scene ${scene.sceneIndex} speech:`, ...speechSummaryLines(scene.clip.speech).map(line => `  ${line}`)] : []),
         "",

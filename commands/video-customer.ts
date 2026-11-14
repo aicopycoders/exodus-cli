@@ -79,6 +79,10 @@ export interface CustomerRun {
   /** COP-300: `notes` are the cut's check against its own sound, in the server's sentences. Absent from older servers. */
   video: { url: string; wordsOff: boolean; speech?: SpeechSummary; notes?: string[] } | null;
   canRetry: boolean;
+  /** #3366: the app's cut failed with every clip done, so the video's page can cut the same clips again, free. */
+  canCutAgain?: boolean;
+  /** #4573: why the app's cut was refused, in the member's words; only beside Cut again. Absent from older servers. */
+  cutFailure?: { sentence: string };
   stopReason: CustomerStopReason | null;
   detailsPath: string | null;
   /**
@@ -268,6 +272,13 @@ function stoppedLines(run: CustomerRun, page: string): string[] {
       "Here's why this video stopped.",
       reason.sentence,
       run.canRetry ? `Try again from the video's page: ${page}` : "Start a new one from the Video page.",
+    ];
+  }
+  if (run.cutFailure && run.canCutAgain) {
+    return [
+      "The final cut didn't work.",
+      run.cutFailure.sentence,
+      `All your clips are done. Cut again from the video's page; it makes no new clips and costs nothing: ${page}`,
     ];
   }
   return run.canRetry

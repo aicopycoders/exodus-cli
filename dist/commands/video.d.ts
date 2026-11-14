@@ -225,6 +225,9 @@ export interface VideoRun {
     };
     workflowId?: string;
     cutHeldScenes?: number[];
+    cutFailure?: {
+        sentence: string;
+    };
     cutCheck?: string[];
     moduleOwned?: boolean;
     director?: RunDirector;
@@ -330,6 +333,7 @@ export type RunStop = {
     framesNodeId?: string;
     heldScenes?: number[];
     heldTakes?: HeldTake[];
+    cutFailure?: string;
 } | {
     at: "pilot";
     nodeId?: string;

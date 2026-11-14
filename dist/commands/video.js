@@ -916,6 +916,7 @@ export function classifyRun(run) {
                 ...(missingScenes.length > 0 ? { missingScenes } : {}),
                 ...(missingScenes.length > 0 && framesNodeId ? { framesNodeId } : {}),
                 ...(run.cutHeldScenes?.length ? { heldScenes: run.cutHeldScenes } : {}),
+                ...(run.cutFailure?.sentence ? { cutFailure: run.cutFailure.sentence } : {}),
             };
         }
         return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -1141,6 +1142,16 @@ export function stopLines(stop, runId, runUrl, videoPage) {
         }
         if (stop.heldScenes?.length)
             return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes);
+        if (stop.cutFailure) {
+            return [
+                "Parked: every piece is made, but the app's cut of them didn't work.",
+                stop.cutFailure,
+                `Cut it again on the video's page. It makes no new clips and costs nothing: ${videoPage}`,
+                `Or cut it yourself: exodus video pull ${runId} --out ./ad-${runId}`,
+                `Then upload:     exodus video upload ${runId} --file cut.mp4`,
+                `Watch it here:   ${runUrl}`,
+            ];
+        }
         if (stop.cutAttached === null) {
             return [
                 "Parked: every piece is made.",

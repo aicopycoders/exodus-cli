@@ -100,6 +100,13 @@ function stoppedLines(run, page) {
             run.canRetry ? `Try again from the video's page: ${page}` : "Start a new one from the Video page.",
         ];
     }
+    if (run.cutFailure && run.canCutAgain) {
+        return [
+            "The final cut didn't work.",
+            run.cutFailure.sentence,
+            `All your clips are done. Cut again from the video's page; it makes no new clips and costs nothing: ${page}`,
+        ];
+    }
     return run.canRetry
         ? ["Something went wrong making this video.", `Try again from the video's page: ${page}`]
         : ["Something went wrong making this video. Start a new one from the Video page."];

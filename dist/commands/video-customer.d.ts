@@ -74,6 +74,10 @@ export interface CustomerRun {
         notes?: string[];
     } | null;
     canRetry: boolean;
+    canCutAgain?: boolean;
+    cutFailure?: {
+        sentence: string;
+    };
     stopReason: CustomerStopReason | null;
     detailsPath: string | null;
     cutHolds?: string[];

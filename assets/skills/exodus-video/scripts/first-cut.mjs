@@ -199,11 +199,32 @@ export const FINISH_LRA = 11;
 export const TRUE_PEAK_MAX_DB = -1;
 /**
  * limitPeaks: after the loudness pass, the sound oversampled 4x through a
- * limiter at 0.8 (about -1.9 dB), so a peak between two samples is caught too.
+ * limiter at PEAK_LIMIT (about -1.9 dB), so a peak between two samples is caught too.
  * The cut is still measured after and refused over TRUE_PEAK_MAX_DB. Its
  * resample is pinned to stereo, as every one after loudnorm is (loudnessApplyArgs).
  */
-export const PEAK_LIMITER = "aresample=192000,aformat=channel_layouts=stereo,alimiter=limit=0.8:level=false:attack=2:release=60";
+export const PEAK_LIMIT = 0.8;
+/** The limiter at `limit`, a linear level alimiter takes from 0.0625 to 1. */
+export function peakLimiter(limit = PEAK_LIMIT) {
+  return `aresample=192000,aformat=channel_layouts=stereo,alimiter=limit=${limit}:level=false:attack=2:release=60`;
+}
+export const PEAK_LIMITER = peakLimiter();
+/**
+ * #4573: the AAC encode after the limiter can put a peak back over
+ * TRUE_PEAK_MAX_DB, by a different amount on each cut of the same takes (the
+ * room tone is fresh noise every time). A limited cut that lands over is
+ * limited again from the same mix, this many times at most, each time lower by
+ * what the last one landed over FINISH_TRUE_PEAK; still over, it is refused.
+ */
+export const LIMIT_AGAIN_MAX = 2;
+/** The lowest ceiling a limit again goes to (about -6 dB): a cut that needs lower is refused, not squashed. */
+const PEAK_LIMIT_MIN = 0.5;
+
+/** The next ceiling down after a limited pass measured `tp` dBTP. */
+export function lowerPeakLimit(limit, tp) {
+  const lower = limit * 10 ** (-(tp - FINISH_TRUE_PEAK) / 20);
+  return Math.max(PEAK_LIMIT_MIN, Math.round(lower * 10_000) / 10_000);
+}
 /**
  * jumpCut: inside a talking clip, a pause over maxGap between two heard words
  * is cut down, keeping keepAfter after the earlier word and keepBefore before
@@ -5571,11 +5592,9 @@ function ffmpegReason(res) {
   return res.signal ? `it was stopped by ${res.signal}.` : "it printed no reason.";
 }
 
-/** Both passes on the mix, then the finished cut measured again. A receipt may
- * retain that final observation without changing the legacy mastering result. */
-export function finishLoudnessPass(mix, out, limiter = null, onMeasured = null) {
-  const measured = measureLoudness(mix);
-  const args = loudnessApplyArgs(mix, measured, out, limiter);
+/** The mix normalized with pass one's numbers into `out`, through the limiter at `limit` when one is given. */
+function applyLoudness(mix, measured, out, limit) {
+  const args = loudnessApplyArgs(mix, measured, out, limit == null ? null : peakLimiter(limit));
   const res = spawnSync("ffmpeg", args, { stdio: ["inherit", "inherit", "pipe"], encoding: "utf8", maxBuffer: 1 << 26 });
   if (res.status !== 0) {
     // ffmpeg's words still reach the log, and its reason leads the error:
@@ -5584,11 +5603,32 @@ export function finishLoudnessPass(mix, out, limiter = null, onMeasured = null) 
     const quoted = args.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
     throw new FirstCutError(1, `ffmpeg failed on the loudness pass: ${ffmpegReason(res)} The command it ran:\n  ffmpeg ${quoted}`);
   }
-  const finished = measureLoudness(out);
+  return measureLoudness(out);
+}
+
+/** Both passes on the mix, then the finished cut measured again. A receipt may
+ * retain that final observation without changing the legacy mastering result.
+ * `limit` (limitPeaks) is the limiter's ceiling, PEAK_LIMIT; a limited cut over
+ * the limit is limited again lower (LIMIT_AGAIN_MAX), one under it is left as it is. */
+export function finishLoudnessPass(mix, out, limit = null, onMeasured = null) {
+  const measured = measureLoudness(mix);
+  let ceiling = limit;
+  let finished = applyLoudness(mix, measured, out, ceiling);
+  let again = 0;
+  while (ceiling != null && finished && finished.tp > TRUE_PEAK_MAX_DB && again < LIMIT_AGAIN_MAX) {
+    const lower = lowerPeakLimit(ceiling, finished.tp);
+    if (lower >= ceiling) break;
+    ceiling = lower;
+    finished = applyLoudness(mix, measured, out, ceiling);
+    again++;
+  }
   const refusal = truePeakRefusal(finished);
   if (refusal) throw new LoudnessRefusal(refusal, finished);
   onMeasured?.(finished);
-  return { lufs: round2(finished.i), truePeak: round2(finished.tp), passes: measured ? 2 : 1, ...(limiter ? { limited: true } : {}) };
+  return {
+    lufs: round2(finished.i), truePeak: round2(finished.tp), passes: measured ? 2 : 1,
+    ...(limit != null ? { limited: true } : {}), ...(again > 0 ? { limitedAgain: again, limit: ceiling } : {}),
+  };
 }
 
 /** The filters of `names` this ffmpeg does not have. */
@@ -6860,9 +6900,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     else if (missing.length > 0) notes.push(`this ffmpeg has no ${missing.join(", ")} filter, so the voice was not cleaned`);
     else clean = { voice: VOICE_CLEAN, under: UNDER_VOICE };
   }
-  let limiter = null;
+  let peakLimit = null;
   if (finish?.limitPeaks) {
-    if (hasFilter("alimiter")) limiter = PEAK_LIMITER;
+    if (hasFilter("alimiter")) peakLimit = PEAK_LIMIT;
     else notes.push("this ffmpeg has no alimiter filter, so the loudness pass ran without the limiter");
   }
   const paths = finishPaths(out);
@@ -6983,13 +7023,14 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   let loudnessMeasurement = null;
   if (finish?.finishLoudness) {
     try {
-      loudness = finishLoudnessPass(rendered, out, limiter, template
+      loudness = finishLoudnessPass(rendered, out, peakLimit, template
         ? (measured) => { loudnessMeasurement = measured; } : null);
     } catch (error) {
-      if (!template || !(error instanceof FirstCutError)) throw error;
-      // One local limiter pass on the same retained mix, never a provider call.
+      // A limited pass already limited itself again (#4573); the same mix would only be refused the same way.
+      if (!template || peakLimit != null || !(error instanceof FirstCutError)) throw error;
+      // The limiter on the same retained mix, never a provider call, limited again lower as finishLoudnessPass does.
       // If it still clips or cannot be measured, the refusal holds the cut.
-      loudness = finishLoudnessPass(rendered, out, PEAK_LIMITER,
+      loudness = finishLoudnessPass(rendered, out, PEAK_LIMIT,
         (measured) => { loudnessMeasurement = measured; });
     } finally {
       rmSync(rendered, { force: true });

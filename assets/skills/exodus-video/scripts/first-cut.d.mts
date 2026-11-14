@@ -83,6 +83,9 @@ export class FirstCutError extends Error {
   readonly code: 1 | 2;
 }
 
+/** Why a finished cut is refused for its loudness (LoudnessRefusal's message), or null when its true peak is at or under -1 dBTP. */
+export function truePeakRefusal(measured: { i: number; tp: number } | null): string | null;
+
 /** The finished cut's true peak is over -1 dBTP, or could not be measured, after the loudness pass. */
 export class LoudnessRefusal extends FirstCutError {
   constructor(message: string, measured: { i: number; tp: number } | null);
@@ -269,8 +272,11 @@ export interface CutPace {
     /** COP-300: the finished cut was checked against its own sound (cutSync). */
     captionCheck?: true;
   };
-  /** `limited`: limitPeaks' limiter ran after the loudness pass. */
-  loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true };
+  /**
+   * `limited`: limitPeaks' limiter ran after the loudness pass. #4573: `limitedAgain` times it ran again lower, from
+   * the same mix, because the finished file was over -1 dBTP; `limit` is the ceiling the kept cut was made at.
+   */
+  loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true; limitedAgain?: number; limit?: number };
   /** Present only with cutChecks. */
   checks?: CutChecks;
   /** COP-300: present when a sped-up cut burned its captions: the caption file is on the finished cut's clock. */

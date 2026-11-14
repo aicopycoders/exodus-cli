@@ -1081,6 +1081,11 @@ export interface VideoRun {
    */
   cutHeldScenes?: number[];
   /**
+   * #4573: the app's last cut was refused and nothing answered it: why, in the member's words (convex workflows.ts
+   * getRun). Absent otherwise, and from older backends.
+   */
+  cutFailure?: { sentence: string };
+  /**
    * COP-300: the app's cut's check against its own sound, in the server's sentences (convex workflows.ts getRun).
    * Absent when the cut made none, and from older backends.
    */
@@ -1275,7 +1280,7 @@ export type RunStop =
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[] }
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; cutFailure?: string }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
@@ -1518,6 +1523,7 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(missingScenes.length > 0 ? { missingScenes } : {}),
         ...(missingScenes.length > 0 && framesNodeId ? { framesNodeId } : {}),
         ...(run.cutHeldScenes?.length ? { heldScenes: run.cutHeldScenes } : {}),
+        ...(run.cutFailure?.sentence ? { cutFailure: run.cutFailure.sentence } : {}),
       };
     }
     return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -1865,6 +1871,18 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
       return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
     }
     if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes);
+    // #4573: the app's cut was refused and nothing has cut it since, so the run is not waiting on anything. Every attach
+    // clears the refusal, so a cut still on the run is older than it: one a redo outdated, not one to approve.
+    if (stop.cutFailure) {
+      return [
+        "Parked: every piece is made, but the app's cut of them didn't work.",
+        stop.cutFailure,
+        `Cut it again on the video's page. It makes no new clips and costs nothing: ${videoPage}`,
+        `Or cut it yourself: exodus video pull ${runId} --out ./ad-${runId}`,
+        `Then upload:     exodus video upload ${runId} --file cut.mp4`,
+        `Watch it here:   ${runUrl}`,
+      ];
+    }
     // #1704: the ledger read failed, so every command below would be a guess —
     // "upload a cut" to someone who already has one, or "approve" to someone
     // who has nothing to approve. Say what IS known, and name the one command

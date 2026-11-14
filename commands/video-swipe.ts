@@ -8,8 +8,8 @@
  * OpenRouter key) and the start (the run's storyboard and pictures, and with --one-shot the rest of the video). The
  * CLI knows no price for any of them, so each one asks for --yes and, without it, sends nothing and says what the
  * step buys and who pays; the start also says its price for a kind whose saved sheet has one (`swipe sheet price`,
- * COP-265). The template and the write take minutes: the server answers at once with a job, and the
- * CLI polls it until the work is done or says why it stopped.
+ * COP-265), and the write the price of the people it makes for such a kind (COP-289). The template and the write take
+ * minutes: the server answers at once with a job, and the CLI polls it until the work is done or says why it stopped.
  *
  * The answers mirror convex/http.ts's swipe routes. This package ships on its own schedule, so the shapes are
  * copied here rather than imported.
@@ -659,7 +659,8 @@ function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOp
   if (peopleOnly) return usage(`Only video swipe sheet people takes --${peopleOnly}.`);
   // The rest buys nothing and takes no other verb's choice: such a flag is refused, never quietly dropped.
   const paid = typedFlag(FIND_PAID_FLAGS);
-  if (paid) return usage(`video swipe sheet is free and buys nothing, so it takes no --${paid}. Its only flag is --json.`);
+  // COP-292: "buys nothing", not "free": the voices listing makes one read of the voice list on the member's ElevenLabs key.
+  if (paid) return usage(`video swipe sheet buys nothing, so it takes no --${paid}. Its only flag is --json.`);
   const other = typedFlag([...FIND_OTHER_FLAGS, "brand", "limit"]);
   if (other) return usage(`video swipe sheet takes no --${other}. Its only flag is --json.`);
   if (given[0] === "price") {

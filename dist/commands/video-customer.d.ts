@@ -71,6 +71,7 @@ export interface CustomerRun {
         url: string;
         wordsOff: boolean;
         speech?: SpeechSummary;
+        notes?: string[];
     } | null;
     canRetry: boolean;
     stopReason: CustomerStopReason | null;

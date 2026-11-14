@@ -223,6 +223,7 @@ export interface VideoRun {
     };
     workflowId?: string;
     cutHeldScenes?: number[];
+    cutCheck?: string[];
     moduleOwned?: boolean;
     director?: RunDirector;
 }
@@ -607,7 +608,7 @@ export declare function waitFlow(runId: string, opts: {
 }, deps: VideoDeps): Promise<FlowResult>;
 export declare function statusFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
-export declare const ONE_TAKE_LABEL_CODES: readonly ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held"];
+export declare const ONE_TAKE_LABEL_CODES: readonly ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held", "one-take-label-flipped-all"];
 export declare const ONE_TAKE_SAID_WRONG_CODES: readonly ["one-take-said-wrong", "one-take-second-listen-failed"];
 export declare function directorLines(director: RunDirector): string[];
 export type DirectorSwitch = boolean | null;

@@ -76,7 +76,8 @@ export interface CustomerRun {
   awaitingSignOff?: boolean;
   waiting: { ahead: number; stepsDone: number } | null;
   scenes: CustomerRunScene[] | null;
-  video: { url: string; wordsOff: boolean; speech?: SpeechSummary } | null;
+  /** COP-300: `notes` are the cut's check against its own sound, in the server's sentences. Absent from older servers. */
+  video: { url: string; wordsOff: boolean; speech?: SpeechSummary; notes?: string[] } | null;
   canRetry: boolean;
   stopReason: CustomerStopReason | null;
   detailsPath: string | null;
@@ -315,6 +316,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
             ]
           : [`Your video is ready: ${run.video?.url ?? page}`]),
         ...speechSummaryLines(run.video?.speech),
+        ...(run.video?.notes ?? []),
         ...(run.video?.wordsOff
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),

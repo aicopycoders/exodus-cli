@@ -145,6 +145,7 @@ export function customerStageLines(run, page) {
                     ]
                     : [`Your video is ready: ${run.video?.url ?? page}`]),
                 ...speechSummaryLines(run.video?.speech),
+                ...(run.video?.notes ?? []),
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),

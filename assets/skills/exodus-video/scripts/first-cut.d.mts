@@ -1,6 +1,7 @@
 // #2988: the types of the exports the Trigger worker calls. The script is
 // plain JS so the CLI can run it with `node` and no build.
 import type { SourceIdentity, TextItem, TextPlan, PlanTextInput, VerifyObservation, RasterMeasurement, MeasureText } from "./first-cut-text.mjs";
+import type { CaptionSyncVerdict, SeenCaption, SoundPictureCheck, SyncSection } from "./first-cut-sync.mjs";
 
 // The worker's shapes (scout cut-sounds.ts, temporal-action-evidence.ts), kept loose here: the root typecheck
 // runs without scout's packages, so the tool's types must not load the worker.
@@ -265,12 +266,45 @@ export interface CutPace {
     nameCheck?: true;
     /** With pacePass, the speed the cut played at in place of 1.12. */
     paceSpeed?: number;
+    /** COP-300: the finished cut was checked against its own sound (cutSync). */
+    captionCheck?: true;
   };
   /** `limited`: limitPeaks' limiter ran after the loudness pass. */
   loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true };
   /** Present only with cutChecks. */
   checks?: CutChecks;
+  /** COP-300: present when a sped-up cut burned its captions: the caption file is on the finished cut's clock. */
+  captionClock?: "final";
+  /**
+   * COP-300, captionCheck: the checks' verdicts (CutSync without its lists, and Check B without its rows). The worker
+   * replaces it with Check B judged on its listen of the finished film (`listens`, `model`), and the first cut's Check B
+   * as `before` when a fail made the cut again.
+   */
+  sync?: {
+    checkA: SoundPictureCheck | null; checkB: Omit<CaptionSyncVerdict, "rows"> | null; listener: string | null;
+    model?: string; listens?: number; before?: Omit<CaptionSyncVerdict, "rows">;
+    /** The cut made again that was not kept: its own free check, and the listen's when one judged it. */
+    remadeNotKept?: { free: Omit<CaptionSyncVerdict, "rows"> | null; listen: Omit<CaptionSyncVerdict, "rows"> | null };
+    /** The sentences a member reads about the check (video/lib/captionSync.ts), as in `notes`. */
+    notes?: string[];
+  };
   notes?: string[];
+}
+
+/** COP-300, captionCheck: the finished cut checked against its own sound, written beside it as <name>.sync.json. */
+export interface CutSync {
+  /** Check A: null when ffmpeg could not read the film's frames or sound. */
+  checkA: SoundPictureCheck | null;
+  /** Check B by the free listener; null when no caption was burned. */
+  checkB: CaptionSyncVerdict | null;
+  listener: "placement" | null;
+  captionClock: "final";
+  /** Each burned caption and the time it is first seen in the finished film. */
+  captions: SeenCaption[];
+  /** The cut's takes on the finished film's clock. */
+  sections: SyncSection[];
+  /** The free listener's words of the finished film. */
+  heard: Array<{ text: string; start: number; end: number; lagMs: number; match: number }>;
 }
 
 /** What cutChecks measured on the finished cut, and what fails its bars. */
@@ -349,6 +383,8 @@ export interface FirstCutOptions {
   stillFill?: boolean;
   /** Render immutable pre-text pixels for mapped cuts or trusted Template authored text, then complete with completeFirstCutText. */
   prepareText?: boolean;
+  /** COP-300: the finished film's heard words, on its own clock: the captions are timed by them (a cut made again after its caption check failed). */
+  heardWords?: ReadonlyArray<{ text: string; start: number; end?: number }> | null;
 }
 
 /** Semantic preservation and visible final-clock windows, not generated-quality proof.
@@ -409,6 +445,10 @@ export interface FirstCut {
   planningTiming?: FinalPlanningTiming;
   /** Present only when the manifest turned a finishing setting on. */
   pace?: CutPace;
+  /** COP-300: present only with captionCheck. */
+  sync?: CutSync;
+  /** The cut's words on the finished film's clock, as written beside it. */
+  rows?: Array<{ text: string; start: number; end: number; scene?: number }>;
   /** Present only when the manifest names sounds, beds, a ducked music bed or a music-only master. */
   sound?: CutSound;
   /** The music-only master's path, when one was made. */

@@ -317,7 +317,7 @@ function planSheet(words, occurrences, opts) {
         return usage(`Only video swipe sheet people takes --${peopleOnly}.`);
     const paid = typedFlag(FIND_PAID_FLAGS);
     if (paid)
-        return usage(`video swipe sheet is free and buys nothing, so it takes no --${paid}. Its only flag is --json.`);
+        return usage(`video swipe sheet buys nothing, so it takes no --${paid}. Its only flag is --json.`);
     const other = typedFlag([...FIND_OTHER_FLAGS, "brand", "limit"]);
     if (other)
         return usage(`video swipe sheet takes no --${other}. Its only flag is --json.`);

@@ -49,11 +49,14 @@ import { pathToFileURL } from "node:url";
 import { planText, READOUT_INSET_BOX } from "./first-cut-text.mjs";
 import { createTextRenderer, measuredTextAss, textFrameWindow } from "./first-cut-text-render.mjs";
 import { isZeroDurationSpeech, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC } from "./first-cut-speech.mjs";
+import { captionSync, placementHeard, retimeWords, soundPictureCheck } from "./first-cut-sync.mjs";
 
 const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]";
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const FPS = 24;
+/** The speed step's clock, in ticks a second: fine enough that a frame's faster time is not rounded to a whole frame. */
+const SPEED_TIME_BASE = 96000;
 const norm = (label) =>
   `[${label}]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,` +
   `pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},format=yuv420p`;
@@ -111,6 +114,8 @@ const stereo = "aresample=48000,aformat=channel_layouts=stereo";
 const LOUDNORM = "apad=whole_dur=3,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,asetpts=N/SR/TB";
 /** A fade this short at each edge of a segment's sound stops a hard cut in the room tone clicking. */
 const EDGE_FADE_SEC = 0.015;
+/** COP-300: the fade-out at the end of a sped-up cut's sound, after it is cut to the picture: 10 ms at 48 kHz. */
+const END_FADE_SAMPLES = 480;
 /**
  * Air after a narrator's last word. Sizing by the voice file plus 0.8 s left
  * ~1.1 s of silence at every narrator join, since the file already runs on
@@ -261,6 +266,7 @@ export function finishingOf(manifest) {
     ...(on.captions && f.captionsByLine === true && f.captionColours === true ? { captionColours: true } : {}),
     ...(f.pacePass === true ? { pacePass: true } : {}),
     ...(f.pacePass === true && paceSpeedOk(f.paceSpeed) ? { paceSpeed: f.paceSpeed } : {}),
+    ...(f.captionCheck === true ? { captionCheck: true } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -3792,10 +3798,11 @@ function mappedPiece(seg, i, { addInput, filters, tails, level, resolve }) {
  * The render. `finish` (null: today's render) carries the finishing settings'
  * part of it: levelSegments false leaves each segment's sound as it is for the
  * whole mix's loudness pass, `ass` names the captions and cards file burned in
- * (read from the folder ffmpeg runs in), `speed` over 1 speeds the whole
- * cut, picture and sound, after the burn, `clean` (cleanVoice) is the voice's
+ * (read from the folder ffmpeg runs in) after the speed step, on the finished
+ * cut's clock, `speed` over 1 speeds the whole cut, picture and sound, `clean` (cleanVoice) is the voice's
  * chain and the duck under it, and `meters` (cutChecks) names the two files
- * the voice and everything under it are also written to.
+ * the voice and everything under it are also written to. `pcmMix` keeps the
+ * render's sound uncompressed, for a mix the loudness pass then encodes once.
  */
 export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, sound = null }) {
   const level = finish && finish.levelSegments === false ? "anull" : LOUDNORM;
@@ -3984,14 +3991,18 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     );
     videoLabel = "ecard";
   }
+  const speed = finish?.speed > 1 ? finish.speed : null;
+  if (speed) {
+    // COP-300: on the frames' own 1/24 clock, setpts rounds each faster time to a whole tick and `-r` then shows the
+    // picture about 1.5 frames late; on a fine clock, `fps` puts each frame on the 24 fps tick nearest its true time.
+    filters.push(`[${videoLabel}]settb=1/${SPEED_TIME_BASE},setpts=PTS/${speed},fps=${FPS}:round=near[faster]`);
+    videoLabel = "faster";
+  }
+  // COP-300: burned after the speed step, on the finished cut's own frames, so no speed step can move the captions
+  // off the voice. The ASS file is timed on that clock (editAss `speed`).
   if (finish?.ass) {
     filters.push(`[${videoLabel}]subtitles=filename=${finish.ass}[burned]`);
     videoLabel = "burned";
-  }
-  const speed = finish?.speed > 1 ? finish.speed : null;
-  if (speed) {
-    filters.push(`[${videoLabel}]setpts=PTS/${speed}[faster]`);
-    videoLabel = "faster";
   }
 
   const beds = [];
@@ -4087,7 +4098,11 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   );
   let audioLabel = "mix";
   if (speed) {
-    filters.push(`[mix]atempo=${speed}[mixfaster]`);
+    // COP-300: the faster sound padded or cut to the faster picture's own length, as each segment's is to its
+    // picture's: `fps` ends the picture on round(frames / speed) frames, and atempo runs on past it. The cut can land
+    // in a word's tail, so the last END_FADE_SAMPLES fade out, as each segment's edges do, and the end never clicks.
+    const end = Math.round(Math.round(pictureSec * FPS) / speed + 1e-9) * SAMPLES_PER_FRAME;
+    filters.push(`[mix]atempo=${speed},apad,atrim=end_sample=${end},afade=t=out:ss=${end - END_FADE_SAMPLES}:ns=${END_FADE_SAMPLES}[mixfaster]`);
     audioLabel = "mixfaster";
   }
 
@@ -4097,7 +4112,8 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     "-filter_complex", filters.join(";"),
     "-map", `[${videoLabel}]`, "-map", `[${audioLabel}]`,
     "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", String(FPS),
-    "-c:a", "aac", "-b:a", "192k",
+    // COP-300: a mix the loudness pass finishes keeps its sound uncompressed, so the finished cut's sound is AAC-encoded once.
+    ...(finish?.pcmMix ? ["-c:a", "pcm_s16le"] : ["-c:a", "aac", "-b:a", "192k"]),
     "-movflags", "+faststart",
     out,
     ...(finish?.meters
@@ -4450,10 +4466,16 @@ export function noWordTimes(timeline) {
 
 const pad2 = (n) => String(n).padStart(2, "0");
 const round2 = (n) => Math.round(n * 100) / 100;
-const assTime = (t) => {
-  const cs = Math.round(Math.max(0, t) * 100);
-  return `${Math.floor(cs / 360000)}:${pad2(Math.floor(cs / 6000) % 60)}:${pad2(Math.floor(cs / 100) % 60)}.${pad2(cs % 100)}`;
-};
+const csTime = (cs) => `${Math.floor(cs / 360000)}:${pad2(Math.floor(cs / 6000) % 60)}:${pad2(Math.floor(cs / 100) % 60)}.${pad2(cs % 100)}`;
+const assTime = (t) => csTime(Math.round(Math.max(0, t) * 100));
+/**
+ * COP-300: a caption's start, in centiseconds of the finished cut, on the frame that holds its word's start: that
+ * frame's own time floored to the centisecond, so libass draws the caption from that frame on. Rounded to the
+ * centisecond as other times are, it came up on the frame after about half the time.
+ */
+export const captionStartCs = (t) => Math.floor((Math.floor(Math.max(0, t) * FPS + 1e-6) * 100) / FPS + 1e-9);
+/** The time a caption starting at `cs` (centiseconds) is first seen: the first frame at or after it. */
+export const captionSeenSec = (cs) => Math.ceil((cs / 100) * FPS - 1e-6) / FPS;
 const assText = (s) => String(s).replace(/[{}\\]/g, "").replace(/\s*[\r\n]+\s*/g, " ").trim();
 
 /** A caption screen never holds words across a pause longer than this, so a silent beat shows none. */
@@ -4614,8 +4636,14 @@ export function lineWords(timeline, storyboard) {
  * One ASS file for the burn: the caption screens in their band, the cards in
  * their boxes, the hook box and the end card. Boxes are [x0, y0, x1, y1] as
  * shares of the frame. Every word on screen is the script's or the storyboard's.
+ * Every time given is on the cut's clock before its speed-up; the file is on
+ * the finished cut's (each time over `speed`), since it is burned after the speed step.
  */
-export function editAss({ captions = [], cap = null, cards = [], hook = null, endCard = null, endLayers = null, capMaxShare = null }, W = WIDTH, H = HEIGHT) {
+export function editAss({ captions = [], cap = null, cards = [], hook = null, endCard = null, endLayers = null, capMaxShare = null, speed = 1 }, W = WIDTH, H = HEIGHT) {
+  const at = (t) => assTime(t / speed);
+  // Each caption from the frame of its first word, and off by the time the next one comes up.
+  const starts = captions.map((c) => captionStartCs(c.s / speed));
+  const end = (c, k) => csTime(Math.min(Math.round(Math.max(0, c.e / speed) * 100), starts[k + 1] ?? Infinity));
   const thick = /thick black outline/i.test(cap?.style ?? "");
   const y = cap?.place ? Math.round(((cap.place[0] + cap.place[1]) / 2) * H) : Math.round(H * 0.7);
   const capSize = Math.min(Math.round(H * (thick ? 0.05 : 0.034)), capMaxShare ? Math.round(H * capMaxShare) : Infinity);
@@ -4629,11 +4657,11 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
     `Style: End,Helvetica,${Math.round(H * 0.045)},&H00FFFFFF,&H00FFFFFF,&H20101010,&H00000000,-1,0,0,0,100,100,2,0,3,40,0,5,0,0,0,1`,
     ...(endLayers ? endCardStyles(endLayers.colors, H) : []), "",
     "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ...captions.map((c) => `Dialogue: 1,${assTime(c.s)},${assTime(c.e)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`),
-    ...cards.filter((c) => c.label).map((c) => `Dialogue: 2,${assTime(c.in)},${assTime(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`),
-    ...(hook?.text ? [`Dialogue: 3,${assTime(hook.in)},${assTime(hook.out)},Card,,0,0,0,,{${box(hook.box)}\\fs${Math.round(H * 0.026)}}${assText(hook.text)}`] : []),
-    ...(endCard ? [`Dialogue: 4,${assTime(endCard.in)},${assTime(endCard.out)},End,,0,0,0,,{\\pos(${W / 2},${H / 2})\\fad(120,0)}${assText(endCard.text)}`] : []),
-    ...(endLayers ? endCardDialogues(endLayers, W, H) : []),
+    ...captions.map((c, k) => `Dialogue: 1,${csTime(starts[k])},${end(c, k)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`),
+    ...cards.filter((c) => c.label).map((c) => `Dialogue: 2,${at(c.in)},${at(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`),
+    ...(hook?.text ? [`Dialogue: 3,${at(hook.in)},${at(hook.out)},Card,,0,0,0,,{${box(hook.box)}\\fs${Math.round(H * 0.026)}}${assText(hook.text)}`] : []),
+    ...(endCard ? [`Dialogue: 4,${at(endCard.in)},${at(endCard.out)},End,,0,0,0,,{\\pos(${W / 2},${H / 2})\\fad(120,0)}${assText(endCard.text)}`] : []),
+    ...(endLayers ? endCardDialogues(endLayers, W, H, at) : []),
   ].join("\n") + "\n";
 }
 
@@ -4832,8 +4860,8 @@ function endCardStyles(colors, H) {
   ];
 }
 
-/** The end card's words, building in one after another after the photo. */
-function endCardDialogues(e, W, H) {
+/** The end card's words, building in one after another after the photo. `at` writes a time of the cut's clock. */
+function endCardDialogues(e, W, H, at = assTime) {
   const rows = [
     ["EndHead", e.words.headline, 0.64],
     ["EndOffer", e.words.offer, 0.71],
@@ -4841,7 +4869,7 @@ function endCardDialogues(e, W, H) {
   ].filter(([, words]) => hasText(words));
   return rows.map(([style, words, y], k) => {
     const from = roundMs(e.in + END_CARD_PHOTO_FADE_SEC + k * END_CARD_WORD_STEP_SEC);
-    return `Dialogue: 5,${assTime(from)},${assTime(e.out)},${style},,0,0,0,,{\\pos(${W / 2},${Math.round(H * y)})\\fad(250,0)}${assText(words)}`;
+    return `Dialogue: 5,${at(from)},${at(e.out)},${style},,0,0,0,,{\\pos(${W / 2},${Math.round(H * y)})\\fad(250,0)}${assText(words)}`;
   });
 }
 
@@ -5429,8 +5457,8 @@ const roleOf = (seg) => (seg.reaction || seg.audio === "clip" ? "a-roll" : seg.a
  * cutChecks: the finished cut against CHECK_BARS. `screens` are the caption
  * screens burned in (null for none), `rows` and `scenes` the cut's words and
  * shots as written beside it, `levels` the voice's and the bed's loudness from
- * the render. Caption sync is not checked: it needs a transcription of the
- * finished cut of its own, and the cut's words are the ones its captions came from.
+ * the render. Caption sync is checked apart, with captionCheck (cutSync): it
+ * needs where each word is heard in the finished cut, not the words the captions came from.
  * With blipCheck and freezeCheck in `finish`, the checks also name blips (each
  * shot's source length found through `shotOf`, the storyboard's sourceShot, in
  * `sourceAd`) and freezes; with them off, their keys are absent. The same holds
@@ -5576,14 +5604,16 @@ function hasFilter(name) {
 
 /**
  * The files the finishing settings write beside the cut: the pace record, the
- * mix before the loudness pass, and the voice and bed cutChecks measures.
+ * mix before the loudness pass (a .mov, whose sound stays uncompressed until
+ * that pass), the voice and bed cutChecks measures, and captionCheck's checks.
  */
 export function finishPaths(outPath) {
   const dir = path.dirname(outPath);
   const base = path.basename(outPath, path.extname(outPath));
   return {
     pace: path.join(dir, `${base}.pace.json`),
-    mix: path.join(dir, `${base}.mix${path.extname(outPath)}`),
+    mix: path.join(dir, `${base}.mix.mov`),
+    sync: path.join(dir, `${base}.sync.json`),
     sound: path.join(dir, `${base}.sound.json`),
     master: path.join(dir, `${base}.music-only${path.extname(outPath)}`),
     voice: path.join(dir, `${base}.voice.wav`),
@@ -6600,7 +6630,7 @@ function cutFinishEvidence({ manifest, storyboard, timeline = null, skip = new S
  * sidecars, and throws FirstCutError where the CLI would exit. The CLI's report
  * is printed by main() from what this returns.
  */
-export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = true, stillFill = false, prepareText = false }) {
+export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = true, stillFill = false, prepareText = false, heardWords = null }) {
   for (const bin of ["ffmpeg", "ffprobe"]) {
     if (spawnSync(bin, ["-version"]).status !== 0) {
       throw new FirstCutError(2, `${bin} is not installed. Install ffmpeg (brew install ffmpeg / apt install ffmpeg).`);
@@ -6794,11 +6824,13 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     if (hasFilter("subtitles")) {
       ass = "edit.ass";
       const cap = sourceAd?.captions ?? manifest.sheetCaptions ?? null;
+      // COP-300: a cut made again after its caption check failed times its captions by the finished film's heard words.
+      const timed = (words) => (heardWords?.length ? retimeWords(words, heardWords, speed) : words);
       const screens = captionsBeforeEndCard(!finish.captions
         ? []
         : finish.captionsByLine
-          ? lineCaptionScreens(lineWords(timeline, storyboard), cap)
-          : captionScreens(wordRows(timeline), cap), endLayers);
+          ? lineCaptionScreens(timed(lineWords(timeline, storyboard)), cap)
+          : captionScreens(timed(wordRows(timeline)), cap), endLayers);
       if (finish.captions) burned = screens;
       burnedCards = finish.cards ? (copied ? copied.cards : storyboardCards(storyboard, timeline)) : [];
       writeFileSync(here(ass), editAss({
@@ -6810,6 +6842,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         // A copied ad has an end card only where its source does. The pack-photo end card takes the CTA words' place.
         endCard: !endLayers && finish.cards && (!sourceAd || sourceAd.endCard) ? endCardOf(storyboard, pictureSec) : null,
         endLayers,
+        speed,
       }));
     } else {
       notes.push(
@@ -6923,7 +6956,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ...(finish
       ? {
         finish: {
-          levelSegments: !finish.finishLoudness, ass, speed,
+          levelSegments: !finish.finishLoudness, ass, speed, ...(finish.finishLoudness ? { pcmMix: true } : {}),
           ...(pictures.length ? { pictures } : {}), ...(clean ? { clean } : {}), ...(meters ? { meters } : {}),
           ...(endLayers ? { endCard: endLayers } : {}),
         },
@@ -6991,6 +7024,10 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     rmSync(sidecars.srt, { force: true });
   }
   writeFileSync(sidecars.scenes, `${JSON.stringify(scenes, null, 2)}\n`);
+  const sync = finish?.captionCheck
+    ? cutSync({ out, speed, scenes, rows, screens: ass && burned ? burned : [], manifest, here, readJson })
+    : null;
+  if (sync) writeFileSync(paths.sync, `${JSON.stringify(sync, null, 2)}\n`);
 
   const duration = execFileSync("ffprobe", [
     "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", out,
@@ -7097,10 +7134,55 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ...(loudness ? { loudness } : {}),
     ...(checks ? { checks } : {}),
     ...(finish.brandCheck ? { brand: brandRecord({ brand, packPhoto, endLayers, rows }) } : {}),
+    // COP-300: the caption file is timed on the finished, sped-up cut's clock, as it is burned after the speed step.
+    ...(ass && speed !== 1 ? { captionClock: "final" } : {}),
+    ...(sync ? { sync: syncRecord(sync) } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
   writeFileSync(paths.pace, `${JSON.stringify(pace, null, 2)}\n`);
-  return withSound({ out, durationSec, manifest, timeline, music, rows, sidecars, pace });
+  return withSound({ out, durationSec, manifest, timeline, music, rows, sidecars, pace, ...(sync ? { sync } : {}) });
+}
+
+/**
+ * COP-300, captionCheck: the finished cut checked against its own sound. Check A on its decoded sound and frames;
+ * Check B on each burned caption, at the frame it is first seen, against its first word as the free listener
+ * (placementHeard) finds it in the finished sound: each take's own word times, moved by where its sound sits there.
+ * The sections are the cut's takes. The captions, sections and heard words come back with the verdicts, so the
+ * worker can judge Check B again on a listen of its own, and cut again from the heard words.
+ */
+function cutSync({ out, speed, scenes, rows, screens, manifest, here, readJson }) {
+  const sections = [];
+  for (const p of scenes) {
+    const last = sections.at(-1);
+    if (last && last.id === p.scene) last.endSec = roundMs(p.startSec + p.seconds);
+    else sections.push({ id: p.scene, startSec: p.startSec, endSec: roundMs(p.startSec + p.seconds) });
+  }
+  const captions = screens.map((c) => ({ text: c.text, seenSec: roundMs(captionSeenSec(captionStartCs(c.s / speed))) }));
+  const takes = (manifest.scenes ?? []).flatMap((scene) => {
+    const file = scene.wordsFrom === "voice" ? scene.voice : scene.clip;
+    const words = readJson(scene.words);
+    const cutWords = rows.filter((r) => r.scene === scene.sceneIndex);
+    if (!file || !Array.isArray(words) || cutWords.length === 0) return [];
+    return [{
+      file: here(file),
+      heard: words.map((w) => ({ text: String(w.w ?? ""), start: w.s, end: w.e })),
+      words: cutWords.map((r) => ({ text: r.text, start: r.start, end: r.end })),
+    }];
+  });
+  const heard = captions.length ? placementHeard({ film: out, speed, takes }) : [];
+  return {
+    checkA: soundPictureCheck(out),
+    checkB: captions.length ? captionSync({ captions, heard, sections }) : null,
+    listener: captions.length ? "placement" : null,
+    captionClock: "final",
+    captions, sections, heard,
+  };
+}
+
+/** The checks' numbers the pace record keeps: the verdicts, without each caption's row. */
+export function syncRecord(sync) {
+  const { rows, ...checkB } = sync.checkB ?? {};
+  return { checkA: sync.checkA, checkB: sync.checkB ? checkB : null, listener: sync.listener };
 }
 
 function main() {

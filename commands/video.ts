@@ -504,7 +504,8 @@ steps cost money: swipe (the breakdown, on the team's keys), swipe template
 and swipe write (on your own Anthropic or OpenRouter key) and swipe start (the
 run's storyboard and pictures). Without --yes each one sends nothing and says
 what it buys and who pays. The CLI prints no price for any of them, but for
-swipe start of a kind whose saved sheet has one.
+the people swipe write makes and swipe start of a kind whose saved sheet has
+one.
   --file <ad.mp4>      The ad as a video file: MP4, MOV, M4V or WebM, up to
                        300 MB (swipe)
   --url <link>         A link to the ad: Meta Ad Library, TikTok, Instagram or
@@ -598,9 +599,11 @@ face picture on their Kie key. Without --yes it says the price and what it buys
 and makes nothing; --yes --max-usd <the price's most> makes them (--count 1 to
 8, 4 by default), --wait waits for them. Each is shown with their picture's
 address; who=<n> picks one, and the video is then filmed with that person and
-that face. swipe sheet voices is free: the catalog voices on the member's
-ElevenLabs account that fit the person, then their own voices, each with its
-sample's address; voice=<n> picks one, and the video is filmed in it.
+that face. swipe sheet voices makes one read of the voice list on the
+member's ElevenLabs key, and no speech: the voices that fit the person, best
+fit first, each with its sample's address and, when known, its age and accent,
+and the one the voice row recommends; voice=<n> picks one, and the video is
+filmed in it.
 swipe write also makes people to pick from for a kind whose sheet has a person,
 when the server offers them: without --yes it says their price too, and the
 yes line carries their most (--people-max-usd <n>). The write then makes 4 on
@@ -1073,6 +1076,11 @@ export interface VideoRun {
    * waiting on a keep or a remake. Absent otherwise, and from older backends.
    */
   cutHeldScenes?: number[];
+  /**
+   * COP-300: the app's cut's check against its own sound, in the server's sentences (convex workflows.ts getRun).
+   * Absent when the cut made none, and from older backends.
+   */
+  cutCheck?: string[];
   /** #1851: set only when the run's workflow row is module-owned, which is what
    *  a Show ad run is. The CLI is never told the `showId`, so this is the only
    *  thing here that tells a Show ad apart from a member's own workflow run. */
@@ -5258,6 +5266,8 @@ export async function statusFlow(
             : {}),
           ...(failedStoryboard?.hasRejectedDraft === true ? { hasRejectedDraft: true } : {}),
           ...(run.director ? { director: run.director } : {}),
+          // COP-300: absent when the server sent none, as the fields above.
+          ...(run.cutCheck?.length ? { cutCheck: run.cutCheck } : {}),
         }),
       ],
     };
@@ -5331,6 +5341,7 @@ export async function statusFlow(
     lines.push("", "No scenes yet — this run hasn't made anything to look at.");
   } else {
     lines.push("", "Scene  Clip      Voice     Picture");
+    let allFlippedSaid = false;
     for (const sceneIndex of [...byScene.keys()].sort((a, b) => a - b)) {
       const row = byScene.get(sceneIndex)!;
       lines.push(
@@ -5368,6 +5379,10 @@ export async function statusFlow(
         // Local night fix F1 and F2(b): the words a kept one-take take said in place of the script's, and its label
         // check, are the worker's own plain sentences for the member, printed as they are.
         if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
+          if (finding.code === ONE_TAKE_LABEL_ALL_FLIPPED_CODE) {
+            if (allFlippedSaid) continue;
+            allFlippedSaid = true;
+          }
           lines.push(`       ${finding.detail}`);
           continue;
         }
@@ -5415,6 +5430,8 @@ export async function statusFlow(
       : hasFinal
         ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
         : "Final cut: not uploaded yet.",
+    // COP-300: the cut's check against its own sound, under the cut it was made on.
+    ...(run.cutCheck ?? []),
   );
   let finalSpeech: SpeechSummary | undefined;
   for (const item of items) if (item.itemKind === "final" && item.status === "done") finalSpeech = item.speech;
@@ -5432,9 +5449,16 @@ export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
  * Local night fix F2(b): the findings of a one-take take's label check (scout ugc-one-take-label.ts
  * ONE_TAKE_LABEL_FLIPPED_CODE, ONE_TAKE_LABEL_UNSURE_CODE, and COP-282's ONE_TAKE_LABEL_HELD_CODE): a take flipped
  * because its label came out mirrored, a label the check could not read or that got no answer, and a take held unflipped
- * because a flip would mirror the room against the other takes. Each detail is one plain sentence for the member.
+ * because a flip would mirror the room against the other takes, and (COP-307) a take flipped with every other take of its
+ * film. Each detail is one plain sentence for the member.
  */
-export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held"] as const;
+export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held", "one-take-label-flipped-all"] as const;
+
+/**
+ * COP-307: every take of the film was flipped together, as its label read backwards in all of them. Every take carries
+ * the same sentence; `video status` prints it once.
+ */
+const ONE_TAKE_LABEL_ALL_FLIPPED_CODE = "one-take-label-flipped-all";
 
 /**
  * COP-299: the findings of a one-take take's second listen (scout ugc-one-take-listen.ts and video/lib/ugcOneTakeRedo.ts

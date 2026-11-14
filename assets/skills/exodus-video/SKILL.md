@@ -703,9 +703,9 @@ The rows:
   "ugc-one-take" in the sheet before its next run.": set it only on their yes,
   and say that the next run writes that ad again, which is paid. On an ad it
   can't be made from, the write refuses it and says why. It buys a face photo,
-  a picture of the room, a cut-out of the product and one take for each 15 or
-  25 seconds of script, on the member's Kie key, and text calls on their model
-  key; it needs their ElevenLabs key and their Kie key. Its price is the
+  a picture of the room, a cut-out of the product, a picture of an animal when
+  the script puts one in the picture, and one take for each 15 or 25 seconds of
+  script, on the member's Kie key, and text calls on their model key; it needs their ElevenLabs key and their Kie key. Its price is the
   server's estimate, known once the swipe is written: `exodus video swipe
   sheet price <swipeId>` (free) prints it at 720p or a 480p draft, the whole
   video or the first take only, each with the most it can cost. The "about"
@@ -720,10 +720,11 @@ The rows:
 - **The saved sheet** (a kind that has one; One-take UGC today). The server
   keeps one for each swipe of such a kind, made after its write. For such a
   video this sheet's yes covers the write and its people only, and **It
-  buys:** says so: "<n> scripts now, each with <k> people to pick from (at
-  most $<most> for each script's people); each video after your yes on its
-  saved sheet", with the people's part only when the dry write printed their
-  price (People, below). The saved sheet and its yes come in step 4.
+  buys:** says so: "<n> scripts now, each with <k> people to pick from and
+  the animal when its script puts one in the picture (at most $<most> for each
+  script's people and animal); each video after your yes on its saved sheet",
+  with the people's part only when the dry write printed their price (People,
+  below). The saved sheet and its yes come in step 4.
 - **People** (a kind whose write can make them: One-take UGC, when the
   server offers people to pick from). Before you
   send the sheet, run that video's write line (step 4) without `--yes`: it
@@ -732,7 +733,14 @@ The rows:
   ("About $… for new people: …" and "At most $… in all: …") and the line to
   run: "On their yes, run the same command with --yes --people-max-usd
   <most>". Put that most on the sheet, as above: the sheet's yes is the yes to
-  it. When the member gave a money limit and the people's most, added over
+  it. The same price names the animal: "A picture of the animal, if the
+  script puts one in the picture: $…". With that yes, the write also reads the
+  stored script for an animal it puts in the picture (the dog in a dog
+  product's ad) and draws one picture of it with the people, inside the same
+  most. The saved sheet shows it on the row "The animal", with its picture;
+  `exodus video swipe sheet set <swipeId> animal=none` takes it out of the
+  video (free). With no animal in the script the row says "No animal in the
+  script." and no picture is paid for. When the member gave a money limit and the people's most, added over
   every video on the sheet, is already over it, say so on the sheet and ask:
   no write goes out until what it can cost fits. When it prints no people's
   price, the write makes none. When the member
@@ -964,7 +972,10 @@ every video has started:
    write: its yes carried no --people-max-usd. See their price (free): …".
    With the figure, the write waits for the people (a line ending "Waiting for
    them, up to 5 minutes."), then prints how their ask ended and each person
-   with their picture's address. Show each person's name and picture. Read the
+   with their picture's address. The animal, when the script puts one in the
+   picture, is on the saved sheet's row "The animal" a few minutes later
+   (`exodus video swipe sheet <swipeId>` shows it with its picture's address);
+   a start waits for it while it is still being made. Show each person's name and picture. Read the
    write's own lines; never assume one is recommended. When the ask names one
    ("Person N is recommended." and why), the write says "A start with no pick
    films person N, the recommended one." When it names none, it says "… films

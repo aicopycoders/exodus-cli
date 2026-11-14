@@ -608,9 +608,12 @@ swipe write also makes people to pick from for a kind whose sheet has a person,
 when the server offers them: without --yes it says their price too, and the
 yes line carries their most (--people-max-usd <n>). The write then makes 4 on
 the member's own keys once the script is stored, waits a few minutes for them
-and shows each, with the one a check of the faces recommends. --yes alone, or
---no-people, writes without them. swipe start waits while people are being
-made, until 5 minutes after they were asked for.
+and shows each, with the one a check of the faces recommends. Inside the same
+most it also reads the stored script for an animal it puts in the picture and
+draws one picture of it: the sheet's row "The animal" shows it, and swipe sheet
+set <swipeId> animal=none takes it out. --yes alone, or --no-people, writes
+without them. swipe start waits while people or the animal are being made,
+until 5 minutes after they were asked for.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
 clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
@@ -863,7 +866,7 @@ export type ArtifactSubset =
       type: "image";
       imageUrl?: string;
       storageId?: string;
-      anchor?: "set-plate" | "product-sheet" | "filled-plate" | "product-plate" | "layout-plate";
+      anchor?: "set-plate" | "product-sheet" | "filled-plate" | "product-plate" | "layout-plate" | "animal-plate";
       /** #2868: a filled plate's objects, as their lines read. */
       holds?: string[];
       /** #3080: a filled plate drawn with its holder's lid closed. */

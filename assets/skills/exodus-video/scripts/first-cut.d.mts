@@ -98,6 +98,34 @@ export class SourceMapRefusal extends FirstCutError {
   readonly findings: SourceMapFinding[];
 }
 
+/** A heard word on the cut's clock before its speed-up. */
+export interface CutWordRow { text: string; start: number; end: number; scene: number }
+
+/** #4585: the heard words the end card would cover; empty with no card or when every word ends before it. */
+export function voiceUnderEndCard(rows: CutWordRow[], endCard: { in: number } | null): CutWordRow[];
+
+/** #4585: the staff message of a cut refused because the end card would cover some of its voice. */
+export function voiceUnderEndCardMessage(words: CutWordRow[]): string;
+
+/** #4585: the end card's place and length, after the last heard word; `holdSec` is how long the picture runs on under it. */
+export function endCardLayersOf(
+  brand: unknown, storyboard: unknown, pictureSec: number, speed?: number, voiceEndSec?: number | null,
+): { file: string; in: number; out: number; seconds: number; holdSec?: number } | null;
+
+/** #4585: the seconds between the last heard word's end and the end card. */
+export const END_CARD_AFTER_VOICE_SEC: number;
+
+/** #4585: the end card on the cut, holding the last scene's picture under it; throws VoiceUnderEndCardRefusal when it would cover a word. */
+export function placeEndCard(
+  timeline: unknown, brand: unknown, storyboard: unknown, pictureSec: number, speed: number, notes: string[],
+): ReturnType<typeof endCardLayersOf>;
+
+/** #4585: the end card would cover some of the cut's voice, so the cut is not delivered. */
+export class VoiceUnderEndCardRefusal extends FirstCutError {
+  constructor(words: CutWordRow[]);
+  readonly words: CutWordRow[];
+}
+
 export interface SourceMapFinding {
   /** "refuse" stops the cut and nothing is delivered; "declared" is a measured fact the cut carries out. */
   severity: "refuse" | "declared";

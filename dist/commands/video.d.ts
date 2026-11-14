@@ -94,7 +94,7 @@ export type ArtifactSubset = {
     type: "image";
     imageUrl?: string;
     storageId?: string;
-    anchor?: "set-plate" | "product-sheet" | "filled-plate" | "product-plate" | "layout-plate";
+    anchor?: "set-plate" | "product-sheet" | "filled-plate" | "product-plate" | "layout-plate" | "animal-plate";
     holds?: string[];
     lid?: "closed";
     camera?: string;

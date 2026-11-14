@@ -539,6 +539,8 @@ export declare function priceLines(price: SwipePrice, dashboardUrl: string): str
 export declare function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetPeopleFlow(swipeId: string, count: number | null, maxUsd: number | null, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare const ANIMAL_WAIT_LINE = "The animal the script puts in the picture is being found and drawn for this swipe. The start waits for it, until 5 minutes after the write asked for it, so the video films the one on the sheet and does not pay to find and draw it again.";
+export declare const ANIMAL_GOES_ON_LINE = "The animal is still being found or drawn 5 minutes after the write asked for it, so the start goes on: the video looks for an animal in the script itself and draws one when it finds one.";
 export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";
 export declare function alreadyStartedOf(res: ApiResponse<unknown>): {
     runId: string;

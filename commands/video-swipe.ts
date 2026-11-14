@@ -586,9 +586,9 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
   if (kind === null || (kind !== undefined && !kind.trim())) return usage(`video swipe write --kind needs the key of a kind of ad. ${KIND_CHECKED}`);
   // COP-289: the people the write also makes. --people-max-usd carries the most the dry print showed; --no-people, none.
   const peopleMost = value("people-max-usd");
-  if (peopleMost === null) return usage("video swipe write --people-max-usd needs the people's most the write showed, such as 1.32.");
+  if (peopleMost === null) return usage("video swipe write --people-max-usd needs the people's most the write showed, such as 1.52.");
   if (peopleMost !== undefined && !/^\d+(\.\d{1,2})?$/.test(peopleMost.trim())) {
-    return usage(`video swipe write --people-max-usd takes a dollar amount, such as 1.32 (got "${peopleMost}").`);
+    return usage(`video swipe write --people-max-usd takes a dollar amount, such as 1.52 (got "${peopleMost}").`);
   }
   const noPeople = last("people")?.flag === "no-people";
   if (peopleMost !== undefined && noPeople) return usage("video swipe write takes --people-max-usd or --no-people, not both.");
@@ -1695,7 +1695,7 @@ export async function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: S
   out.say("Writing the brand's version on the member's key. It takes four to nine minutes.");
   if (ask.peopleMaxUsd !== undefined) {
     out.say(
-      `Once the script is stored, the people to pick from are made, or taken from an earlier write of this ad with at most one check of their pictures paid; at most ${usd(ask.peopleMaxUsd)} on the member's keys.`,
+      `Once the script is stored, the people to pick from are made, or taken from an earlier write of this ad with at most one check of their pictures paid, and the script is read for an animal it puts in the picture, whose picture is drawn when it has one; at most ${usd(ask.peopleMaxUsd)} on the member's keys for all of it.`,
     );
   }
   const ended = await poll<{ refused: ApiResponse<unknown> } | { swipe: SwipeView } | { error: string }>(
@@ -2463,14 +2463,10 @@ async function peopleBeforeStart(
   swipeId: string,
   opts: SwipeRunOptions,
   deps: VideoDeps,
+  /** COP-316: the sheet as the start already read it (animalBeforeStart); absent, it is read here. */
+  read?: ReturnType<typeof sheetOf>,
 ): Promise<{ lines: string[]; stillMaking: boolean; waited: boolean; who?: SavedSheetRow } | null> {
-  let first: ReturnType<typeof sheetOf> = null;
-  try {
-    const res = await deps.get(peopleSheetPath(swipeId));
-    first = res.ok ? sheetOf(res.data) : null;
-  } catch {
-    first = null;
-  }
+  const first = read !== undefined ? read : await readSheetForStart(swipeId, deps);
   const who = first ? rowOfSheet(first.sheet, "who") : undefined;
   if (!who) return null;
   if (!who.optionsStatus?.making || who.from === "you") {
@@ -2503,6 +2499,61 @@ async function peopleBeforeStart(
 
 /** How long a start may wait for people, counted from when they were asked for. */
 const PEOPLE_MADE_WAIT_MS = 5 * 60_000;
+
+/** The swipe's sheet as a start reads it, or null when it cannot be read (an older server). */
+async function readSheetForStart(swipeId: string, deps: VideoDeps): Promise<ReturnType<typeof sheetOf>> {
+  try {
+    const res = await deps.get(peopleSheetPath(swipeId));
+    return res.ok ? sheetOf(res.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** COP-316: said when the start waits for the animal the write is finding and drawing. */
+export const ANIMAL_WAIT_LINE =
+  "The animal the script puts in the picture is being found and drawn for this swipe. The start waits for it, until 5 minutes after the write asked for it, so the video films the one on the sheet and does not pay to find and draw it again.";
+/** COP-316: said when the start goes on while the animal is still being made. */
+export const ANIMAL_GOES_ON_LINE =
+  "The animal is still being found or drawn 5 minutes after the write asked for it, so the start goes on: the video looks for an animal in the script itself and draws one when it finds one.";
+
+/**
+ * COP-316: before a start, while the write's animal is being found or drawn (the sheet's animal row says so), waits for
+ * it, until 5 minutes after the write asked for it, so the start carries the sheet's animal and the run does not pay to
+ * find and draw it again. Answers the sheet as last read (for the people's wait) and the lines it said; with nothing to
+ * wait for, the sheet as `first` had it and no line.
+ */
+async function animalBeforeStart(
+  swipeId: string,
+  first: ReturnType<typeof sheetOf>,
+  opts: SwipeRunOptions,
+  deps: VideoDeps,
+): Promise<{ sheet: ReturnType<typeof sheetOf>; lines: string[] }> {
+  const animal = first ? rowOfSheet(first.sheet, "animal") : undefined;
+  if (animal?.optionsStatus?.making !== true) return { sheet: first, lines: [] };
+  const out = progress(opts);
+  const leftMs = PEOPLE_MADE_WAIT_MS - Math.max(0, animal.optionsStatus.makingForMs ?? 0);
+  if (leftMs <= 0) {
+    out.say(ANIMAL_GOES_ON_LINE);
+    return { sheet: first, lines: out.kept };
+  }
+  out.say(ANIMAL_WAIT_LINE);
+  let last = first;
+  const ended = await poll(
+    () => deps.get(peopleSheetPath(swipeId)),
+    (res) => {
+      const sheet = res.ok ? sheetOf(res.data) : null;
+      if (!sheet) return { done: false };
+      last = sheet;
+      return rowOfSheet(sheet.sheet, "animal")?.optionsStatus?.making === true ? null : { done: true };
+    },
+    Math.ceil(leftMs / POLL_MS),
+    deps,
+    deps.now() + leftMs,
+  );
+  if (!("done" in ended) || !ended.done) out.say(ANIMAL_GOES_ON_LINE);
+  return { sheet: last, lines: out.kept };
+}
 
 /** Said when the start goes on while people are still being made: why, and plainly what it films. */
 /**
@@ -2584,8 +2635,14 @@ export async function swipeStartFlow(
   }
   // COP-289: while the swipe's people are being made, the start waits for them, a few minutes at most, so it takes the
   // sheet as it stands once they are made; then it starts as it always does.
-  const people = waitPeople ? await peopleBeforeStart(swipeId, opts, deps) : null;
-  if (people) return withPeopleWait(await swipeStartFlow(swipeId, ask, opts, deps, again), people, json);
+  // COP-316: and while the write's animal is being found and drawn, for it, so the start carries the sheet's animal.
+  const animal = waitPeople ? await animalBeforeStart(swipeId, await readSheetForStart(swipeId, deps), opts, deps) : null;
+  const people = waitPeople ? await peopleBeforeStart(swipeId, opts, deps, animal?.sheet ?? null) : null;
+  if (people) return withPeopleWait(await swipeStartFlow(swipeId, ask, opts, deps, again), { ...people, lines: [...(animal?.lines ?? []), ...people.lines] }, json);
+  if (animal && animal.lines.length > 0) {
+    const result = await swipeStartFlow(swipeId, ask, opts, deps, again);
+    return json ? result : { ...result, lines: [...animal.lines, ...result.lines] };
+  }
   // COP-265 part 6: a server without the price before the yes ignores maxUsd and would start the video unheld, so a
   // start held to a price first asks the price's route (a free read) and starts nothing where it is missing.
   if (ask.maxUsd !== undefined) {

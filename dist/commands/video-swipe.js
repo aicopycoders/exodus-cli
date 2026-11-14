@@ -251,9 +251,9 @@ export function planSwipeCommand(rest, occurrences) {
         return usage(`video swipe write --kind needs the key of a kind of ad. ${KIND_CHECKED}`);
     const peopleMost = value("people-max-usd");
     if (peopleMost === null)
-        return usage("video swipe write --people-max-usd needs the people's most the write showed, such as 1.32.");
+        return usage("video swipe write --people-max-usd needs the people's most the write showed, such as 1.52.");
     if (peopleMost !== undefined && !/^\d+(\.\d{1,2})?$/.test(peopleMost.trim())) {
-        return usage(`video swipe write --people-max-usd takes a dollar amount, such as 1.32 (got "${peopleMost}").`);
+        return usage(`video swipe write --people-max-usd takes a dollar amount, such as 1.52 (got "${peopleMost}").`);
     }
     const noPeople = last("people")?.flag === "no-people";
     if (peopleMost !== undefined && noPeople)
@@ -1153,7 +1153,7 @@ export async function swipeWriteFlow(breakdownId, ask, opts, deps) {
     const out = progress(opts);
     out.say("Writing the brand's version on the member's key. It takes four to nine minutes.");
     if (ask.peopleMaxUsd !== undefined) {
-        out.say(`Once the script is stored, the people to pick from are made, or taken from an earlier write of this ad with at most one check of their pictures paid; at most ${usd(ask.peopleMaxUsd)} on the member's keys.`);
+        out.say(`Once the script is stored, the people to pick from are made, or taken from an earlier write of this ad with at most one check of their pictures paid, and the script is read for an animal it puts in the picture, whose picture is drawn when it has one; at most ${usd(ask.peopleMaxUsd)} on the member's keys for all of it.`);
     }
     const ended = await poll(() => deps.get(`${SWIPES_PATH}?job=${encodeURIComponent(job)}`), (polled) => {
         if (!polled.ok)
@@ -1738,15 +1738,8 @@ export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
         ],
     };
 }
-async function peopleBeforeStart(swipeId, opts, deps) {
-    let first = null;
-    try {
-        const res = await deps.get(peopleSheetPath(swipeId));
-        first = res.ok ? sheetOf(res.data) : null;
-    }
-    catch {
-        first = null;
-    }
+async function peopleBeforeStart(swipeId, opts, deps, read) {
+    const first = read !== undefined ? read : await readSheetForStart(swipeId, deps);
     const who = first ? rowOfSheet(first.sheet, "who") : undefined;
     if (!who)
         return null;
@@ -1773,6 +1766,40 @@ async function peopleBeforeStart(swipeId, opts, deps) {
     return { lines: [...out.kept, ...(sentence ? [sentence] : []), ...(films ? [films] : [])], stillMaking: false, waited: true, who: ended.done.who };
 }
 const PEOPLE_MADE_WAIT_MS = 5 * 60_000;
+async function readSheetForStart(swipeId, deps) {
+    try {
+        const res = await deps.get(peopleSheetPath(swipeId));
+        return res.ok ? sheetOf(res.data) : null;
+    }
+    catch {
+        return null;
+    }
+}
+export const ANIMAL_WAIT_LINE = "The animal the script puts in the picture is being found and drawn for this swipe. The start waits for it, until 5 minutes after the write asked for it, so the video films the one on the sheet and does not pay to find and draw it again.";
+export const ANIMAL_GOES_ON_LINE = "The animal is still being found or drawn 5 minutes after the write asked for it, so the start goes on: the video looks for an animal in the script itself and draws one when it finds one.";
+async function animalBeforeStart(swipeId, first, opts, deps) {
+    const animal = first ? rowOfSheet(first.sheet, "animal") : undefined;
+    if (animal?.optionsStatus?.making !== true)
+        return { sheet: first, lines: [] };
+    const out = progress(opts);
+    const leftMs = PEOPLE_MADE_WAIT_MS - Math.max(0, animal.optionsStatus.makingForMs ?? 0);
+    if (leftMs <= 0) {
+        out.say(ANIMAL_GOES_ON_LINE);
+        return { sheet: first, lines: out.kept };
+    }
+    out.say(ANIMAL_WAIT_LINE);
+    let last = first;
+    const ended = await poll(() => deps.get(peopleSheetPath(swipeId)), (res) => {
+        const sheet = res.ok ? sheetOf(res.data) : null;
+        if (!sheet)
+            return { done: false };
+        last = sheet;
+        return rowOfSheet(sheet.sheet, "animal")?.optionsStatus?.making === true ? null : { done: true };
+    }, Math.ceil(leftMs / POLL_MS), deps, deps.now() + leftMs);
+    if (!("done" in ended) || !ended.done)
+        out.say(ANIMAL_GOES_ON_LINE);
+    return { sheet: last, lines: out.kept };
+}
 const checksOnly = (who, aged) => aged && who.optionsStatus?.making === true && typeof who.optionsStatus.count !== "number";
 function goesOnLine(who, aged, why) {
     const checking = checksOnly(who, aged);
@@ -1819,9 +1846,14 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
     if (!opts.yes) {
         return startNeedsYes(swipeId, ask.oneShot ? "start-one-shot" : "start", json, again, again ? ["With --again: a second video from this swipe, even if it already has one. It is paid on its own."] : [], deps);
     }
-    const people = waitPeople ? await peopleBeforeStart(swipeId, opts, deps) : null;
+    const animal = waitPeople ? await animalBeforeStart(swipeId, await readSheetForStart(swipeId, deps), opts, deps) : null;
+    const people = waitPeople ? await peopleBeforeStart(swipeId, opts, deps, animal?.sheet ?? null) : null;
     if (people)
-        return withPeopleWait(await swipeStartFlow(swipeId, ask, opts, deps, again), people, json);
+        return withPeopleWait(await swipeStartFlow(swipeId, ask, opts, deps, again), { ...people, lines: [...(animal?.lines ?? []), ...people.lines] }, json);
+    if (animal && animal.lines.length > 0) {
+        const result = await swipeStartFlow(swipeId, ask, opts, deps, again);
+        return json ? result : { ...result, lines: [...animal.lines, ...result.lines] };
+    }
     if (ask.maxUsd !== undefined) {
         const unheld = await maxUsdUnsupported(swipeId, ask.maxUsd, deps);
         if (unheld)

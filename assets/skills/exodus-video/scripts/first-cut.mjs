@@ -2196,9 +2196,11 @@ function trimTemplateTerminalSilence(file, timeline, manifest, board, notes) {
   if (Math.max(authoredEnd, reservedEnd, resolvedEnd) > silenceStart + 1 / FPS) notes.push(
     `terminal-silence-authored: measured -50dB EOF silence starts ${silenceStart.toFixed(3)}s; ` +
     `resolved picture/acting reservation retained through ${Math.max(authoredEnd, reservedEnd, resolvedEnd).toFixed(3)}s, not claimed observed`);
+  // #4585: the end card is quiet after the voice on purpose, so a cut with one is never trimmed short of its end.
+  const cardEnd = timeline.endCard ? Math.max(0, ...timeline.spine.map((seg) => seg.startSec + seg.seconds)) : 0;
   const frames = Math.max(Math.ceil(silenceStart * FPS - 1e-6),
     Math.floor((lastWord + .3) * FPS + 1e-6), Math.ceil(authoredEnd * FPS - 1e-6),
-    Math.ceil(reservedEnd * FPS - 1e-6), Math.ceil(resolvedEnd * FPS - 1e-6));
+    Math.ceil(reservedEnd * FPS - 1e-6), Math.ceil(resolvedEnd * FPS - 1e-6), Math.ceil(cardEnd * FPS - 1e-6));
   if (frames >= media.picture.frames || frames <= 0) return false;
   const endSec = frames / FPS;
   const spine = timeline.spine.filter((seg) => seg.startSec < endSec).map((seg) => {
@@ -3996,9 +3998,12 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     const [fadeIn, fadeOut] = [seg.fadeInSec ?? EDGE_FADE_SEC, seg.fadeOutSec ?? EDGE_FADE_SEC];
     // A cubic rise keeps a reaction's quiet start near silent until its laugh (#2666).
     const rise = fadeIn > EDGE_FADE_SEC ? ":curve=cub" : "";
+    // #4585: the end card's held picture runs on in silence after the segment's own sound has faded out.
+    const sounding = seg.seconds - (seg.endCardHoldSec ?? 0);
     const fitLength =
-      `apad,atrim=0:${sec(seg.seconds)},afade=t=in:d=${sec(fadeIn)}${rise},` +
-      `afade=t=out:st=${sec(seg.seconds - fadeOut)}:d=${sec(fadeOut)}`;
+      `apad,atrim=0:${sec(sounding)},afade=t=in:d=${sec(fadeIn)}${rise},` +
+      `afade=t=out:st=${sec(sounding - fadeOut)}:d=${sec(fadeOut)}` +
+      (seg.endCardHoldSec ? `,apad,atrim=0:${sec(seg.seconds)}` : "");
     const fitSound = `${level},${fitLength}`;
     if (seg.wholeVoice) {
       filters.push(`anullsrc=r=48000:cl=stereo,atrim=0:${sec(seg.seconds)}[a${i}]`);
@@ -4100,25 +4105,28 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     );
     videoLabel = `pin${j}`;
   });
-  // endCardLayers: the brand's ground over the whole frame, then the pack photo in its box, pushing in slowly.
+  // endCardLayers: the brand's ground over the whole frame and the pack photo in its box, pushing in slowly, made as
+  // one card on its own clock and dissolved in over the last picture (#4585: never the ground alone, never black).
   if (finish?.endCard) {
     const e = finish.endCard;
     const box = END_CARD_PHOTO_BOX;
     const w = even((box[2] - box[0]) * WIDTH);
     const h = even((box[3] - box[1]) * HEIGHT);
     const frames = Math.max(1, Math.round(e.seconds * FPS));
-    const k = addInput("-loop", "1", "-t", sec(e.seconds), "-i", resolve(e.file));
-    filters.push(`color=c=0x${e.colors.background}:s=${WIDTH}x${HEIGHT}:r=${FPS}:d=${sec(e.out)},format=yuv420p[ecground]`);
-    filters.push(`[${videoLabel}][ecground]overlay=enable=between(t\\,${sec(e.in)}\\,${sec(e.out)}):eof_action=pass[ecg]`);
+    const length = sec(e.out - e.in);
+    const k = addInput("-loop", "1", "-t", length, "-i", resolve(e.file));
+    filters.push(`color=c=0x${e.colors.background}:s=${WIDTH}x${HEIGHT}:r=${FPS}:d=${length},format=yuv420p[ecground]`);
     filters.push(
       `[${k}:v]fps=${FPS},scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
         `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x${e.colors.background},setsar=1,` +
         `zoompan=z=1+${END_CARD_PUSH_IN}*on/${frames}:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2):d=1:s=${w}x${h}:fps=${FPS},` +
-        `format=yuv420p,fade=t=in:st=0:d=${END_CARD_PHOTO_FADE_SEC},setpts=PTS-STARTPTS+${sec(e.in)}/TB[ecpic]`,
+        `format=yuv420p[ecpic]`,
     );
     filters.push(
-      `[ecg][ecpic]overlay=x=${Math.round(box[0] * WIDTH)}:y=${Math.round(box[1] * HEIGHT)}:enable=between(t\\,${sec(e.in)}\\,${sec(e.out)}):eof_action=pass[ecard]`,
+      `[ecground][ecpic]overlay=x=${Math.round(box[0] * WIDTH)}:y=${Math.round(box[1] * HEIGHT)},` +
+        `format=yuva420p,fade=t=in:st=0:d=${END_CARD_FADE_SEC}:alpha=1,setpts=PTS-STARTPTS+${sec(e.in)}/TB[ecbody]`,
     );
+    filters.push(`[${videoLabel}][ecbody]overlay=enable=between(t\\,${sec(e.in)}\\,${sec(e.out)}):eof_action=pass[ecard]`);
     videoLabel = "ecard";
   }
   const speed = finish?.speed > 1 ? finish.speed : null;
@@ -4340,7 +4348,8 @@ export function sceneTimes(timeline, exact = false) {
     .filter((c) => c.seconds > 0)
     .map((c) => ({ from: c.startSec, to: c.startSec + c.seconds }));
   const visible = timeline.spine.flatMap((seg) => {
-    let pieces = [{ from: seg.startSec, to: seg.startSec + seg.seconds }];
+    // #4585: the picture held under the end card is the card's, not the scene's.
+    let pieces = [{ from: seg.startSec, to: seg.startSec + seg.seconds - (seg.endCardHoldSec ?? 0) }];
     for (const c of covers) {
       pieces = pieces.flatMap((p) =>
         c.to <= p.from || c.from >= p.to
@@ -4917,40 +4926,45 @@ export function sourceAdPaceShots(sourceAd) {
 }
 
 /**
- * endCardLayers and brandCheck (Plan 14): the manifest's `brand`, written by
- * the worker beside `finishing`: the product's pack photo it downloaded
- * (`packPhoto`, a file in the folder), the product's name, the scenes whose
- * picture the pull's rule draws from that photo (`photoScenes`), the end
- * card's length and the brand's colours (hex), each optional. Null when the
- * manifest has none, so a cut without it is the one it always was.
+ * How long the end card shows, the same for every brand: Daniel's ruling on COP-309 (2026-11-14, #4585), "the card
+ * comes up just after the last spoken word and shows for about 2 seconds, so nothing said is covered".
  */
-export const END_CARD_LAYERS_SEC = 6;
-export const END_CARD_MIN_SEC = 5;
-export const END_CARD_MAX_SEC = 8;
+export const END_CARD_LAYERS_SEC = 2;
 /** The end card's colours when the brand gives none: a near-black ground, white words, a white call-to-action box. */
 export const END_CARD_COLORS = { background: "111111", text: "FFFFFF", accent: "FFFFFF" };
 /** Where the pack photo sits on the end card, as shares of the frame, and how far it pushes in across the card. */
 export const END_CARD_PHOTO_BOX = [0.1, 0.1, 0.9, 0.56];
 export const END_CARD_PUSH_IN = 0.05;
-/** The words build in one after another, this far apart, after the photo has faded in. */
-const END_CARD_WORD_STEP_SEC = 0.6;
-const END_CARD_PHOTO_FADE_SEC = 0.4;
+/**
+ * #4585: the card dissolves in over the last picture in END_CARD_FADE_SEC, so its ground never shows alone before the
+ * photo, and its words build in one after another, this far apart, each fading in over END_CARD_WORD_FADE_MS, as the
+ * dissolve ends. On a 2 s card the headline is fully on screen for 1.65 s, the offer 1.5 s, the call to action 1.35 s.
+ */
+const END_CARD_WORD_STEP_SEC = 0.15;
+const END_CARD_FADE_SEC = 0.2;
+const END_CARD_WORD_FADE_MS = 150;
 /** A spoken call to action longer than this many words is too long to letter; the card then shows none. */
 const END_CARD_CTA_MAX_WORDS = 8;
 
 const hexColour = (value) => (typeof value === "string" && /^#?[0-9a-f]{6}$/i.test(value.trim()) ? value.trim().replace(/^#/, "").toUpperCase() : null);
 
+/**
+ * endCardLayers and brandCheck (Plan 14): the manifest's `brand`, written by
+ * the worker beside `finishing`: the product's pack photo it downloaded
+ * (`packPhoto`, a file in the folder), the product's name, the scenes whose
+ * picture the pull's rule draws from that photo (`photoScenes`) and the
+ * brand's colours (hex), each optional. Null when the manifest has none, so a
+ * cut without it is the one it always was.
+ */
 export function brandOf(manifest) {
   const b = manifest?.brand;
   if (!b || typeof b !== "object") return null;
   const text = (v) => (hasText(v) ? v.trim() : null);
   const colors = b.colors && typeof b.colors === "object" ? b.colors : {};
-  const seconds = Number.isFinite(b.endCardSec) ? Math.min(END_CARD_MAX_SEC, Math.max(END_CARD_MIN_SEC, b.endCardSec)) : END_CARD_LAYERS_SEC;
   return {
     packPhoto: text(b.packPhoto),
     productName: text(b.productName),
     photoScenes: Array.isArray(b.photoScenes) ? b.photoScenes.filter((n) => Number.isInteger(n)) : [],
-    endCardSec: seconds,
     colors: {
       background: hexColour(colors.background) ?? END_CARD_COLORS.background,
       text: hexColour(colors.text) ?? END_CARD_COLORS.text,
@@ -4983,26 +4997,79 @@ export function endCardWords(storyboard, productName = null) {
   };
 }
 
+/** #4585: the end card comes up this long after the last heard word ends. */
+export const END_CARD_AFTER_VOICE_SEC = 0.3;
+
 /**
- * endCardLayers: the ad's last `endCardSec` seconds of screen time (`speed`
+ * endCardLayers: the ad's last END_CARD_LAYERS_SEC seconds of screen time (`speed`
  * is the cut's speed-up, applied after) become the end card: the brand's
  * ground colour, the pack photo pushing in slowly, and the words drawn by
- * code over it. The sound runs on under it as cut, so the call to action is
- * heard over the card. Never more than half the ad. Null without a pack photo.
+ * code over it. Never more than half the ad. Null without a pack photo.
+ * #4585: the card never covers a heard word. When the last word (`voiceEndSec`,
+ * on the cut's clock before the speed-up) ends inside those seconds, the card
+ * comes up just after it, and `holdSec` is how much longer the picture must run
+ * under the card so the card keeps its length.
  */
-export function endCardLayersOf(brand, storyboard, pictureSec, speed = 1) {
+export function endCardLayersOf(brand, storyboard, pictureSec, speed = 1, voiceEndSec = null) {
   if (!brand?.packPhoto) return null;
-  const seconds = Math.min(brand.endCardSec * speed, pictureSec / 2);
+  const seconds = Math.min(END_CARD_LAYERS_SEC * speed, pictureSec / 2);
   if (!(seconds > 0)) return null;
-  const at = roundMs(Math.max(0, pictureSec - seconds));
+  // Only a card that would cover a word moves; one that comes up after the last word stays where it was.
+  const waits = Number.isFinite(voiceEndSec) && voiceEndSec > Math.max(0, pictureSec - seconds) + 1e-3;
+  const afterVoice = waits ? voiceEndSec + END_CARD_AFTER_VOICE_SEC : 0;
+  const at = roundMs(Math.max(0, waits ? afterVoice : pictureSec - seconds));
+  // Whole frames, so the held picture ends on the cut's own frame clock.
+  const holdSec = waits ? Math.max(0, Math.ceil((at + seconds - pictureSec) * FPS - 1e-6)) / FPS : 0;
+  const end = pictureSec + holdSec;
   return {
     file: brand.packPhoto,
     in: at,
-    out: roundMs(pictureSec + 1),
-    seconds: roundMs(pictureSec - at),
+    out: roundMs(end + 1),
+    seconds: roundMs(end - at),
+    ...(holdSec > 0 ? { holdSec } : {}),
     words: endCardWords(storyboard, brand.productName),
     colors: brand.colors,
   };
+}
+
+/**
+ * #4585: the heard words the end card would cover, so they would play with no picture of their scene. Each is a word
+ * row (the cut's clock before the speed-up). Empty with no card, or when every word ends before the card comes up.
+ */
+export function voiceUnderEndCard(rows, endCard) {
+  return endCard ? rows.filter((r) => r.end > endCard.in + 1e-3) : [];
+}
+
+/**
+ * #4585: the end card on the cut. It comes up after the last heard word, and the last scene's picture runs on under it
+ * (its sound faded out where it ends, then silence), so the card keeps its length. A cut laid on its measured map
+ * cannot run on past its picture, so its card keeps the ad's last seconds. A card that would cover a heard word refuses
+ * the cut (VoiceUnderEndCardRefusal). What it did goes in `notes`.
+ */
+export function placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes) {
+  const rows = wordRows(timeline);
+  const voiceEndSec = timeline.mapped ? null : Math.max(...rows.map((r) => r.end));
+  const card = endCardLayersOf(brand, storyboard, pictureSec, speed, voiceEndSec);
+  if (card?.holdSec) {
+    const last = timeline.spine.at(-1);
+    last.endCardHoldSec = card.holdSec;
+    last.holdSec = (last.holdSec ?? 0) + card.holdSec;
+    last.seconds += card.holdSec;
+    notes.push(`the end card waits for the last word, so the ad runs ${card.holdSec.toFixed(2)}s longer under it`);
+  }
+  const covered = voiceUnderEndCard(rows, card);
+  if (covered.length > 0) throw new VoiceUnderEndCardRefusal(covered);
+  if (card) timeline.endCard = { in: card.in, out: card.out };
+  return card;
+}
+
+/** The staff message of a cut refused because the end card would cover some of its voice (VoiceUnderEndCardRefusal). */
+export function voiceUnderEndCardMessage(words) {
+  const scenes = [...new Set(words.map((r) => r.scene))].sort((a, b) => a - b);
+  const named = scenes.length > 1 ? `scenes ${scenes.slice(0, -1).join(", ")} and ${scenes.at(-1)}` : `scene ${scenes[0]}`;
+  const from = Math.min(...words.map((r) => r.start));
+  const to = Math.max(...words.map((r) => r.end));
+  return `The end card would cover the voice of ${named} from ${from.toFixed(2)}s to ${to.toFixed(2)}s, so the cut was not attached`;
 }
 
 /** An ASS colour (&HAABBGGRR) from a hex RRGGBB. */
@@ -5019,7 +5086,7 @@ function endCardStyles(colors, H) {
   ];
 }
 
-/** The end card's words, building in one after another after the photo. `at` writes a time of the cut's clock. */
+/** The end card's words, building in one after another as the card's dissolve ends. `at` writes a time of the cut's clock. */
 function endCardDialogues(e, W, H, at = assTime) {
   const rows = [
     ["EndHead", e.words.headline, 0.64],
@@ -5027,8 +5094,8 @@ function endCardDialogues(e, W, H, at = assTime) {
     ["EndCta", e.words.cta, 0.82],
   ].filter(([, words]) => hasText(words));
   return rows.map(([style, words, y], k) => {
-    const from = roundMs(e.in + END_CARD_PHOTO_FADE_SEC + k * END_CARD_WORD_STEP_SEC);
-    return `Dialogue: 5,${at(from)},${at(e.out)},${style},,0,0,0,,{\\pos(${W / 2},${Math.round(H * y)})\\fad(250,0)}${assText(words)}`;
+    const from = roundMs(e.in + END_CARD_FADE_SEC + k * END_CARD_WORD_STEP_SEC);
+    return `Dialogue: 5,${at(from)},${at(e.out)},${style},,0,0,0,,{\\pos(${W / 2},${Math.round(H * y)})\\fad(${END_CARD_WORD_FADE_MS},0)}${assText(words)}`;
   });
 }
 
@@ -5339,11 +5406,12 @@ export function takesOf(timeline, plans, speed = 1) {
     const last = takes.at(-1);
     const endsOnReaction = Boolean(timeline.spine[i + 1]?.reaction);
     if (last && last.n === seg.sceneIndex && last.lastSeg === i - 1) {
-      Object.assign(last, { takeSec: last.takeSec + seg.seconds, lastSeg: i, endsOnReaction });
+      Object.assign(last, { takeSec: last.takeSec + seg.seconds - (seg.endCardHoldSec ?? 0), lastSeg: i, endsOnReaction });
       return;
     }
+    // #4585: the picture held under the end card is not the take's.
     takes.push({
-      n: seg.sceneIndex, start: seg.startSec, takeSec: seg.seconds, dialogue: seg.audio === "clip",
+      n: seg.sceneIndex, start: seg.startSec, takeSec: seg.seconds - (seg.endCardHoldSec ?? 0), dialogue: seg.audio === "clip",
       planSec: plans.get(seg.sceneIndex)?.durationSec ?? 0, lastSeg: i, endsOnReaction,
     });
   });
@@ -5856,6 +5924,15 @@ function mediaReader(here, exists) {
 
 export const sourceMapPath = (outPath) =>
   path.join(path.dirname(outPath), `${path.basename(outPath, path.extname(outPath))}.source-map.json`);
+
+/** #4585: the end card would cover some of the cut's voice (voiceUnderEndCard), so the cut is not delivered. */
+export class VoiceUnderEndCardRefusal extends FirstCutError {
+  constructor(words) {
+    super(1, voiceUnderEndCardMessage(words));
+    this.name = "VoiceUnderEndCardRefusal";
+    this.words = words;
+  }
+}
 
 /** A required text/fulfillment obligation cannot be claimed as delivered. */
 export class TextFinishRefusal extends FirstCutError {
@@ -6995,7 +7072,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const packPhoto = Boolean(brand?.packPhoto) && exists(brand.packPhoto);
   let endLayers = null;
   if (finish?.endCardLayers) {
-    endLayers = packPhoto ? endCardLayersOf(brand, storyboard, pictureSec, speed) : null;
+    endLayers = packPhoto ? placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes) : null;
     if (!endLayers) notes.push("the pull has no pack photo of the product, so the end card was not drawn");
   }
   if (finish && (finish.captions || finish.cards || endLayers) && !stagedText) {

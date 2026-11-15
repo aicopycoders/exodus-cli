@@ -12,7 +12,7 @@ import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/scrip
 import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
@@ -3965,17 +3965,21 @@ export async function waitFlow(runId, opts, deps) {
     const maxPolls = opts.maxPolls ?? MAX_POLLS;
     const lines = [];
     let lastProgress = null;
+    let shownWaiting = "";
     let redoSeen = false;
-    const progress = (line) => {
-        if (line === lastProgress)
-            return;
-        lastProgress = line;
+    const say = (line) => {
         if (opts.json)
             return;
         if (opts.onProgressLine)
             opts.onProgressLine(line);
         else
             lines.push(line);
+    };
+    const progress = (line) => {
+        if (line === lastProgress)
+            return;
+        lastProgress = line;
+        say(line);
     };
     let misses = 0;
     for (let poll = 0; poll < maxPolls; poll++) {
@@ -4002,15 +4006,22 @@ export async function waitFlow(runId, opts, deps) {
         if (customer) {
             const page = customerRunPage(deps.dashboardUrl, runId);
             if (customer.spendAsk) {
+                const listed = customerCutHeld(customer) ? customerStageLines(customer, page) : waitingSceneLines(customer, page);
+                const waiting = !customerCutHeld(customer) && listed.join("\n") === shownWaiting ? [] : listed;
                 return {
                     code: 0,
                     lines: opts.json
                         ? [JSON.stringify(customer)]
-                        : [...lines, ...spendAskLines(customer, runId), `Watch it on the dashboard: ${page}`],
+                        : [...lines, ...waiting, ...spendAskLines(customer, runId), `Watch it on the dashboard: ${page}`],
                 };
             }
             if (customerStageIsWorking(customer.stage) && !customer.templateApproval?.audition) {
                 progress(customerStageLines(customer, page)[0]);
+                const waiting = waitingSceneLines(customer, page);
+                if (waiting.join("\n") !== shownWaiting) {
+                    shownWaiting = waiting.join("\n");
+                    waiting.forEach(say);
+                }
                 continue;
             }
             return {
@@ -4632,6 +4643,17 @@ export async function quoteFlow(runId, json, deps, privateExport = false) {
                     : `AUTHORIZED RAW REQUEST REVIEW: ${JSON.stringify(privateView)}`] : []),
         ] };
 }
+const FINISH_STILL_CUTTING = "Your video is still being put together. You can finish it once it's ready.";
+async function waitingLinesAfterRefusal(runId, deps) {
+    try {
+        const read = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
+        const customer = read?.ok ? customerAnswer(read.data) : null;
+        return customer ? approveWaitingLines(customer, customerRunPage(deps.dashboardUrl, runId)) : [];
+    }
+    catch {
+        return [];
+    }
+}
 async function waitsForFinalApprove(runId, deps) {
     try {
         const read = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
@@ -4675,6 +4697,9 @@ export async function approveFlow(runId, opts, deps) {
         if (!opts.json && videoApiError(res).includes("accept the findings")) {
             return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId} --accept-findings`] };
         }
+        const waiting = opts.json || staleCut || videoApiError(res) === FINISH_STILL_CUTTING ? [] : await waitingLinesAfterRefusal(runId, deps);
+        if (waiting.length > 0)
+            return { ...refusal, lines: [...refusal.lines, ...waiting] };
         return staleCut
             ? {
                 ...refusal,
@@ -5283,8 +5308,9 @@ export async function retryClipFlow(runId, target, { note, voiceFirst = false },
     if (!runRes.ok)
         return errorResult(runRes, json);
     if (customerAnswer(runRes.data)) {
-        return adminOnlyResult("Redoing a finished clip is for admins. To redo a scene's picture while your storyboard " +
-            `waits for you: exodus video retry-frame ${runId} --scene <n>`, json);
+        return adminOnlyResult("Redoing a finished clip from here is for admins. To redo a scene's picture while your storyboard waits for " +
+            `you, run exodus video retry-frame ${runId} --scene <n>. Where the video's page offers Try again on a scene, ` +
+            `it films that clip again and shows the price first: ${customerRunPage(deps.dashboardUrl, runId)}`, json);
     }
     const run = asVideoRun(runRes.data);
     const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);
@@ -5454,7 +5480,7 @@ export async function spendAnswerFlow(runId, answer, json, deps) {
                 ? typeof clearedToUsd === "number"
                     ? `Keeping going. It will ask again before it spends past $${clearedToUsd.toFixed(2)}.`
                     : "Keeping going."
-                : "Stopped at the estimate. Nothing more will be filmed. Every scene with a clip is kept.",
+                : "Stopped at the estimate. The app films nothing more on its own. Every scene with a clip is kept.",
             `See where it stands: exodus video status ${runId}`,
         ],
     };
@@ -5886,6 +5912,7 @@ async function customerPullFlow(run, dir, json, deps) {
             `Every piece is listed in ${manifestPath}.`,
             ...replacedVideoLines(dir, manifest.video, videoBefore, deps),
             ...(manifest.video ? [] : ["The finished video isn't ready yet, so only the scene pieces came down."]),
+            ...customerWaitingNote(run),
             ...(failures.length > 0
                 ? [
                     "",
@@ -5897,6 +5924,14 @@ async function customerPullFlow(run, dir, json, deps) {
             ...(customerDelivered(run) ? ["", deliveredLine(dir, manifest.video)] : []),
         ],
     };
+}
+function customerWaitingNote(run) {
+    const scenes = run.cutHeldScenes?.length ? run.cutHeldScenes : run.waitingScenes;
+    if (!scenes?.length)
+        return [];
+    const names = scenes.map((s) => `scene ${s.sceneIndex}`);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+    return [`Your video waits on you for ${list} first. What each needs: exodus video status ${run.runId}`];
 }
 function customerDelivered(run) {
     return run.stage === "ready" && run.awaitingSignOff !== true;

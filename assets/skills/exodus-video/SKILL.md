@@ -1507,7 +1507,12 @@ CLI words it the way the run page does. On their own brands they can:
   to watch it on.
 - `video keep <runId> --scene <n>`: keeps a held scene's clip as it is, as
   "Use scene N as-is" on the video's page does, after their yes. It orders
-  nothing; keeping the last held scene starts the cut.
+  nothing; keeping the last held scene starts the cut. `status`, `wait` and a
+  refused `approve` name every scene waiting on the member, each with what a
+  check found, even while other scenes still film ("These scenes need you
+  before your video can be finished:", `waitingScenes` in `--json`). Show
+  those lines word for word: keep a scene only on their yes, and a remake is
+  Try again on the video's page, which shows its price first.
 - `video swipe`: all of "Swiping a video ad" except `swipe start --title`,
   which is refused with one sentence naming it. The run it starts answers the
   way start's does.

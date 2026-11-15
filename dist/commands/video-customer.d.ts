@@ -30,8 +30,16 @@ export interface CustomerRunScene {
     productNote?: string;
     clip?: {
         speech?: SpeechSummary;
+        redoEstimateUsd?: number;
+        redoEstimateMaxUsd?: number;
     } | null;
 }
+export type CustomerHeldScene = {
+    sceneIndex: number;
+    sentence: string;
+    take: boolean;
+    unfilmed?: true;
+};
 export type CustomerStopReason = {
     kind: "out-of-credits";
 } | {
@@ -82,12 +90,8 @@ export interface CustomerRun {
     stopReason: CustomerStopReason | null;
     detailsPath: string | null;
     cutHolds?: string[];
-    cutHeldScenes?: Array<{
-        sceneIndex: number;
-        sentence: string;
-        take: boolean;
-        unfilmed?: true;
-    }>;
+    cutHeldScenes?: CustomerHeldScene[];
+    waitingScenes?: CustomerHeldScene[];
     spend?: {
         spentUsd: number;
         estimateUsd: number | null;
@@ -125,8 +129,10 @@ export declare function spendAskLines(run: {
         sentence?: string;
     };
 }, runId: string): string[];
-export declare const SPEND_STOPPED_LINE = "You stopped this video at its estimate. Nothing more will be filmed.";
+export declare const SPEND_STOPPED_LINE = "You stopped this video at its estimate. The app films nothing more on its own.";
 export declare function customerCutHeld(run: CustomerRun): boolean;
+export declare function waitingSceneLines(run: CustomerRun, page: string): string[];
+export declare function approveWaitingLines(run: CustomerRun, page: string): string[];
 export interface ScriptTidied {
     setAside: string[];
     added: {

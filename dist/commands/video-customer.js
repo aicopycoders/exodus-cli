@@ -24,7 +24,7 @@ export function spendAskLines(run, runId) {
         return [run.spendWentOn.sentence];
     return [];
 }
-export const SPEND_STOPPED_LINE = "You stopped this video at its estimate. Nothing more will be filmed.";
+export const SPEND_STOPPED_LINE = "You stopped this video at its estimate. The app films nothing more on its own.";
 export function customerCutHeld(run) {
     return (run.cutHolds?.length ?? 0) > 0;
 }
@@ -36,21 +36,59 @@ function heldLines(run, page) {
     if (!scenes?.length) {
         return [head, ...holds.map((hold) => `  ${hold}`), `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`];
     }
+    return [head, ...heldSceneChoiceLines(run, scenes, page)];
+}
+export function waitingSceneLines(run, page) {
+    const scenes = run.waitingScenes;
+    if (!scenes?.length || customerCutHeld(run))
+        return [];
+    return [
+        `${scenes.length === 1 ? "This scene needs" : "These scenes need"} you before your video can be finished:`,
+        ...heldSceneChoiceLines(run, scenes, page),
+    ];
+}
+export function approveWaitingLines(run, page) {
+    const scenes = run.cutHeldScenes?.length ? run.cutHeldScenes : run.waitingScenes;
+    if (!scenes?.length)
+        return [];
+    const price = tryAgainPrice(run, scenes.filter((s) => !s.take).map((s) => s.sceneIndex));
+    return [
+        ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
+        price ? `On the video's page, Try again costs ${price}: ${page}` : `The video's page: ${page}`,
+        ...scenes
+            .filter((s) => !s.unfilmed)
+            .map((s) => `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+    ];
+}
+function tryAgainPrice(run, sceneIndexes) {
+    const prices = sceneIndexes.map((n) => {
+        const clip = run.scenes?.find((s) => s.sceneIndex === n)?.clip;
+        return typeof clip?.redoEstimateUsd === "number" && typeof clip.redoEstimateMaxUsd === "number"
+            ? `$${clip.redoEstimateUsd.toFixed(2)} to $${clip.redoEstimateMaxUsd.toFixed(2)}`
+            : null;
+    });
+    if (prices.length === 0 || prices.some((p) => p === null))
+        return "";
+    return prices.length === 1 ? prices[0] : prices.map((p, i) => `${p} for scene ${sceneIndexes[i]}`).join(", ");
+}
+function heldSceneChoiceLines(run, scenes, page) {
     const takes = scenes.filter((s) => s.take);
     const unfilmed = scenes.filter((s) => s.unfilmed);
     const faults = scenes.filter((s) => !s.take && !s.unfilmed);
+    const inParens = (price) => (price ? ` (${price})` : "");
+    const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
+    const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
     return [
-        head,
         ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
         ...(unfilmed.length > 0
-            ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first: ${page}`]
+            ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first${unfilmedPrice}: ${page}`]
             : []),
         ...takes.map((s) => takes.length === 1
             ? `Keep it as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`
             : `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
         ...(faults.length > 0
             ? [
-                `${faults.length === 1 ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+                `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again, or keep it as it is, on the video's page. Try again shows the price first${faultPrice}: ${page}`,
                 ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
             ]
             : []),
@@ -176,12 +214,12 @@ export function customerStageLines(run, page) {
         ];
     switch (run.stage) {
         case "waiting":
-            return [waitingSentence(run.waiting)];
+            return [waitingSentence(run.waiting), ...waitingSceneLines(run, page)];
         case "planning":
         case "drawing":
         case "filming":
         case "editing":
-            return [WORKING_SENTENCE[run.stage]];
+            return [WORKING_SENTENCE[run.stage], ...waitingSceneLines(run, page)];
         case "picking":
             return ["This video is waiting for its picks: a face, a voice and a room for each part. The team makes them for now."];
         case "pilot":
@@ -217,7 +255,10 @@ export function customerStageLines(run, page) {
                 ...(run.awaitingSignOff
                     ? [
                         `Your video is ready to watch: ${run.video?.url ?? page}`,
-                        `When you're happy with it, finish it:  exodus video approve ${id}`,
+                        ...waitingSceneLines(run, page),
+                        waitingSceneLines(run, page).length > 0
+                            ? `Once each one is answered and you're happy with the video, finish it:  exodus video approve ${id}`
+                            : `When you're happy with it, finish it:  exodus video approve ${id}`,
                     ]
                     : [`Your video is ready: ${run.video?.url ?? page}`]),
                 ...speechSummaryLines(run.video?.speech),
@@ -225,7 +266,7 @@ export function customerStageLines(run, page) {
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),
-                ...(run.awaitingSignOff ? finalApproveLines(run.template === true) : []),
+                ...(run.awaitingSignOff && waitingSceneLines(run, page).length === 0 ? finalApproveLines(run.template === true) : []),
                 `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
             ];
         case "failed":

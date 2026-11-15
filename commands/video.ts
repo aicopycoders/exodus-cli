@@ -27,6 +27,8 @@ import {
   finalApproveLines,
   finalApprovedLines,
   customerCutHeld,
+  approveWaitingLines,
+  waitingSceneLines,
   customerStageLines,
   customerStatusLines,
   customerStoryboardLines,
@@ -5469,13 +5471,18 @@ export async function waitFlow(
   const maxPolls = opts.maxPolls ?? MAX_POLLS;
   const lines: string[] = [];
   let lastProgress: string | null = null;
+  // #4761: the scenes waiting on the member last said, apart from the stage line so neither repeats the other.
+  let shownWaiting = "";
   let redoSeen = false;
-  const progress = (line: string): void => {
-    if (line === lastProgress) return;
-    lastProgress = line;
+  const say = (line: string): void => {
     if (opts.json) return;
     if (opts.onProgressLine) opts.onProgressLine(line);
     else lines.push(line);
+  };
+  const progress = (line: string): void => {
+    if (line === lastProgress) return;
+    lastProgress = line;
+    say(line);
   };
 
   let misses = 0;
@@ -5506,15 +5513,25 @@ export async function waitFlow(
       // Landing review: the stop at the estimate keeps the run's working stage ("filming"), so it is asked first, or a
       // wait would read on for its hour while the run waits for the member's answer.
       if (customer.spendAsk) {
+        // #4761: a scene already waiting on the member is said beside the question, as status says it.
+        // Not again when this wait already said the same list while the scenes filmed.
+        const listed = customerCutHeld(customer) ? customerStageLines(customer, page) : waitingSceneLines(customer, page);
+        const waiting = !customerCutHeld(customer) && listed.join("\n") === shownWaiting ? [] : listed;
         return {
           code: 0,
           lines: opts.json
             ? [JSON.stringify(customer)]
-            : [...lines, ...spendAskLines(customer, runId), `Watch it on the dashboard: ${page}`],
+            : [...lines, ...waiting, ...spendAskLines(customer, runId), `Watch it on the dashboard: ${page}`],
         };
       }
       if (customerStageIsWorking(customer.stage) && !customer.templateApproval?.audition) {
         progress(customerStageLines(customer, page)[0]);
+        // #4761: a scene waiting on the member while others film is said once, and again when the list changes.
+        const waiting = waitingSceneLines(customer, page);
+        if (waiting.join("\n") !== shownWaiting) {
+          shownWaiting = waiting.join("\n");
+          waiting.forEach(say);
+        }
         continue;
       }
       return {
@@ -6395,6 +6412,24 @@ export async function quoteFlow(runId: string, json: boolean, deps: VideoDeps, p
  * customer tier (`awaitingSignOff`), else the final watch `status` names; with whether the run is from a template.
  * A read that fails, throws or answers something else is null, so the approve itself never waits on it.
  */
+/**
+ * #4761: under a refused approve on a beta tester's video, the scenes the video waits on, each with its finding and how
+ * to answer it, read from the server's own list on the run (the held cut's, or the scenes waiting on the member). The
+ * refusal names them; this adds what the page shows beside them. Empty on any other run, or when the read fails.
+ */
+/** The server's refusal of a finish while the cut is really being made (convex videoRunView.ts FINISH_NO_CUT). */
+const FINISH_STILL_CUTTING = "Your video is still being put together. You can finish it once it's ready.";
+
+async function waitingLinesAfterRefusal(runId: string, deps: VideoDeps): Promise<string[]> {
+  try {
+    const read = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
+    const customer = read?.ok ? customerAnswer<CustomerRun>(read.data) : null;
+    return customer ? approveWaitingLines(customer, customerRunPage(deps.dashboardUrl, runId)) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function waitsForFinalApprove(runId: string, deps: VideoDeps): Promise<{ template: boolean } | null> {
   try {
     const read = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
@@ -6449,6 +6484,10 @@ export async function approveFlow(
     if (!opts.json && videoApiError(res).includes("accept the findings")) {
       return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId} --accept-findings`] };
     }
+    // An older server's "still being put together" names no scene; a list under it would contradict it.
+    const waiting =
+      opts.json || staleCut || videoApiError(res) === FINISH_STILL_CUTTING ? [] : await waitingLinesAfterRefusal(runId, deps);
+    if (waiting.length > 0) return { ...refusal, lines: [...refusal.lines, ...waiting] };
     return staleCut
       ? {
           ...refusal,
@@ -7330,9 +7369,11 @@ export async function retryClipFlow(
   const runRes = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
   if (!runRes.ok) return errorResult(runRes, json);
   if (customerAnswer<CustomerRun>(runRes.data)) {
+    // #4761: a member makes a scene's clip again with Try again on the video's page, which shows its price first.
     return adminOnlyResult(
-      "Redoing a finished clip is for admins. To redo a scene's picture while your storyboard " +
-        `waits for you: exodus video retry-frame ${runId} --scene <n>`,
+      "Redoing a finished clip from here is for admins. To redo a scene's picture while your storyboard waits for " +
+        `you, run exodus video retry-frame ${runId} --scene <n>. Where the video's page offers Try again on a scene, ` +
+        `it films that clip again and shows the price first: ${customerRunPage(deps.dashboardUrl, runId)}`,
       json,
     );
   }
@@ -7568,7 +7609,7 @@ export async function spendAnswerFlow(runId: string, answer: "go" | "stop", json
         ? typeof clearedToUsd === "number"
           ? `Keeping going. It will ask again before it spends past $${clearedToUsd.toFixed(2)}.`
           : "Keeping going."
-        : "Stopped at the estimate. Nothing more will be filmed. Every scene with a clip is kept.",
+        : "Stopped at the estimate. The app films nothing more on its own. Every scene with a clip is kept.",
       `See where it stands: exodus video status ${runId}`,
     ],
   };
@@ -8184,6 +8225,8 @@ async function customerPullFlow(
       `Every piece is listed in ${manifestPath}.`,
       ...replacedVideoLines(dir, manifest.video, videoBefore, deps),
       ...(manifest.video ? [] : ["The finished video isn't ready yet, so only the scene pieces came down."]),
+      // #4761: a video waiting on the member says so, and where each scene's finding is.
+      ...customerWaitingNote(run),
       ...(failures.length > 0
         ? [
             "",
@@ -8197,6 +8240,15 @@ async function customerPullFlow(
       ...(customerDelivered(run) ? ["", deliveredLine(dir, manifest.video)] : []),
     ],
   };
+}
+
+/** #4761: under a pull, the scenes the video waits on the member for (the server's list), and where to read why. */
+function customerWaitingNote(run: CustomerRun): string[] {
+  const scenes = run.cutHeldScenes?.length ? run.cutHeldScenes : run.waitingScenes;
+  if (!scenes?.length) return [];
+  const names = scenes.map((s) => `scene ${s.sceneIndex}`);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+  return [`Your video waits on you for ${list} first. What each needs: exodus video status ${run.runId}`];
 }
 
 /** COP-312: the video is delivered: "ready" (finished, or finishing after its sign-off) and not waiting for one. */

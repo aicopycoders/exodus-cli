@@ -51,8 +51,12 @@ export interface CustomerRunScene {
   imageUrl: string | null;
   frameStatus: "pending" | "drawing" | "ready" | "failed";
   productNote?: string;
-  clip?: { speech?: SpeechSummary } | null;
+  /** #4761: `redoEstimateUsd` to `redoEstimateMaxUsd` is the price the video's page shows on its Try again. */
+  clip?: { speech?: SpeechSummary; redoEstimateUsd?: number; redoEstimateMaxUsd?: number } | null;
 }
+
+/** COP-277, #4733: one scene the cut waits on, in the server's sentence. */
+export type CustomerHeldScene = { sceneIndex: number; sentence: string; take: boolean; unfilmed?: true };
 
 export type CustomerStopReason =
   | { kind: "out-of-credits" }
@@ -98,7 +102,12 @@ export interface CustomerRun {
    * with `exodus video keep`, never made again on its own). Absent from older servers.
    */
   /** #4733: `unfilmed`, a scene the member's stop at the estimate left with no clip. Absent from older servers. */
-  cutHeldScenes?: Array<{ sceneIndex: number; sentence: string; take: boolean; unfilmed?: true }>;
+  cutHeldScenes?: CustomerHeldScene[];
+  /**
+   * #4761: the scenes waiting on the member's keep or Try again right now, whatever else the run is doing (another
+   * scene filming, the cut being made again, a cut waiting to be finished). Absent when none is, and from older servers.
+   */
+  waitingScenes?: CustomerHeldScene[];
   /** #4582: what the run has spent (the server's own figure, "so far" while it works) beside its estimate. */
   spend?: { spentUsd: number; estimateUsd: number | null; final: boolean; line: string };
   /** #4582: the video reached its estimate and waits on the member's answer, in the server's sentence. */
@@ -145,7 +154,7 @@ export function spendAskLines(
   return [];
 }
 
-export const SPEND_STOPPED_LINE = "You stopped this video at its estimate. Nothing more will be filmed.";
+export const SPEND_STOPPED_LINE = "You stopped this video at its estimate. The app films nothing more on its own.";
 
 /** #4257: the final cut waits for the customer to keep or remake a scene. */
 export function customerCutHeld(run: CustomerRun): boolean {
@@ -160,16 +169,71 @@ function heldLines(run: CustomerRun, page: string): string[] {
   if (!scenes?.length) {
     return [head, ...holds.map((hold) => `  ${hold}`), `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`];
   }
+  return [head, ...heldSceneChoiceLines(run, scenes, page)];
+}
+
+/**
+ * #4761: the scenes waiting on the member while the run does something else (another scene filming, the cut being
+ * made again) or while its cut waits to be finished: the server's own list (`waitingScenes`). Empty when none is
+ * waiting, and when the held cut's own list already says them (the "failed" stage with `cutHolds`).
+ */
+export function waitingSceneLines(run: CustomerRun, page: string): string[] {
+  const scenes = run.waitingScenes;
+  if (!scenes?.length || customerCutHeld(run)) return [];
+  return [
+    `${scenes.length === 1 ? "This scene needs" : "These scenes need"} you before your video can be finished:`,
+    ...heldSceneChoiceLines(run, scenes, page),
+  ];
+}
+
+/**
+ * #4761: what `exodus video approve` adds under the server's refusal on a video waiting on scenes, from the server's
+ * list (the held cut's, or else `waitingScenes`): each scene's finding, the page's Try again price and the keep
+ * commands. The refusal already says the two ways out, so they are not said again. Empty when none waits.
+ */
+export function approveWaitingLines(run: CustomerRun, page: string): string[] {
+  const scenes = run.cutHeldScenes?.length ? run.cutHeldScenes : run.waitingScenes;
+  if (!scenes?.length) return [];
+  // A One-take take is never made again on its own; a scene with no clip has nothing to keep.
+  const price = tryAgainPrice(run, scenes.filter((s) => !s.take).map((s) => s.sceneIndex));
+  return [
+    ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
+    price ? `On the video's page, Try again costs ${price}: ${page}` : `The video's page: ${page}`,
+    ...scenes
+      .filter((s) => !s.unfilmed)
+      .map((s) => `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+  ];
+}
+
+/**
+ * #4761: the price the video's page shows on Try again for these scenes, from the server's figures (each scene's
+ * `redoEstimateUsd` to `redoEstimateMaxUsd`); empty unless the server sent both for every one.
+ */
+function tryAgainPrice(run: CustomerRun, sceneIndexes: readonly number[]): string {
+  const prices = sceneIndexes.map((n) => {
+    const clip = run.scenes?.find((s) => s.sceneIndex === n)?.clip;
+    return typeof clip?.redoEstimateUsd === "number" && typeof clip.redoEstimateMaxUsd === "number"
+      ? `$${clip.redoEstimateUsd.toFixed(2)} to $${clip.redoEstimateMaxUsd.toFixed(2)}`
+      : null;
+  });
+  if (prices.length === 0 || prices.some((p) => p === null)) return "";
+  return prices.length === 1 ? prices[0]! : prices.map((p, i) => `${p} for scene ${sceneIndexes[i]}`).join(", ");
+}
+
+/** Each held or waiting scene's sentence, then how to answer it: keep it from here, or Try again on the page. */
+function heldSceneChoiceLines(run: CustomerRun, scenes: readonly CustomerHeldScene[], page: string): string[] {
   // COP-277: a One-take take is kept as it is from here; it cannot be made again on its own.
   const takes = scenes.filter((s) => s.take);
   // #4733: a scene with no clip has nothing to keep: it is filmed from the page, which shows its price first.
   const unfilmed = scenes.filter((s) => s.unfilmed);
   const faults = scenes.filter((s) => !s.take && !s.unfilmed);
+  const inParens = (price: string) => (price ? ` (${price})` : "");
+  const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
+  const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
   return [
-    head,
     ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
     ...(unfilmed.length > 0
-      ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first: ${page}`]
+      ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first${unfilmedPrice}: ${page}`]
       : []),
     ...takes.map((s) =>
       takes.length === 1
@@ -178,7 +242,7 @@ function heldLines(run: CustomerRun, page: string): string[] {
     ),
     ...(faults.length > 0
       ? [
-          `${faults.length === 1 ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
+          `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again, or keep it as it is, on the video's page. Try again shows the price first${faultPrice}: ${page}`,
           ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
         ]
       : []),
@@ -404,13 +468,14 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
       : `Approve another paid attempt for failed audition takes only: exodus video approve ${id}. Completed takes are kept; the remaining batch stays held.`,
   ];
   switch (run.stage) {
+    // #4761: a scene already waiting on the member is said whatever else the run is doing.
     case "waiting":
-      return [waitingSentence(run.waiting)];
+      return [waitingSentence(run.waiting), ...waitingSceneLines(run, page)];
     case "planning":
     case "drawing":
     case "filming":
     case "editing":
-      return [WORKING_SENTENCE[run.stage]];
+      return [WORKING_SENTENCE[run.stage], ...waitingSceneLines(run, page)];
     case "picking":
       return ["This video is waiting for its picks: a face, a voice and a room for each part. The team makes them for now."];
     case "pilot":
@@ -447,7 +512,11 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         ...(run.awaitingSignOff
           ? [
               `Your video is ready to watch: ${run.video?.url ?? page}`,
-              `When you're happy with it, finish it:  exodus video approve ${id}`,
+              // #4761: the finish refuses while a scene waits on the member (a flagged clip nobody kept).
+              ...waitingSceneLines(run, page),
+              waitingSceneLines(run, page).length > 0
+                ? `Once each one is answered and you're happy with the video, finish it:  exodus video approve ${id}`
+                : `When you're happy with it, finish it:  exodus video approve ${id}`,
             ]
           : [`Your video is ready: ${run.video?.url ?? page}`]),
         ...speechSummaryLines(run.video?.speech),
@@ -456,7 +525,8 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),
         // COP-344: after the cut's own notes, which a convex test reads right under the finish line.
-        ...(run.awaitingSignOff ? finalApproveLines(run.template === true) : []),
+        // #4761: not while a scene waits on the member, since the finish refuses until each one is answered.
+        ...(run.awaitingSignOff && waitingSceneLines(run, page).length === 0 ? finalApproveLines(run.template === true) : []),
         `Download the pieces for your own cut: exodus video pull ${id} --out ./video-${id}`,
       ];
     case "failed":

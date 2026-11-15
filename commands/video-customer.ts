@@ -108,6 +108,11 @@ export interface CustomerRun {
   spendStopped?: { sentence?: string };
   /** COP-218/COP-337: the run waits at its storyboard; `beforePictures` when a pictures step follows it. */
   planHold?: { atBoard?: boolean; beforePictures: boolean };
+  /**
+   * COP-351: at that stop, the place its board drew, or tried to draw, before it: its name and look, and its picture's
+   * address, null when none came out. Absent when the board drew none, and from older servers.
+   */
+  place?: { name: string; look: string; imageUrl: string | null };
 }
 
 /**
@@ -405,6 +410,17 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         `Watch it here: ${page}`,
       ];
     case "review":
+      // COP-351: the place too, only when the view carries it (the board drew it, or tried to, before the stop).
+      if (noPictureBeforeApproval(run) && run.place) {
+        return [
+          "Your script, place and voice are waiting for your yes. No take is filmed before you approve.",
+          run.place.imageUrl
+            ? `The place:    ${run.place.imageUrl}`
+            : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+          `Read them:    exodus video storyboard ${id}`,
+          `Approve them: exodus video approve ${id}`,
+        ];
+      }
       if (noPictureBeforeApproval(run)) {
         return [
           "Your script and voice are waiting for your yes. No take gets a picture before you approve.",

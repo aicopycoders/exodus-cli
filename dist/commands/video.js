@@ -9,8 +9,8 @@ import { missingRouteLine } from "../lib/route-support.js";
 import { probeDurationSec } from "../lib/preflight.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
-import { ASSET_UPLOAD_POLICY, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
-import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
+import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
+import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
@@ -1036,6 +1036,10 @@ export function resolveStop(stop, cutAttached, items) {
         const hasLine = (n) => (stop.silentScenes?.includes(n) ? false : undefined);
         return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
     }
+    if (stop.at === "storyboard-gate") {
+        const place = stop.noPictureBeforeApproval ? placeAtStop(items, stop.nodeId) : undefined;
+        return place ? { ...stop, place } : stop;
+    }
     if (stop.at !== "final-watch")
         return stop;
     const named = heldTakesOf(stop.heldScenes, items);
@@ -1053,6 +1057,14 @@ export function resolveStop(stop, cutAttached, items) {
         ...(heldTakes.length > 0 ? { heldTakes } : {}),
         ...(items && hasAppCut(items) ? { appCutOnRun: true } : {}),
     };
+}
+function placeAtStop(items, boardNodeId) {
+    const row = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === ONE_TAKE_BOARD_PLACE_LEDGER_INDEX);
+    if (row?.status === "done" && row.artifact?.type === "image" && row.artifact.imageUrl)
+        return { imageUrl: row.artifact.imageUrl };
+    if (row?.status === "failed")
+        return { imageUrl: null };
+    return undefined;
 }
 export function appCutOutdates(run) {
     return run.appCut === "making" && run.moduleKey === "script-video";
@@ -1226,17 +1238,26 @@ export function stopLines(stop, runId, runUrl, videoPage) {
     if (stop.at === "storyboard-gate") {
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
-            ...(stop.noPictureBeforeApproval
+            ...(stop.noPictureBeforeApproval && stop.place
                 ? [
-                    "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+                    "Parked: the script, the place and the voice are waiting for your yes. No take is filmed before you approve.",
+                    stop.place.imageUrl
+                        ? `The place:    ${stop.place.imageUrl}`
+                        : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
                     `Read them:    exodus video storyboard ${runId}`,
                     `Approve them: exodus video approve ${runId}`,
                 ]
-                : [
-                    "Parked: the storyboard is waiting for your yes.",
-                    `Read it:    exodus video storyboard ${runId}`,
-                    `Approve it: exodus video approve ${runId}`,
-                ]),
+                : stop.noPictureBeforeApproval
+                    ? [
+                        "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+                        `Read them:    exodus video storyboard ${runId}`,
+                        `Approve them: exodus video approve ${runId}`,
+                    ]
+                    : [
+                        "Parked: the storyboard is waiting for your yes.",
+                        `Read it:    exodus video storyboard ${runId}`,
+                        `Approve it: exodus video approve ${runId}`,
+                    ]),
         ];
         if (stop.showAd) {
             lines.push(`Send back:  exodus video flag ${runId} --note "what's wrong"`);
@@ -3986,6 +4007,10 @@ export async function waitFlow(runId, opts, deps) {
             continue;
         }
         let items = null;
+        if (stop.at === "storyboard-gate" && stop.noPictureBeforeApproval) {
+            const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`).catch(() => null);
+            items = itemsRes?.ok ? (itemsRes.data.items ?? []) : null;
+        }
         if (stop.at === "pilot") {
             const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);
             items = itemsRes.ok ? (itemsRes.data.items ?? []) : null;
@@ -4171,7 +4196,7 @@ export async function statusFlow(runId, json, deps) {
         headline,
         ...(carryingOn(run) ? [CARRYING_ON_LINE] : []),
         ...guidance,
-        ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead)] : []),
+        ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) })] : []),
         ...planFailureLines(failedStoryboard, runId),
         ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
         ...(run.director ? ["", ...directorLines(run.director)] : []),

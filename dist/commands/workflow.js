@@ -380,7 +380,10 @@ export function formatRulesLine(provenance) {
         : "";
     return `Format rules: ${rigName}${version}${where}.${borrowed}`;
 }
-export function pauseAheadLine(ahead) {
+export function boardDrawsThePlaceFirst(run) {
+    return run.moduleKey === "script-video" && !(run.nodes ?? []).some((n) => n.kind === "scene-frames" && n.status !== "out-of-scope");
+}
+export function pauseAheadLine(ahead, opts = {}) {
     if (ahead.after === "picks") {
         return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
     }
@@ -389,6 +392,9 @@ export function pauseAheadLine(ahead) {
     }
     if (ahead.after === "frames" && ahead.selfApproves) {
         return "When the frames are ready, the app checks the storyboard and approves it itself if the checks pass, then goes on to the voices and clips. It only stops for your approval if a check finds a problem. The reference, cast and scene pictures are made first (a few cents each).";
+    }
+    if (ahead.after === "storyboard" && opts.placeFirst) {
+        return "This run will pause for your approval once the takes are written and one picture of the place is drawn (a few cents). No take is filmed until you approve.";
     }
     return ahead.after === "frames"
         ? "This run will pause for your approval once the frames are ready. The reference, cast and scene pictures are made first (a few cents each). Nothing bigger is spent until you approve."
@@ -1268,7 +1274,7 @@ export function formatWorkflowRun(run) {
     }
     if (run.pauseAhead) {
         lines.push("");
-        lines.push(pauseAheadLine(run.pauseAhead));
+        lines.push(pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) }));
     }
     const parkedNodeId = gateParkedNodeId(run.status, run.pauseReason, run.pausedNodeId);
     if (run.nodes.length > 0) {

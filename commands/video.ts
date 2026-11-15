@@ -12,12 +12,13 @@ import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
 import {
   ASSET_UPLOAD_POLICY,
+  boardDrawsThePlaceFirst,
   pauseAheadLine,
   parseVoicesFlag,
   type RunProvenance,
   type WorkflowRun,
 } from "./workflow.js";
-import { HELPER_LEDGER_BASE, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
+import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import {
   customerAnswer,
@@ -1367,6 +1368,12 @@ export type RunStop =
        * drawn before this approval: what waits for the yes is the script and the voice. Read off the run's steps.
        */
       noPictureBeforeApproval?: true;
+      /**
+       * COP-351: on such a stop, the picture of the place its board drew before it, read by resolveStop off the board's
+       * row: its address, or null when it didn't come out. Absent when the board drew none (a run from before) or the
+       * rows were not read.
+       */
+      place?: { imageUrl: string | null };
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -1756,6 +1763,11 @@ export function resolveStop(
     const hasLine = (n: number) => (stop.silentScenes?.includes(n) ? false : undefined);
     return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
   }
+  // COP-351: the picture of the place a One-take board drew before its stop, off the board's own row.
+  if (stop.at === "storyboard-gate") {
+    const place = stop.noPictureBeforeApproval ? placeAtStop(items, stop.nodeId) : undefined;
+    return place ? { ...stop, place } : stop;
+  }
   if (stop.at !== "final-watch") return stop;
   const named = heldTakesOf(stop.heldScenes, items);
   const fromRows = cutAttached === false
@@ -1772,6 +1784,18 @@ export function resolveStop(
     ...(heldTakes.length > 0 ? { heldTakes } : {}),
     ...(items && hasAppCut(items) ? { appCutOnRun: true as const } : {}),
   };
+}
+
+/**
+ * COP-351: the picture of the place on the board's own row (the worker's ONE_TAKE_BOARD_PLACE_LEDGER_INDEX on the
+ * parked storyboard step): its address when it was drawn, null when it didn't come out, undefined when the board has no
+ * such row (it drew none: a run from before) or the rows were not read.
+ */
+function placeAtStop(items: readonly NodeItem[] | null | undefined, boardNodeId: string | undefined): { imageUrl: string | null } | undefined {
+  const row = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === ONE_TAKE_BOARD_PLACE_LEDGER_INDEX);
+  if (row?.status === "done" && row.artifact?.type === "image" && row.artifact.imageUrl) return { imageUrl: row.artifact.imageUrl };
+  if (row?.status === "failed") return { imageUrl: null };
+  return undefined;
 }
 
 /**
@@ -2040,8 +2064,18 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     const lines = [
       ...(stop.heldReason ? [stop.heldReason] : []),
       // COP-337: the CLI cannot tell whether a person was picked on the sheet (the run read does not say), so it names
-      // the script and the voice; the run page shows the picked person.
-      ...(stop.noPictureBeforeApproval
+      // the script and the voice; the run page shows the picked person. COP-351: and the place, with the picture its board
+      // drew before the stop, read off the board's row; a run from before reads as COP-337 left it.
+      ...(stop.noPictureBeforeApproval && stop.place
+        ? [
+            "Parked: the script, the place and the voice are waiting for your yes. No take is filmed before you approve.",
+            stop.place.imageUrl
+              ? `The place:    ${stop.place.imageUrl}`
+              : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+            `Read them:    exodus video storyboard ${runId}`,
+            `Approve them: exodus video approve ${runId}`,
+          ]
+        : stop.noPictureBeforeApproval
         ? [
             "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
             `Read them:    exodus video storyboard ${runId}`,
@@ -5467,6 +5501,11 @@ export async function waitFlow(
       continue;
     }
     let items: NodeItem[] | null = null;
+    // COP-351: the picture of the place a One-take board drew before its stop is on the board's row.
+    if (stop.at === "storyboard-gate" && stop.noPictureBeforeApproval) {
+      const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`).catch(() => null);
+      items = itemsRes?.ok ? ((itemsRes.data as { items?: NodeItem[] }).items ?? []) : null;
+    }
     // Stop 4: the pilot's word check is on its scene row.
     if (stop.at === "pilot") {
       const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);
@@ -5755,7 +5794,7 @@ export async function statusFlow(
     ...guidance,
     // #1883: "Working" alone reads like a run going straight through, and a
     // healthy gated run was cancelled over exactly that.
-    ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead)] : []),
+    ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) })] : []),
     ...planFailureLines(failedStoryboard, runId),
     ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
     ...(run.director ? ["", ...directorLines(run.director)] : []),

@@ -1620,9 +1620,12 @@ async function startNeedsYes(swipeId, step, json, again, choice, deps) {
     const { buys, paidBy } = PAID[step];
     if (json)
         return { code: 0, lines: [JSON.stringify({ ok: false, needsYes: true, buys, paidBy, price })] };
+    const before = price.picked.lines.filter((line) => line.beforeStop === true);
     const when = step === "start-one-shot"
         ? "paid from the start: the whole video is made with no stop"
-        : "paid once the storyboard is approved: the run stops there first";
+        : before.length > 0
+            ? `paid once the storyboard is approved, but for ${before.map((line) => `${line.what.charAt(0).toLowerCase()}${line.what.slice(1)} (${lineUsd(line.usd)})`).join(" and ")}, made before the run stops there`
+            : "paid once the storyboard is approved: the run stops there first";
     return {
         code: 0,
         lines: [
@@ -1946,7 +1949,7 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
             "",
             ask.oneShot
                 ? "The app approves the storyboard itself if its checks pass. It only stops for you if they find a problem."
-                : "It stops at the storyboard for the member's yes. Nothing else is bought before then.",
+                : "It stops at the storyboard for the member's yes. The voices and clips are bought only after that yes.",
             `Check in whenever: exodus video status ${runId}`,
         ],
     };

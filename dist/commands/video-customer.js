@@ -183,6 +183,16 @@ export function customerStageLines(run, page) {
                 `Watch it here: ${page}`,
             ];
         case "review":
+            if (noPictureBeforeApproval(run) && run.place) {
+                return [
+                    "Your script, place and voice are waiting for your yes. No take is filmed before you approve.",
+                    run.place.imageUrl
+                        ? `The place:    ${run.place.imageUrl}`
+                        : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+                    `Read them:    exodus video storyboard ${id}`,
+                    `Approve them: exodus video approve ${id}`,
+                ];
+            }
             if (noPictureBeforeApproval(run)) {
                 return [
                     "Your script and voice are waiting for your yes. No take gets a picture before you approve.",

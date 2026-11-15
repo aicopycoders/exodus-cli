@@ -463,7 +463,16 @@ export interface WorkflowRun {
         selfApproves?: true;
     };
 }
-export declare function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>): string;
+export declare function boardDrawsThePlaceFirst(run: {
+    moduleKey?: string;
+    nodes?: ReadonlyArray<{
+        kind: string;
+        status?: string;
+    }>;
+}): boolean;
+export declare function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, opts?: {
+    placeFirst?: boolean;
+}): string;
 export type WorkflowRunProjection = Omit<WorkflowRun, "nodes"> & {
     nodes?: never;
 };

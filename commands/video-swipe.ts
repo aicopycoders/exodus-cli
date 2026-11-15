@@ -251,7 +251,8 @@ export type SwipePriceRow =
       filmedTakes: number;
       costUsd: number;
       maxUsd: number;
-      lines: Array<{ what: string; usd: number }>;
+      /** COP-351: `beforeStop`, a line bought before the run stops at its storyboard (convex paradigmLaunch.ts). */
+      lines: Array<{ what: string; usd: number; beforeStop?: true }>;
       /** The start would refuse this one, in its own sentence (a video tester's daily cap). */
       startRefusal?: string;
     }
@@ -2320,9 +2321,13 @@ async function startNeedsYes(
   if (!price?.priced) return needsYesResult(step, json, choice);
   const { buys, paidBy } = PAID[step];
   if (json) return { code: 0, lines: [JSON.stringify({ ok: false, needsYes: true, buys, paidBy, price })] };
+  // COP-351: what the run buys before it stops there (One-take's picture of the place), named with its price.
+  const before = price.picked.lines.filter((line) => line.beforeStop === true);
   const when = step === "start-one-shot"
     ? "paid from the start: the whole video is made with no stop"
-    : "paid once the storyboard is approved: the run stops there first";
+    : before.length > 0
+      ? `paid once the storyboard is approved, but for ${before.map((line) => `${line.what.charAt(0).toLowerCase()}${line.what.slice(1)} (${lineUsd(line.usd)})`).join(" and ")}, made before the run stops there`
+      : "paid once the storyboard is approved: the run stops there first";
   return {
     code: 0,
     lines: [
@@ -2767,7 +2772,9 @@ export async function swipeStartFlow(
       "",
       ask.oneShot
         ? "The app approves the storyboard itself if its checks pass. It only stops for you if they find a problem."
-        : "It stops at the storyboard for the member's yes. Nothing else is bought before then.",
+        // COP-351 review: true for every kind. What a run buys before the stop differs by kind (a kind that draws frames
+        // draws them; One-take draws one picture of the place), and the start's text without --yes names it.
+        : "It stops at the storyboard for the member's yes. The voices and clips are bought only after that yes.",
       `Check in whenever: exodus video status ${runId}`,
     ],
   };

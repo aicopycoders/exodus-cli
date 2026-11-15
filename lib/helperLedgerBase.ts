@@ -5,9 +5,13 @@
 // owns a sub-range so its rows can't collide with another producer's:
 //   [900000, 910000)  guest establishing renders (#809) + product cards (#808)
 //     909000, 909001  the Reference node's set plate and product sheet (#2627)
+//     909100          the one-take storyboard node's picture of the place, drawn before its stop (COP-351)
 //   [910000, 920000)  cast identity stills (cast-anchor.ts CAST_LEDGER_BASE)
 //   [920000, 960000)  set gate room options (#2202)
 //   [960000, …)       cast gate option renders (#2202)
 export const HELPER_LEDGER_BASE = 900000;
 export const SET_OPTION_LEDGER_BASE = 920000;
 export const CAST_OPTION_LEDGER_BASE = 960000;
+
+/** COP-351: the row on a One-take run's storyboard node of the picture of the place, drawn before the run stops there. */
+export const ONE_TAKE_BOARD_PLACE_LEDGER_INDEX = HELPER_LEDGER_BASE + 9100;

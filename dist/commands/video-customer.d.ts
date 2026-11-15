@@ -106,6 +106,11 @@ export interface CustomerRun {
         atBoard?: boolean;
         beforePictures: boolean;
     };
+    place?: {
+        name: string;
+        look: string;
+        imageUrl: string | null;
+    };
 }
 export declare function spendAskLines(run: {
     spendAsk?: {

@@ -288,6 +288,7 @@ export function finishingOf(manifest) {
     ...(f.pacePass === true ? { pacePass: true } : {}),
     ...(f.pacePass === true && paceSpeedOk(f.paceSpeed) ? { paceSpeed: f.paceSpeed } : {}),
     ...(f.captionCheck === true ? { captionCheck: true } : {}),
+    ...(f.keepPauses === true ? { keepPauses: true } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -956,8 +957,12 @@ export function asksPause(line) {
  * script words, inside a sentence too, keeps jump.keepAfter after the earlier
  * word and jump.keepBefore before the later one instead (jumpCutSpan), on
  * whole frames. The pauses kept above stay kept.
+ *
+ * gapMax (COP-350, keepPauses): the longest silence between two sentences that
+ * is kept whole, SENTENCE_GAP_MAX_SEC unless given. Infinity shortens no pause,
+ * and only a sound in a break is cut.
  */
-export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jump = null) {
+export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jump = null, gapMax = SENTENCE_GAP_MAX_SEC) {
   const written = [];
   const pieces = [];
   let between = "";
@@ -999,11 +1004,11 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
     const sound = heard && { s: Math.max(floorFrame(heard.s), ceilFrame(earlier.e)), e: ceilFrame(heard.e) };
     const removed = sound ? sound.e - sound.s : 0;
     const spans = sound ? [sound] : [];
-    const [gapMax, gapKeep] =
-      lineGap && newLine ? [lineGap.max, lineGap.keep] : [SENTENCE_GAP_MAX_SEC, SENTENCE_GAP_KEEP_SEC];
+    const [breakMax, gapKeep] =
+      lineGap && newLine ? [lineGap.max, lineGap.keep] : [gapMax, SENTENCE_GAP_KEEP_SEC];
     // jumpCut: a pause over its longest keeps its two edges, with a sound in it taken out whole.
     const jumped = Boolean(jump) && gap - removed > jump.maxGap + 1e-6;
-    const paused = jumped || (sentenceBreak && gap - removed > gapMax + 1e-6);
+    const paused = jumped || (sentenceBreak && gap - removed > breakMax + 1e-6);
     if (paused) {
       // Placed on the gap with the sound already out, then moved back past it.
       // Frame edges only ever widen what is kept, so the silence left stays
@@ -1107,7 +1112,7 @@ function clipLevels(file, filter = null) {
 /** Decoded final-mix levels; callers must not attribute an event to these whole-mix windows. */
 export const measureCutAudio = (file) => clipLevels(file);
 
-function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap = null, jump = null, templateBoard = null, editingTreatment = null, notes = []) {
+function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap = null, jump = null, templateBoard = null, editingTreatment = null, notes = [], gapMax = SENTENCE_GAP_MAX_SEC) {
   for (const seg of spine) {
     if (seg.source !== "clip" || seg.audio !== "clip" || !seg.words?.length || seg.fixedLength) continue;
     const lines = seg.lineIds.map((id) => ({
@@ -1129,7 +1134,7 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
     }) : null;
     const sentenceCuts = templateBoard
       ? edit && lineGap ? sentenceGapCuts(seg.words, lines, null, lineGap) : []
-      : sentenceGapCuts(seg.words, lines, readLevels(seg.file), lineGap, jump);
+      : sentenceGapCuts(seg.words, lines, readLevels(seg.file), lineGap, jump, gapMax);
     const jumpCuts = (edit?.cuts ?? []).map((gap) => ({
       s: gap.startSec, e: gap.endSec, after: "speech", gap: gap.endSec - gap.startSec, kept: 0,
       atLine: sentenceCuts.find((cut) => cut.s < gap.endSec && cut.e > gap.startSec)?.atLine,
@@ -3285,8 +3290,14 @@ function assembleTimeline({
   const lineGap = pace ? { max: PACE_SPLIT_PAUSE_SEC, keep: PACE_GAP_MAX_SEC } : null;
   // jumpCut stays off a template launch's cut, whose selected clocks and windows hold their real time.
   const jump = finish?.jumpCut && manifest?.templateMotion?.enabled !== true ? JUMP_CUT : null;
-  tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap, jump, template ? storyboard : null,
-    template ? manifest.templateMotion.editingTreatment : null, notes);
+  // keepPauses (COP-350, a run's saved sheet): no pause inside a talking clip is shortened, neither a long sentence gap
+  // nor jumpCut's (no gap limit, no jump, no split); a sound in a break that is no heard word is still cut (#2554). A
+  // template launch's own speech edit runs as before.
+  const keepPauses = finish?.keepPauses === true && !template;
+  if (keepPauses) notes.push("keepPauses: no pause inside a clip is shortened; a sound in one that is no heard word is still cut");
+  tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, keepPauses ? null : lineGap, keepPauses ? null : jump,
+    template ? storyboard : null, template ? manifest.templateMotion.editingTreatment : null, notes,
+    keepPauses ? Infinity : SENTENCE_GAP_MAX_SEC);
   trimJoins(spine, reactionCues, scriptLines, pace ? PACE_GAP_MAX_SEC : null, finish?.talkTrim === true);
   if (pace) {
     // The pieces of one take alternate between the plain frame and the

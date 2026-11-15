@@ -284,6 +284,7 @@ export type SwipePriceRow = {
     lines: Array<{
         what: string;
         usd: number;
+        beforeStop?: true;
     }>;
     startRefusal?: string;
 } | {

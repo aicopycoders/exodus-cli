@@ -349,6 +349,9 @@ export type RunStop = {
     heldReason?: string;
     blockingMap?: true;
     noPictureBeforeApproval?: true;
+    place?: {
+        imageUrl: string | null;
+    };
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];

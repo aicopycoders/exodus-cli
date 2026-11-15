@@ -1340,8 +1340,20 @@ export interface WorkflowRun {
   pauseAhead?: { nodeId: string; after: "frames" | "storyboard" | "picks" | "pilot"; selfApproves?: true };
 }
 
-/** #1883: the one sentence both status commands say about a coming pause. */
-export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>): string {
+/**
+ * COP-351: a Video-page run (its workflow is the Video page's module) with no pictures step to run (a One-take run's,
+ * read off its steps, never its kind's name): its board draws one picture of the place before the run stops there, and
+ * no take is filmed before the yes.
+ */
+export function boardDrawsThePlaceFirst(run: { moduleKey?: string; nodes?: ReadonlyArray<{ kind: string; status?: string }> }): boolean {
+  return run.moduleKey === "script-video" && !(run.nodes ?? []).some((n) => n.kind === "scene-frames" && n.status !== "out-of-scope");
+}
+
+/**
+ * #1883: the one sentence both status commands say about a coming pause. COP-351: `placeFirst`, a run whose board draws
+ * the picture of the place before it stops (boardDrawsThePlaceFirst), says so at its text gate.
+ */
+export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, opts: { placeFirst?: boolean } = {}): string {
   // Stop 2: the picks stop comes before the storyboard.
   if (ahead.after === "picks") {
     return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
@@ -1352,6 +1364,9 @@ export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>): s
   }
   if (ahead.after === "frames" && ahead.selfApproves) {
     return "When the frames are ready, the app checks the storyboard and approves it itself if the checks pass, then goes on to the voices and clips. It only stops for your approval if a check finds a problem. The reference, cast and scene pictures are made first (a few cents each).";
+  }
+  if (ahead.after === "storyboard" && opts.placeFirst) {
+    return "This run will pause for your approval once the takes are written and one picture of the place is drawn (a few cents). No take is filmed until you approve.";
   }
   return ahead.after === "frames"
     ? "This run will pause for your approval once the frames are ready. The reference, cast and scene pictures are made first (a few cents each). Nothing bigger is spent until you approve."
@@ -2917,7 +2932,7 @@ export function formatWorkflowRun(run: WorkflowRun): string {
     // Its own paragraph: it is a sentence, and the header above it is a column
     // of `key: value` lines a reader skims rather than reads.
     lines.push("");
-    lines.push(pauseAheadLine(run.pauseAhead));
+    lines.push(pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) }));
   }
 
   // #923/#929: while the run is parked at a REVIEW stop (a checkpoint, or a

@@ -5310,12 +5310,13 @@ export function readMotion(stdout) {
   const rows = [];
   let t = null;
   for (const line of String(stdout ?? "").split("\n")) {
-    const time = line.match(/pts_time:([\d.]+)/);
+    // COP-361: ffmpeg prints a tiny number with %g ("6.94444e-05"); the exponent and a sign are part of the number.
+    const time = line.match(/pts_time:([-+]?[\d.]+(?:e[-+]?\d+)?)/i);
     if (time) {
       t = Number(time[1]);
       continue;
     }
-    const y = line.match(/YAVG=([\d.]+)/);
+    const y = line.match(/YAVG=([-+]?[\d.]+(?:e[-+]?\d+)?)/i);
     if (y && t !== null) rows.push({ t, y: Number(y[1]) });
   }
   return rows;

@@ -209,7 +209,7 @@ Usage:
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--yes --max-usd <n>] [--wait] [--json]
     Template starts also accept: [--requested-seconds <seconds>] [--pictures-per-scene <1|3>] [--product <brandProductId>] [--elements <json|@file>] [--voices <json|@file>] [--resume-script <saved-stop-response.json>]
     With --describe: [--product-context <text>] [--audience <text>] [--offer <text>] [--mechanism <text>]
   exodus video start --input-options [--conceit <template>] [--voice <native|voice-first>] [--voice-path <path>] [--video-model <id>] [--json]
@@ -479,8 +479,10 @@ one.
                        broken down before costs nothing. swipe find lists
                        the library's video ads and their ids
   --yes                The member said yes to this paid step (swipe, swipe
-                       template, swipe write, swipe start), or to every paid
-                       step of the sheet (swipe run)
+                       template, swipe write, swipe start, and a beta tester's
+                       start: without it the start says the price and starts
+                       nothing; with it, --max-usd <the price it said>), or to
+                       every paid step of the sheet (swipe run)
   --product <id>       The product the swipe is for (swipe write). exodus
                        video swipe products lists them
   --mode <mode>        What to swipe (swipe write). whole-ad if left off:
@@ -1003,6 +1005,7 @@ export function heldTakesOf(scenes, items) {
         return said !== null ? [{ sceneIndex, sentence: said }] : [];
     });
 }
+const FAULT_AFTER_REDO_CODE = "fault-after-redo";
 function latestClipRow(items, sceneIndex) {
     return items
         .filter((i) => i.itemKind === "clip" && i.sceneIndex === sceneIndex)
@@ -1050,11 +1053,18 @@ export function resolveStop(stop, cutAttached, items) {
     const heldScenes = fromRows.length > 0
         ? [...(stop.heldScenes ?? []), ...fromRows.map((t) => t.sceneIndex)].sort((a, b) => a - b)
         : stop.heldScenes;
+    const redoFaultScenes = items && heldScenes?.length
+        ? heldScenes.filter((scene) => {
+            const row = latestClipRow(items, scene);
+            return !row || row.findings?.some((f) => f.code === FAULT_AFTER_REDO_CODE) === true;
+        })
+        : undefined;
     return {
         ...stop,
         cutAttached,
         ...(heldScenes?.length ? { heldScenes } : {}),
         ...(heldTakes.length > 0 ? { heldTakes } : {}),
+        ...(redoFaultScenes !== undefined ? { redoFaultScenes } : {}),
         ...(items && hasAppCut(items) ? { appCutOnRun: true } : {}),
     };
 }
@@ -1147,10 +1157,10 @@ function missingSceneLines(missing, framesNodeId, runId, runUrl) {
     lines.push("The ad can't be approved until every scene has a clip.", `Watch it here:   ${runUrl}`);
     return lines;
 }
-function heldSceneLines(scenes, runId, videoPage, heldTakes = []) {
+function heldSceneLines(scenes, runId, videoPage, heldTakes = [], redoFaultScenes) {
     const takes = scenes.filter((scene) => heldTakes.some((t) => t.sceneIndex === scene));
     const faults = scenes.filter((scene) => !takes.includes(scene));
-    return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage) : [])];
+    return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage, redoFaultScenes) : [])];
 }
 function heldTakeLines(takes, heldTakes, runId, videoPage) {
     if (takes.length === 0)
@@ -1166,10 +1176,18 @@ function heldTakeLines(takes, heldTakes, runId, videoPage) {
         `${one ? "Watch it first:  " : "Watch them first:"} ${videoPage}`,
     ];
 }
-function drawingFaultLines(scenes, runId, videoPage) {
+function drawingFaultLines(scenes, runId, videoPage, redoFaultScenes) {
     const one = scenes.length === 1;
+    const redone = redoFaultScenes === undefined ? scenes : scenes.filter((scene) => redoFaultScenes.includes(scene));
+    const checked = scenes.filter((scene) => !redone.includes(scene));
+    const heldWhy = [
+        ...(redone.length > 0
+            ? [`${scenesPhrase(redone)} still ${redone.length === 1 ? "has" : "have"} a drawing fault after ${redone.length === 1 ? "it was" : "they were"} made again`]
+            : []),
+        ...(checked.length > 0 ? [`${scenesPhrase(checked)} failed a check`] : []),
+    ].join(", and ");
     return [
-        `Held: ${scenesPhrase(scenes)} still ${one ? "has" : "have"} a drawing fault after ${one ? "it was" : "they were"} made again, so the final video wasn't made.`,
+        `Held: ${heldWhy}, so the final video wasn't made.`,
         ...scenes.map((scene) => one
             ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
             : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`),
@@ -1274,7 +1292,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
         }
         if (stop.heldScenes?.length)
-            return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes);
+            return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes, stop.redoFaultScenes);
         if (stop.cutFailure) {
             return [
                 "Parked: every piece is made, but the app's cut of them didn't work.",
@@ -2262,6 +2280,12 @@ export function planVideoStart(flags, occurrences) {
     const planFlag = planValueFlag(occurrences, "adaptation-plan");
     if (!planFlag.ok)
         return { kind: "usage", line: planFlag.line };
+    const maxUsdFlag = planValueFlag(occurrences, "max-usd");
+    if (!maxUsdFlag.ok)
+        return { kind: "usage", line: maxUsdFlag.line };
+    if (maxUsdFlag.value !== undefined && !(Number(maxUsdFlag.value) > 0)) {
+        return { kind: "usage", line: "video start --max-usd must be the price the start showed, in dollars (e.g. 15.56)." };
+    }
     const resumeFlag = planTemplateValue(occurrences, "resume-script");
     if (!resumeFlag.ok)
         return { kind: "usage", line: resumeFlag.line };
@@ -2542,6 +2566,10 @@ export function planVideoStart(flags, occurrences) {
         opts.music = musicChoice.music;
     if (!oneShot)
         opts.reviewStoryboard = true;
+    if (occurrences.some((o) => o.flag === "yes"))
+        opts.yes = true;
+    if (maxUsdFlag.value !== undefined)
+        opts.maxUsd = Number(maxUsdFlag.value);
     if (director)
         opts.director = true;
     if (broll)
@@ -3786,6 +3814,8 @@ export async function startScriptFlow(opts, deps) {
         ...(voices.voiceMode !== undefined ? { voiceMode: voices.voiceMode } : {}),
         ...(templateIntent ? (music !== undefined ? { music } : {}) : music === true ? { music: true } : {}),
         ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
+        ...(opts.yes ? { yes: true } : {}),
+        ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
         ...(opts.director ? { director: true } : {}),
         ...(opts.broll ? { broll: true } : {}),
         ...(shots ? { shots } : {}),

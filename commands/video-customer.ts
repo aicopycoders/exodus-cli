@@ -97,7 +97,8 @@ export interface CustomerRun {
    * COP-277: the same held scenes with their numbers, and whether each is a One-take take held for its words (kept
    * with `exodus video keep`, never made again on its own). Absent from older servers.
    */
-  cutHeldScenes?: Array<{ sceneIndex: number; sentence: string; take: boolean }>;
+  /** #4733: `unfilmed`, a scene the member's stop at the estimate left with no clip. Absent from older servers. */
+  cutHeldScenes?: Array<{ sceneIndex: number; sentence: string; take: boolean; unfilmed?: true }>;
   /** #4582: what the run has spent (the server's own figure, "so far" while it works) beside its estimate. */
   spend?: { spentUsd: number; estimateUsd: number | null; final: boolean; line: string };
   /** #4582: the video reached its estimate and waits on the member's answer, in the server's sentence. */
@@ -161,10 +162,15 @@ function heldLines(run: CustomerRun, page: string): string[] {
   }
   // COP-277: a One-take take is kept as it is from here; it cannot be made again on its own.
   const takes = scenes.filter((s) => s.take);
-  const faults = scenes.filter((s) => !s.take);
+  // #4733: a scene with no clip has nothing to keep: it is filmed from the page, which shows its price first.
+  const unfilmed = scenes.filter((s) => s.unfilmed);
+  const faults = scenes.filter((s) => !s.take && !s.unfilmed);
   return [
     head,
     ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
+    ...(unfilmed.length > 0
+      ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first: ${page}`]
+      : []),
     ...takes.map((s) =>
       takes.length === 1
         ? `Keep it as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`
@@ -175,7 +181,10 @@ function heldLines(run: CustomerRun, page: string): string[] {
           `${faults.length === 1 ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`,
           ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
         ]
-      : [`${takes.length === 1 ? "Watch it first:  " : "Watch them first:"} ${page}`]),
+      : []),
+    ...(takes.length > 0 && faults.length === 0 && unfilmed.length === 0
+      ? [`${takes.length === 1 ? "Watch it first:  " : "Watch them first:"} ${page}`]
+      : []),
   ];
 }
 

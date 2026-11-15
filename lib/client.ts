@@ -101,6 +101,9 @@ function buildHeaders(
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    // #4736: what this CLI knows how to do. "price-first": a beta tester's `video start` without --yes gets the price
+    // and nothing starts; --yes sends their yes. The server asks for the yes only from a CLI that says this.
+    "X-Exodus-Cli-Features": "price-first",
   };
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;

@@ -86,6 +86,7 @@ export interface CustomerRun {
         sceneIndex: number;
         sentence: string;
         take: boolean;
+        unfilmed?: true;
     }>;
     spend?: {
         spentUsd: number;

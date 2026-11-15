@@ -358,6 +358,7 @@ export type RunStop = {
     framesNodeId?: string;
     heldScenes?: number[];
     heldTakes?: HeldTake[];
+    redoFaultScenes?: number[];
     cutFailure?: string;
     appMakesCut?: true;
     appCutOnRun?: true;
@@ -570,6 +571,8 @@ export interface StartOptions {
 }
 export interface ScriptStartOptions {
     scriptFile: string;
+    yes?: boolean;
+    maxUsd?: number;
     conceit: string;
     style: string;
     direction?: string;

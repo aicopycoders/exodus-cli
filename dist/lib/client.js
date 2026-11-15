@@ -67,6 +67,7 @@ export function getApiUrl() {
 function buildHeaders(apiKey, ccCommand, opts) {
     const headers = {
         "Content-Type": "application/json",
+        "X-Exodus-Cli-Features": "price-first",
     };
     if (apiKey) {
         headers["Authorization"] = `Bearer ${apiKey}`;

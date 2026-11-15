@@ -1024,6 +1024,14 @@ you may name it as a smaller thing they can choose, never as the whole video.
 The `--max-usd` you start with is the "at most" the price shows, so it is
 never above what is left of the member's limit.
 
+**The price before a beta tester's start.** A beta tester's `exodus video
+start` without `--yes` starts nothing: it prints what the video will cost (the
+server's estimate) and the line that starts it (`--yes --max-usd <that
+price>`). Show the member that line word for word, and run it only after they
+say yes. If the price changed by then, the start refuses and says the new
+price: show that and ask again. An older CLI is told to update first. An
+admin's start begins at once, as before.
+
 **A video that reached its estimate.** A regular video (not One-take) keeps
 the estimate it showed before the start. When its next take would cost more
 than that, it stops before ordering it and waits for the member. `exodus
@@ -1035,8 +1043,12 @@ never yours: show them that line word for word, and run the command they
 pick only after they answer. A money limit they gave you, or a `--max-usd`,
 does not answer it for them. Nothing is paid while it waits, and it waits
 until they answer. Keep going films on and asks again if it passes the next
-whole estimate. Stop here orders nothing more: each scene keeps the clip it
-has, and a scene with none is named; status says what was kept.
+whole estimate; a yes films every scene the line named before any other
+scene spends it. Keeping a named scene as it is takes it off the line, which
+then names the next scene waiting. Stop here orders nothing more: each scene
+keeps the clip it has, and a scene with none is named; status says what was
+kept, and such a scene is filmed with Try again on the video's page, which
+shows its price first.
 
 A write that carried the people's most makes the first people to pick from
 (People, step 3). Offer more people, or voices to pick from, only when the
@@ -1579,7 +1591,7 @@ neither is refused, and nothing is spent. The template flags, as `exodus video
 --help` prints them:
 
 ```operator-guide
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--yes --max-usd <n>] [--wait] [--json]
     Template starts also accept: [--requested-seconds <seconds>] [--pictures-per-scene <1|3>] [--product <brandProductId>] [--elements <json|@file>] [--voices <json|@file>] [--resume-script <saved-stop-response.json>]
     With --describe: [--product-context <text>] [--audience <text>] [--offer <text>] [--mechanism <text>]
   exodus video start --input-options [--conceit <template>] [--voice <native|voice-first>] [--voice-path <path>] [--video-model <id>] [--json]

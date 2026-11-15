@@ -261,7 +261,7 @@ Usage:
   exodus video voices [<runId>] --catalog [--json]
   exodus video pull <runId> --out <dir> [--json]
   exodus video upload <runId> --file <cut.mp4> [--duration <sec>] [--json]
-  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--wait] [--json]
+  exodus video start --script <file> --conceit <kind> --style <look> [--direction "<note>"] [--frame pov] [--pacing <jump-cuts|long-take|montage>] [--voice-path <path>] [--video-model <id>] [--voice <native|voice-first>] [--source-record <file.json>] [--adaptation-plan <file|original>] [--music] [--broll] [--one-shot] [--director] [--yes --max-usd <n>] [--wait] [--json]
     Template starts also accept: [--requested-seconds <seconds>] [--pictures-per-scene <1|3>] [--product <brandProductId>] [--elements <json|@file>] [--voices <json|@file>] [--resume-script <saved-stop-response.json>]
     With --describe: [--product-context <text>] [--audience <text>] [--offer <text>] [--mechanism <text>]
   exodus video start --input-options [--conceit <template>] [--voice <native|voice-first>] [--voice-path <path>] [--video-model <id>] [--json]
@@ -531,8 +531,10 @@ one.
                        broken down before costs nothing. swipe find lists
                        the library's video ads and their ids
   --yes                The member said yes to this paid step (swipe, swipe
-                       template, swipe write, swipe start), or to every paid
-                       step of the sheet (swipe run)
+                       template, swipe write, swipe start, and a beta tester's
+                       start: without it the start says the price and starts
+                       nothing; with it, --max-usd <the price it said>), or to
+                       every paid step of the sheet (swipe run)
   --product <id>       The product the swipe is for (swipe write). exodus
                        video swipe products lists them
   --mode <mode>        What to swipe (swipe write). whole-ad if left off:
@@ -1381,7 +1383,7 @@ export type RunStop =
   // `appCutOnRun`, filled by resolveStop from the rows, says the cut on the run is the app's own. `appOutdatesCut` says
   // the server's "making" also means any cut on the run is not one to keep (a script-video run, see appCutOutdates).
   // `redoingScenes`, filled by status from the rows (scenesBeingRedone), are the scenes being made again before that cut.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[]; fromTemplate?: true }
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; redoFaultScenes?: number[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[]; fromTemplate?: true }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
@@ -1709,6 +1711,9 @@ export function heldTakesOf(scenes: readonly number[] | undefined, items: readon
   });
 }
 
+/** The finding the cut's hold puts on a clip whose drawing fault outlived its one redo (scout artifact-check.ts). */
+const FAULT_AFTER_REDO_CODE = "fault-after-redo";
+
 /** COP-277: a scene's latest clip row (highest attempt), as the server's cutHeldScenesOf reads it. */
 function latestClipRow(items: readonly NodeItem[], sceneIndex: number): NodeItem | undefined {
   return items
@@ -1777,11 +1782,20 @@ export function resolveStop(
   const heldScenes = fromRows.length > 0
     ? [...(stop.heldScenes ?? []), ...fromRows.map((t) => t.sceneIndex)].sort((a, b) => a - b)
     : stop.heldScenes;
+  // #4721: which held scenes still carry the drawing fault their one redo left in; a scene whose clip row says otherwise
+  // is held for the check it failed. A scene with no row read is left as the hold names it.
+  const redoFaultScenes = items && heldScenes?.length
+    ? heldScenes.filter((scene) => {
+      const row = latestClipRow(items, scene);
+      return !row || row.findings?.some((f) => f.code === FAULT_AFTER_REDO_CODE) === true;
+    })
+    : undefined;
   return {
     ...stop,
     cutAttached,
     ...(heldScenes?.length ? { heldScenes } : {}),
     ...(heldTakes.length > 0 ? { heldTakes } : {}),
+    ...(redoFaultScenes !== undefined ? { redoFaultScenes } : {}),
     ...(items && hasAppCut(items) ? { appCutOnRun: true as const } : {}),
   };
 }
@@ -1956,10 +1970,17 @@ function missingSceneLines(
  * COP-277: a One-take take held for its words says its own sentence and is kept with `exodus video keep`; it is
  * never called a drawing fault and never offered `retry-clip`, which its run refuses.
  */
-function heldSceneLines(scenes: number[], runId: string, videoPage: string, heldTakes: HeldTake[] = []): string[] {
+function heldSceneLines(
+  scenes: number[],
+  runId: string,
+  videoPage: string,
+  heldTakes: HeldTake[] = [],
+  /** #4721: the held scenes whose one redo left a drawing fault in. Undefined (the rows were not read): all of them. */
+  redoFaultScenes?: number[],
+): string[] {
   const takes = scenes.filter((scene) => heldTakes.some((t) => t.sceneIndex === scene));
   const faults = scenes.filter((scene) => !takes.includes(scene));
-  return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage) : [])];
+  return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage, redoFaultScenes) : [])];
 }
 
 /** COP-277: the One-take takes held for their words: each one's sentence, its keep, and where to watch it first. */
@@ -1979,10 +2000,19 @@ function heldTakeLines(takes: number[], heldTakes: HeldTake[], runId: string, vi
   ];
 }
 
-function drawingFaultLines(scenes: number[], runId: string, videoPage: string): string[] {
+function drawingFaultLines(scenes: number[], runId: string, videoPage: string, redoFaultScenes?: number[]): string[] {
   const one = scenes.length === 1;
+  // #4721: only a scene whose one redo left its fault in was made again; any other was held for the check it failed.
+  const redone = redoFaultScenes === undefined ? scenes : scenes.filter((scene) => redoFaultScenes.includes(scene));
+  const checked = scenes.filter((scene) => !redone.includes(scene));
+  const heldWhy = [
+    ...(redone.length > 0
+      ? [`${scenesPhrase(redone)} still ${redone.length === 1 ? "has" : "have"} a drawing fault after ${redone.length === 1 ? "it was" : "they were"} made again`]
+      : []),
+    ...(checked.length > 0 ? [`${scenesPhrase(checked)} failed a check`] : []),
+  ].join(", and ");
   return [
-    `Held: ${scenesPhrase(scenes)} still ${one ? "has" : "have"} a drawing fault after ${one ? "it was" : "they were"} made again, so the final video wasn't made.`,
+    `Held: ${heldWhy}, so the final video wasn't made.`,
     ...scenes.map((scene) =>
       one
         ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
@@ -2104,7 +2134,7 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     if (stop.missingScenes?.length) {
       return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
     }
-    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes);
+    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes, stop.redoFaultScenes);
     // #4573: the app's cut was refused and nothing has cut it since, so the run is not waiting on anything. Every attach
     // clears the refusal, so a cut still on the run is older than it: one a redo outdated, not one to approve.
     if (stop.cutFailure) {
@@ -3356,6 +3386,10 @@ export interface StartOptions {
 
 export interface ScriptStartOptions {
   scriptFile: string;
+  /** #4736: the member said yes to the price a start without it told them (a beta tester's start waits for it). */
+  yes?: boolean;
+  /** #4736: the price they said yes to (--max-usd): the server refuses a start whose estimate came out higher. */
+  maxUsd?: number;
   conceit: string;
   style: string;
   direction?: string;
@@ -3608,6 +3642,12 @@ export function planVideoStart(
   if (!recordFlag.ok) return { kind: "usage", line: recordFlag.line };
   const planFlag = planValueFlag(occurrences, "adaptation-plan");
   if (!planFlag.ok) return { kind: "usage", line: planFlag.line };
+  // #4736: the price a beta tester's start said, carried back with --yes.
+  const maxUsdFlag = planValueFlag(occurrences, "max-usd");
+  if (!maxUsdFlag.ok) return { kind: "usage", line: maxUsdFlag.line };
+  if (maxUsdFlag.value !== undefined && !(Number(maxUsdFlag.value) > 0)) {
+    return { kind: "usage", line: "video start --max-usd must be the price the start showed, in dollars (e.g. 15.56)." };
+  }
   const resumeFlag = planTemplateValue(occurrences, "resume-script");
   if (!resumeFlag.ok) return { kind: "usage", line: resumeFlag.line };
   if (showId && resumeFlag.value !== undefined) {
@@ -3870,6 +3910,8 @@ export function planVideoStart(
   if (voiceMode && isVoiceMode(voiceMode)) opts.voiceMode = voiceMode;
   if (musicChoice.music !== undefined) opts.music = musicChoice.music;
   if (!oneShot) opts.reviewStoryboard = true;
+  if (occurrences.some((o) => o.flag === "yes")) opts.yes = true;
+  if (maxUsdFlag.value !== undefined) opts.maxUsd = Number(maxUsdFlag.value);
   if (director) opts.director = true;
   if (broll) opts.broll = true;
   if (stopAtScript) opts.stopAtScript = true;
@@ -5235,6 +5277,8 @@ export async function startScriptFlow(
     // and "nobody said" are the same request. Only "on" has anything to send.
     ...(templateIntent ? (music !== undefined ? { music } : {}) : music === true ? { music: true } : {}),
     ...(opts.reviewStoryboard ? { reviewStoryboard: true } : {}),
+    ...(opts.yes ? { yes: true } : {}),
+    ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
     ...(opts.director ? { director: true } : {}),
     ...(opts.broll ? { broll: true } : {}),
     ...(shots ? { shots } : {}),

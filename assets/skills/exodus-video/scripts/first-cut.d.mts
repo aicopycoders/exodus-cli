@@ -114,6 +114,8 @@ export function endCardLayersOf(
 
 /** #4585: the seconds between the last heard word's end and the end card. */
 export const END_CARD_AFTER_VOICE_SEC: number;
+/** COP-353: the worker's silence probe numbers (media-probe.ts SILENCE_NOISE, SILENCE_MIN_DURATION_SEC), at which the cut reads the voice's silences. */
+export const GUARD_SILENCE: { noise: string; minSec: number };
 
 /** #4585: the end card on the cut, holding the last scene's picture under it; throws VoiceUnderEndCardRefusal when it would cover a word. */
 export function placeEndCard(
@@ -299,7 +301,35 @@ export interface CutPace {
     paceSpeed?: number;
     /** COP-300: the finished cut was checked against its own sound (cutSync). */
     captionCheck?: true;
+    /** COP-353: with cleanVoice, the cut's own named chain in its place (VOICE_SOUNDS). */
+    voiceSound?: "phone" | "memo" | "raw";
+    /** COP-354: the room sound under the whole film, a bed the cut makes itself (ROOM_BEDS), or none. */
+    roomSound?: "none" | "room" | "kitchen" | "car" | "outside";
+    /** COP-355: one of Luke's pause levels, by name, in place of jumpCut (PAUSE_TRIMS). */
+    pauseTrim?: "light" | "medium" | "hard";
+    /** COP-355: a cut is added where this many seconds pass with none, by name (ADDED_CUTS). */
+    addedCuts?: "7" | "5" | "3.5";
+    /** COP-355: with addedCuts, the script lines no added cut falls inside. */
+    wholeLines?: string[];
   };
+  /**
+   * COP-354: the room sound the cut laid: none, or a bed with its levels (the voice's integrated loudness after its
+   * chain, the bed's RMS before its gain, the gain, how far under the voice). The voice's silences the worker's last
+   * guard reads under a bed are `voiceSilences` (a bed fills every silence of the film).
+   */
+  room?: {
+    sound: "none" | "room" | "kitchen" | "car" | "outside";
+    voiceLufs?: number;
+    bedRmsDb?: number;
+    gainDb?: number;
+    underDb?: number;
+  };
+  /**
+   * COP-353: present when a picked voice chain was used (COP-354: or a room bed laid): the voice's silences as today's
+   * cut would deliver it, on the film's clock, which the worker's last guard reads in place of the film's (the chain lifts
+   * the film's quiet floor; a bed fills it).
+   */
+  voiceSilences?: { start: number; end: number; duration: number }[];
   /**
    * `limited`: limitPeaks' limiter ran after the loudness pass. #4573: `limitedAgain` times it ran again lower, from
    * the same mix, because the finished file was over -1 dBTP; `limit` is the ceiling the kept cut was made at.
@@ -487,6 +517,11 @@ export interface FirstCut {
   sound?: CutSound;
   /** The music-only master's path, when one was made. */
   musicOnlyMaster?: string;
+  /**
+   * COP-355, addedCuts: where the cut changed a take's framing inside it, in seconds on the delivered film's clock;
+   * present only with the cuts row on. The worker's last guard joins a freeze that one splits (auto-cut.ts withFramingJoins).
+   */
+  framingChangesSec?: number[];
   /** Present only when the manifest asked for the measured map.
    * Authored picture time is reserved once per take; only its final split piece
    * may extend, so earlier pieces never replay the resumed piece's source audio.

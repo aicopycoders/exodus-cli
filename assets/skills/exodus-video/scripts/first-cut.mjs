@@ -242,6 +242,52 @@ export function jumpCutSpan(endSec, startSec, jump = JUMP_CUT) {
   return e > s ? { s, e } : null;
 }
 
+/**
+ * pauseTrim (COP-355, a run's saved sheet: Luke's three pause levels, by name): jumpCut with these numbers in place of
+ * its own, so any pause over maxGap between two heard words is cut to about keepAfter plus keepBefore. The pauses
+ * jumpCut keeps whole (one the script writes in, one a direction asks for, a reaction's beat) stay whole here too.
+ */
+export const PAUSE_TRIMS = {
+  light: { maxGap: 0.6, keepAfter: 0.15, keepBefore: 0.15 },
+  medium: { maxGap: 0.4, keepAfter: 0.1, keepBefore: 0.1 },
+  hard: { maxGap: 0.25, keepAfter: 0.05, keepBefore: 0.05 },
+};
+const PAUSE_LEVELS = new Set(Object.values(PAUSE_TRIMS));
+/**
+ * pauseTrim: the fade of a take's sound at each join inside it, in and out, as Luke's own finish fades its joins. It
+ * changes no length. Today's trim and kept pauses have none.
+ */
+const PAUSE_JOIN_FADE_SEC = 0.012;
+
+/**
+ * addedCuts (COP-355, a run's saved sheet: Luke's locked finish, by name): the longest a take may run with no cut, in
+ * seconds on its own clock before the speed-up. See addedCutPlan for where a cut goes. `ADDED_CUT`: a removal this
+ * long or longer (`realSec`) is a cut already; an added cut sits at least `clearSec` from both ends of its stretch;
+ * the other framing is `zoom` times the take's own, or its own divided by `zoom` when the take is punched in past
+ * `tightPast`, centred left to right with `top` of the spare height above it.
+ */
+export const ADDED_CUTS = { "7": 7, "5": 5, "3.5": 3.5 };
+export const ADDED_CUT = { realSec: 0.3, clearSec: 1.2, zoom: 1.08, tightPast: 1.1, top: 0.42 };
+/** The ffmpeg filters an added cut's picture uses (buildFfmpegArgs), each in ffmpeg 5.1, the worker's. */
+export const ADDED_CUT_FILTERS = ["split", "trim", "setpts", "scale", "crop", "setsar", "concat"];
+/**
+ * addedCuts: a framing change this many frames or fewer from another, or from a take's edge, is left out (a piece of a
+ * frame or two flashes, and at a speed over 1 the join of the pieces can lose a frame); a take that would start in a
+ * zoom within FRAMING_SAME_WITHIN of the one the take before it ends in starts in its other framing (the same picture
+ * across a join, #3304).
+ */
+const FRAMING_MIN_FRAMES = 6;
+const FRAMING_SAME_WITHIN = 0.03;
+/** addedCuts: framingChangeTimes leaves out a change this many frames or fewer from a cutaway's edges (1/24 s, and the frame its edge can land from its clock). */
+const FRAMING_NEAR_CUTAWAY = 2;
+/** A name of `table`, as a string, or null; never one of an object's own words ("constructor"). */
+const nameIn = (table, value) => (typeof value === "string" && Object.prototype.hasOwnProperty.call(table, value) ? value : null);
+/** addedCuts' `wholeLines`, the script line ids the worker marked, as finishingOf keeps them: none when there are none. */
+function wholeLinesOf(raw) {
+  const ids = Array.isArray(raw) ? raw.filter((id) => typeof id === "string" && id !== "") : [];
+  return ids.length > 0 ? { wholeLines: ids } : {};
+}
+
 /** Plan 14's on/off cut checks, each read only with cutChecks; paceCheck also carries its numbers. */
 const PLAN_14_CHECKS = ["floorCheck", "flashCheck", "levelStepCheck", "voFitCheck", "dashGapCheck", "nameCheck"];
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -289,6 +335,16 @@ export function finishingOf(manifest) {
     ...(f.pacePass === true && paceSpeedOk(f.paceSpeed) ? { paceSpeed: f.paceSpeed } : {}),
     ...(f.captionCheck === true ? { captionCheck: true } : {}),
     ...(f.keepPauses === true ? { keepPauses: true } : {}),
+    // COP-353: a name of the cut's own chains only, and only beside the chain it stands in place of.
+    ...(f.cleanVoice === true && typeof f.voiceSound === "string" && Object.hasOwn(VOICE_SOUNDS, f.voiceSound)
+      ? { voiceSound: f.voiceSound } : {}),
+    // COP-354: none, or the name of one of the cut's own beds.
+    ...(typeof f.roomSound === "string" && (f.roomSound === "none" || Object.hasOwn(ROOM_BEDS, f.roomSound)) ? { roomSound: f.roomSound } : {}),
+    // COP-355: a saved sheet's pause level and cuts added, each by its name; the lines no added cut falls inside with it.
+    ...(nameIn(PAUSE_TRIMS, f.pauseTrim) ? { pauseTrim: f.pauseTrim } : {}),
+    ...(nameIn(ADDED_CUTS, f.addedCuts) ? { addedCuts: f.addedCuts, ...wholeLinesOf(f.wholeLines) } : {}),
+    // COP-356: the card as a headline at the top (headlineCards), a name only the worker writes from a run's sheet.
+    ...(on.cards && f.cardPlace === "top" ? { cardPlace: "top" } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -330,6 +386,107 @@ export const VOICE_CLEAN =
   "highpass=f=90,afftdn=nr=8:nf=-38,deesser=i=0.35,acompressor=threshold=0.125:ratio=2.5:attack=8:release=150:makeup=1.5";
 export const UNDER_VOICE = { db: -6, highpass: 60, lowpass: 9000, duck: { threshold: 0.03, ratio: 5, attack: 15, release: 300 } };
 const CLEAN_FILTERS = ["highpass", "lowpass", "afftdn", "deesser", "acompressor", "sidechaincompress"];
+/**
+ * COP-353, voiceSound: how the voice sounds, a run's saved sheet's pick, which the worker writes beside cleanVoice as
+ * a name: the cut runs only its own chains, never a filter graph from a manifest. The chain stands in VOICE_CLEAN's
+ * place, on the joined voice before the beds are ducked under it, and the loudness pass sets the film's level after
+ * it, as it does today. phone: the lows under 120 Hz and the highs over 7.5 kHz cut, a fast 4:1 compressor and a soft
+ * clip, with no noise reduction or de-essing before it. memo: a narrow band from 300 Hz to 3.4 kHz, a hard 8:1
+ * compressor, 4 dB more and a soft clip. raw: the voice as filmed. The numbers are Luke's tested chains (his kit's post
+ * tests) without his gain back to a level and his limiter, which the loudness pass and its limiter do here. Every
+ * filter is in ffmpeg 5.1, the worker's (exodus/__tests__/first-cut-sheet-voice.test.ts lists them).
+ */
+export const VOICE_SOUNDS = {
+  phone: "highpass=f=120,lowpass=f=7500,acompressor=threshold=-24dB:ratio=4:attack=5:release=120:makeup=2,asoftclip=type=tanh",
+  memo: "highpass=f=300,lowpass=f=3400,acompressor=threshold=-32dB:ratio=8:attack=3:release=80:makeup=4,volume=4dB,asoftclip=type=tanh",
+  raw: "anull",
+};
+/** The filters a chain runs, by name. */
+const chainFilters = (chain) => chain.split(",").map((part) => part.split("=")[0]);
+/** The filters the duck under the voice runs, whichever chain is on it (UNDER_VOICE). */
+const UNDER_FILTERS = ["highpass", "lowpass", "sidechaincompress"];
+/**
+ * COP-354, roomSound: the room sound under the whole film, a run's saved sheet's pick, which the worker writes as a
+ * name ("none", "room", "kitchen", "car" or "outside"): the cut runs only its own beds, never a graph from a manifest.
+ * Each bed is made here by ffmpeg from seeded noise and tones (no sound file, no vendor), for the film's whole length
+ * before the speed step, and mixed after the join and the pause trims, so it runs on under every cut and every take's
+ * own floor. It is not ducked: a room does not go quiet when someone talks. Its RMS is set ROOM_UNDER_DB under the
+ * voice's integrated loudness after its chain, measured in one extra pass of the voice alone; the loudness pass then
+ * moves both together. It fades in and out over ROOM_FADE_SEC. With a bed, or with "none", the cut's own faint brown
+ * bed (ROOM_TONE) is not laid. The beds are Luke's made-up placeholders, synthesised the same way (his kit's post
+ * tests), at 48 kHz; the times of the kitchen's clinks and the outside's chirps come from a seeded generator, so one
+ * folder cuts the same bed every time. Each clink and chirp is an if() that ffmpeg works out only in its own moment:
+ * as a product, a clink's exp() long before its moment overflows, and 0 times infinity silences the bed up to there on
+ * a film over about 22 s; it is also ten times faster to make.
+ */
+export const ROOM_UNDER_DB = 27;
+export const ROOM_FADE_SEC = 0.08;
+const ROOM_RATE = 48000;
+
+/** A seeded generator of numbers in [0, 1) (mulberry32): the same seed gives the same numbers on every machine. */
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Moments for a sound now and then: the first between 1.5 s and `every`, then every 0.6 to 1.5 times `every`. */
+export function roomMoments(seconds, every, seed) {
+  const next = seeded(seed);
+  const between = (lo, hi) => lo + (hi - lo) * next();
+  const out = [];
+  for (let t = between(1.5, every); t < seconds - 1; t += between(every * 0.6, every * 1.5)) out.push(Math.round(t * 100) / 100);
+  return out;
+}
+
+const noise = (color, amplitude, seed, seconds) => `anoisesrc=d=${seconds}:c=${color}:r=${ROOM_RATE}:a=${amplitude}:seed=${seed}`;
+const tone = (expr, seconds) => `aevalsrc=exprs='${expr}':s=${ROOM_RATE}:d=${seconds}`;
+const clinks = (times, f1, f2, decay = 32) =>
+  times.map((k) => `if(gte(t,${k})*lt(t,${(k + 0.4).toFixed(2)}),exp(-${decay}*(t-${k}))*(sin(2*PI*${f1}*(t-${k}))+0.5*sin(2*PI*${f2}*(t-${k}))),0)`).join("+") || "0";
+const chirps = (times) =>
+  times.flatMap((k) => [0, 1, 2].map((q) => {
+    const a = (k + q * 0.16).toFixed(2);
+    return `if(between(t,${a},${(k + q * 0.16 + 0.1).toFixed(2)}),sin(2*PI*(${3000 + 400 * q}+9000*(t-${a}))*(t-${a}))*pow(sin(PI*(t-${a})/0.1),2),0)`;
+  })).join("+") || "0";
+
+/** Each bed: its sources and the graph that joins them into [a], for a film of `seconds`. */
+export const ROOM_BEDS = {
+  room: (d) => ({
+    sources: [noise("brown", 0.6, 3, d), tone("0.02*sin(2*PI*60*t)", d)],
+    graph: "[0:a]highpass=f=70,lowpass=f=700[a0];[a0][1:a]amix=inputs=2:normalize=0[a]",
+  }),
+  kitchen: (d) => ({
+    sources: [
+      tone("(1+0.06*sin(2*PI*0.31*t))*(0.30*sin(2*PI*60*t)+0.22*sin(2*PI*120*t)+0.12*sin(2*PI*180*t)+0.06*sin(2*PI*240*t)+0.03*sin(2*PI*360*t))", d),
+      noise("brown", 0.35, 4, d),
+      tone(`0.5*(${clinks(roomMoments(Number(d), 6.5, 21), 2350, 3720)})`, d),
+    ],
+    graph: "[1:a]highpass=f=80,lowpass=f=900[a1];[0:a][a1][2:a]amix=inputs=3:normalize=0[a]",
+  }),
+  car: (d) => ({
+    sources: [noise("brown", 0.9, 5, d), noise("pink", 0.5, 6, d)],
+    graph: "[0:a]lowpass=f=160[a0];[1:a]highpass=f=180,lowpass=f=650,volume=volume='0.25+0.75*pow(sin(PI*t/9.5),6)':eval=frame[a1];[a0][a1]amix=inputs=2:normalize=0[a]",
+  }),
+  outside: (d) => ({
+    sources: [noise("pink", 0.6, 8, d), tone(`0.35*(${chirps(roomMoments(Number(d), 4.5, 31))})`, d)],
+    graph: "[0:a]highpass=f=150,lowpass=f=1400,volume=volume='0.45+0.55*pow(sin(PI*t/11),2)':eval=frame[a0];[a0][1:a]amix=inputs=2:normalize=0[a]",
+  }),
+};
+
+/** The ffmpeg command that makes a bed for `seconds` into `out` (mono, 48 kHz, 32-bit float: a peak over full scale is kept for the gain). */
+export function roomBedArgs(name, seconds, out) {
+  const { sources, graph } = ROOM_BEDS[name](seconds.toFixed(3));
+  return [
+    "-y", "-hide_banner", "-loglevel", "error",
+    ...sources.flatMap((source) => ["-f", "lavfi", "-i", source]),
+    "-filter_complex", graph, "-map", "[a]", "-ac", "1", "-ar", String(ROOM_RATE), "-c:a", "pcm_f32le", out,
+  ];
+}
 const SEGMENT_LUFS = -16;
 /** A voice at or under this is no level to set a sound against. */
 const VOICE_FLOOR_LUFS = -60;
@@ -1015,7 +1172,10 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
       // between the kept length and the longest allowed.
       const back = (t) => (sound && t > sound.s ? t + removed : t);
       const [keepAfter, keepBefore] = jumped ? [jump.keepAfter, jump.keepBefore] : [gapKeep / 2, gapKeep / 2];
-      const s = back(ceilFrame(earlier.e + keepAfter));
+      const after = ceilFrame(earlier.e + keepAfter);
+      // COP-355: at one of Luke's pause levels, a sound that starts inside the air kept after the word takes that air
+      // with it: the silence's cut starts with the sound's, so no piece of the pause of a frame or two is left between them.
+      const s = jumped && PAUSE_LEVELS.has(jump) && sound && sound.s < after - 1e-6 ? sound.s : back(after);
       const e = back(floorFrame(later.s - removed - keepBefore));
       if (e > s) spans.push({ s, e });
     }
@@ -1668,6 +1828,231 @@ export function paceZooms(spine, speed) {
     zoomed += 1;
   });
   return `pacePass: the cut plays at ${speed}x and ${zoomed} piece${zoomed === 1 ? "" : "s"} zoom ${PACE_PASS.zoom}x`;
+}
+
+/** A heard word that ends on a comma (a closing quote or bracket may follow it). */
+const HEARD_COMMA = /,["'”’)\]]*$/;
+
+/**
+ * addedCuts (COP-355): Luke's locked rule for one take, on its own clock before the speed-up. `realCuts` are the
+ * cuts the take holds already; its two edges count as cuts too. `whole` holds the
+ * [start, end] spans of the lines no cut may fall inside. A place is the middle of the silence after a heard word that
+ * ends a sentence or has a comma, when it is not inside a whole line. While the longest stretch between two cuts runs
+ * over `everySec`, a cut goes at a place in it at least ADDED_CUT.clearSec from both its ends: a sentence's end before
+ * a comma, then the place nearest its middle. When that stretch has no such place, no more is added. Returns the times
+ * of the cuts added, in order, and the longest stretch left with no cut.
+ */
+export function addedCutPlan({ words, seconds, realCuts = [], joins = [], everySec, whole = [] }) {
+  const places = [];
+  for (let i = 0; i + 1 < words.length; i++) {
+    const rank = heardSentenceEnd(words[i].w) ? 0 : HEARD_COMMA.test(String(words[i].w ?? "")) ? 1 : null;
+    if (rank === null) continue;
+    // A pause that holds a cut already (`joins`, one too short to count) has its place on that cut's join, so the
+    // framing changes with the picture's jump and not a few frames after it.
+    const join = joins.filter((t) => t >= words[i].e - 1e-6 && t <= words[i + 1].s + 1e-6).at(-1);
+    const t = join ?? (words[i].e + words[i + 1].s) / 2;
+    if (!(t > 0 && t < seconds) || whole.some(([s, e]) => t > s && t < e)) continue;
+    places.push({ t, rank });
+  }
+  const added = [];
+  const longestOf = () => {
+    const marks = [...new Set([0, ...realCuts, ...added, seconds])].sort((a, b) => a - b);
+    return marks.slice(1).reduce(
+      (best, to, k) => (to - marks[k] > best.length + 1e-9 ? { length: to - marks[k], from: marks[k], to } : best),
+      { length: 0, from: 0, to: 0 },
+    );
+  };
+  for (let gap = longestOf(); gap.length > everySec + 1e-9; gap = longestOf()) {
+    const mid = (gap.from + gap.to) / 2;
+    const inside = places.filter((p) =>
+      p.t >= gap.from + ADDED_CUT.clearSec - 1e-9 && p.t <= gap.to - ADDED_CUT.clearSec + 1e-9 &&
+      added.every((t) => Math.abs(p.t - t) > 0.01));
+    if (inside.length === 0) break;
+    const best = inside.reduce((a, b) =>
+      b.rank < a.rank || (b.rank === a.rank && Math.abs(b.t - mid) < Math.abs(a.t - mid) - 1e-9) ? b : a);
+    added.push(best.t);
+  }
+  return { added: added.map(r6).sort((a, b) => a - b), longest: r6(longestOf().length) };
+}
+
+/**
+ * addedCuts: the cuts a talking segment holds already, on its own clock: each place a pause or a sound was cut out of
+ * it, and how much went. The removals of one pause (no heard word between them) are one cut, at the last of them, where
+ * the next word's picture starts. A cut counts (Luke's) where ADDED_CUT.realSec or more went.
+ */
+function breaksOf(seg) {
+  const breaks = [];
+  let removed = 0;
+  for (const c of [...(seg.cuts ?? [])].sort((a, b) => a.s - b.s)) {
+    const t = c.s - removed - (seg.inSec ?? 0);
+    removed += c.e - c.s;
+    const prev = breaks.at(-1);
+    if (prev && !seg.words.some((w) => w.s > prev.t + 1e-6 && w.s < t - 1e-6)) Object.assign(prev, { t, length: prev.length + c.e - c.s });
+    else breaks.push({ t, length: c.e - c.s });
+  }
+  return breaks.filter((b) => b.t > 1e-6 && b.t < seg.seconds - 1e-6).map((b) => ({ t: r6(b.t), counts: b.length >= ADDED_CUT.realSec - 1e-6 }));
+}
+
+/**
+ * addedCuts: the frames where a take's framing changes, from the times of its cuts: on whole frames, in order, none
+ * within FRAMING_MIN_FRAMES of the one before it or of the take's two edges (`frames` long).
+ */
+export function framingFrames(times, frames) {
+  const kept = [];
+  for (const f of [...new Set(times.map((t) => Math.round(t * FPS)))].sort((a, b) => a - b)) {
+    if (f < FRAMING_MIN_FRAMES || f > frames - FRAMING_MIN_FRAMES) continue;
+    if (kept.length > 0 && f - kept.at(-1) < FRAMING_MIN_FRAMES) continue;
+    kept.push(f);
+  }
+  return kept;
+}
+
+/** addedCuts: where each script line of a talking segment is heard, [start, end] on the segment's clock, by line id. */
+function lineSpans(seg, scriptLines) {
+  const lines = seg.lineIds.map((id) => scriptWords(scriptLines.get(id)?.text));
+  const spans = new Map();
+  if (!lines.some((l) => l.length > 0)) return spans;
+  const lineOf = lines.flatMap((ws, j) => ws.map(() => seg.lineIds[j]));
+  const put = (i, s, e) => {
+    const was = spans.get(lineOf[i]);
+    spans.set(lineOf[i], was ? [Math.min(was[0], s), Math.max(was[1], e)] : [s, e]);
+  };
+  const aligned = alignScript(seg.words, lines.flat());
+  if (aligned) {
+    const { expected, heard, heardTokenOf } = aligned;
+    heardTokenOf.forEach((h, e) => put(expected.sourceIndex[e], seg.words[heard.sourceIndex[h]].s, seg.words[heard.lastSourceIndex[h]].e));
+    return spans;
+  }
+  // COP-311's reading when the script is not heard whole and in order: each script word on what was heard in its place.
+  const { expected, times } = scriptTimes(seg.words, lines.flat());
+  const timed = new Set();
+  times.forEach((time, e) => {
+    if (!time) return;
+    put(expected.sourceIndex[e], time[0], time[1]);
+    timed.add(expected.sourceIndex[e]);
+  });
+  // A line whose first or last word was not timed may still be spoken past its timed words: its span runs back to the
+  // line before's last heard word and on to the next line's first (or the take's edges), so no cut lands in that part.
+  const heard = new Map(spans);
+  const words = new Set(expected.sourceIndex);
+  let from = 0;
+  seg.lineIds.forEach((id, j) => {
+    const own = [...words].filter((i) => i >= from && i < from + lines[j].length);
+    from += lines[j].length;
+    const span = heard.get(id);
+    if (!span || own.length === 0) return;
+    const before = seg.lineIds.slice(0, j).map((k) => heard.get(k)).filter(Boolean).at(-1);
+    const after = seg.lineIds.slice(j + 1).map((k) => heard.get(k)).find(Boolean);
+    spans.set(id, [
+      timed.has(Math.min(...own)) ? span[0] : (before?.[1] ?? 0),
+      timed.has(Math.max(...own)) ? span[1] : (after?.[0] ?? seg.seconds),
+    ]);
+  });
+  return spans;
+}
+
+/**
+ * addedCuts: each talking segment's cuts added (addedCutPlan), and `seg.framing`, the frames of its own clock where its
+ * framing changes: at every cut it counts, those it held and those added. A line marked whole that its words do not
+ * show is taken to run through the whole take, so nothing is added there. Answers the cut's note.
+ */
+function placeAddedCuts(spine, scriptLines, everySec, wholeLines) {
+  const whole = new Set(wholeLines);
+  let count = 0;
+  let longest = 0;
+  for (const seg of spine) {
+    if (seg.source !== "clip" || seg.audio !== "clip" || !seg.words?.length || seg.reaction || seg.wholeVoice) continue;
+    const spans = lineSpans(seg, scriptLines);
+    const held = (seg.lineIds ?? []).filter((id) => whole.has(id)).map((id) => spans.get(id) ?? [0, seg.seconds]);
+    const breaks = breaksOf(seg);
+    const realCuts = breaks.filter((b) => b.counts).map((b) => b.t);
+    const plan = addedCutPlan({ words: seg.words, seconds: seg.seconds, realCuts, joins: breaks.map((b) => b.t), everySec, whole: held });
+    const frames = Math.round(seg.seconds * FPS);
+    const framing = framingFrames([...realCuts, ...plan.added], frames);
+    const added = plan.added.filter((t) => framing.includes(Math.round(t * FPS)));
+    const edges = [0, ...framing, frames];
+    longest = Math.max(longest, ...edges.slice(1).map((f, k) => (f - edges[k]) / FPS));
+    // Set on every take the row reaches, even with no change, so its join with the take before it is seen to (framingAtJoins).
+    seg.framing = framing;
+    if (added.length > 0) {
+      count += added.length;
+      seg.note = withHow(seg.note, [`cuts added at ${added.map((t) => `${t.toFixed(2)}s`).join(", ")}`]);
+    }
+  }
+  return `addedCuts: ${count} cut${count === 1 ? "" : "s"} added where ${everySec}s passed with no cut; ` +
+    `the longest stretch left with no cut is ${longest.toFixed(1)}s`;
+}
+
+/** A segment's own zoom: plain, the pace pass's step or the punch-in. */
+const ownZoomOf = (seg) => (seg.punchIn ? PUNCH_IN_SCALE : seg.paceZoom ? PACE_PASS.zoom : 1);
+
+/** addedCuts: the zoom of a segment's other framing, against its own (plain, the pace pass's step or the punch-in). */
+export function alternateZoom(seg) {
+  const own = ownZoomOf(seg);
+  return own > ADDED_CUT.tightPast ? own / ADDED_CUT.zoom : own * ADDED_CUT.zoom;
+}
+
+/**
+ * addedCuts, once the spine's own framing is set (punch-ins, the pace pass's steps): a take the row reaches (`framing`
+ * set) whose own zoom is within FRAMING_SAME_WITHIN of the zoom the take before it ends in starts in its other framing
+ * (`otherFirst`), so the join between them still changes the picture. After a segment the row does not reach (a
+ * reaction beat) the take keeps its own. Returns, by segment, whether it starts in its other framing.
+ */
+export function framingAtJoins(spine) {
+  let last = null;
+  return spine.map((seg) => {
+    const own = ownZoomOf(seg);
+    // A segment the row does not reach (a reaction beat): the join after it changes the picture already.
+    if (!Array.isArray(seg.framing)) {
+      last = null;
+      return false;
+    }
+    const otherFirst = last !== null && Math.abs(last - own) / own < FRAMING_SAME_WITHIN;
+    if (otherFirst) seg.otherFirst = true;
+    last = (seg.framing.length + (otherFirst ? 1 : 0)) % 2 === 1 ? alternateZoom(seg) : own;
+    return otherFirst;
+  });
+}
+
+/**
+ * addedCuts: where the cut changed a take's framing inside it (an added cut, or a pause cut that counts), in seconds
+ * on the delivered film's clock: after the speed step, on the frame of the sped-up film that first shows it. The worker
+ * joins a freeze that such a change splits, so its last guard reads a held picture as it would with no cut added.
+ * Left out: a change under a cutaway, or within 1/24 s of the edge the film shows it at, where two freezes that meet
+ * are two pictures. That edge can land a frame from the cutaway's own clock (one placed at 2.467 s first shows at
+ * 2.5 s), so a change within FRAMING_NEAR_CUTAWAY frames of its edges on that clock is left out.
+ */
+export function framingChangeTimes(spine, speed = 1, cutaways = []) {
+  const onFilm = (sec) => Math.round((sec / speed) * FPS) / FPS;
+  const near = FRAMING_NEAR_CUTAWAY / FPS + 1e-6;
+  const covered = cutaways.filter((c) => c.seconds > 0).map((c) => [onFilm(c.startSec) - near, onFilm(c.startSec + c.seconds) + near]);
+  return spine.flatMap((seg) => (seg.framing ?? []).map((f) => onFilm(seg.startSec + f / FPS)))
+    .filter((t) => !covered.some(([from, to]) => t >= from && t <= to));
+}
+
+/**
+ * addedCuts: a segment's picture, `head` being its chain up to its own framing, split at `seg.framing` into pieces cut by
+ * frame number, back to back, every other one in its other framing, and joined again with no sound: every frame is
+ * kept, in order, and the segment's sound is not touched. Returns the graph's chains, the last one ending in [v<i>].
+ */
+function framedPicture(head, i, seg, own) {
+  const zoom = alternateZoom(seg);
+  const other = `scale=${even(WIDTH * zoom)}:${even(HEIGHT * zoom)},crop=${WIDTH}:${HEIGHT}:(iw-ow)/2:(ih-oh)*${ADDED_CUT.top},setsar=1`;
+  // A take with no change of its own that starts in its other framing (framingAtJoins) plays in it whole.
+  if (seg.framing.length === 0) return [`${head},${other}[v${i}]`];
+  const first = seg.otherFirst ? 1 : 0;
+  const edges = [0, ...seg.framing];
+  const chains = [`${head},split=${edges.length}${edges.map((_, p) => `[fr${i}_${p}]`).join("")}`];
+  edges.forEach((from, p) => {
+    const to = edges[p + 1];
+    const look = (p + first) % 2 === 0 ? own : [other];
+    chains.push(
+      `[fr${i}_${p}]trim=start_frame=${from}${to === undefined ? "" : `:end_frame=${to}`},setpts=PTS-STARTPTS` +
+        `${look.length ? `,${look.join(",")}` : ""}[fz${i}_${p}]`,
+    );
+  });
+  chains.push(`${edges.map((_, p) => `[fz${i}_${p}]`).join("")}concat=n=${edges.length}:v=1:a=0[v${i}]`);
+  return chains;
 }
 
 /** cutPace: two pieces of one take, back to back. */
@@ -3288,16 +3673,21 @@ function assembleTimeline({
   }
   const pace = finish?.cutPace === true;
   const lineGap = pace ? { max: PACE_SPLIT_PAUSE_SEC, keep: PACE_GAP_MAX_SEC } : null;
-  // jumpCut stays off a template launch's cut, whose selected clocks and windows hold their real time.
-  const jump = finish?.jumpCut && manifest?.templateMotion?.enabled !== true ? JUMP_CUT : null;
+  // jumpCut stays off a template launch's cut, whose selected clocks and windows hold their real time. pauseTrim
+  // (COP-355, a run's saved sheet) is jumpCut with one of Luke's pause levels in place of its numbers.
+  const trim = finish?.pauseTrim && !template ? PAUSE_TRIMS[finish.pauseTrim] : null;
+  const jump = trim ?? (finish?.jumpCut && manifest?.templateMotion?.enabled !== true ? JUMP_CUT : null);
   // keepPauses (COP-350, a run's saved sheet): no pause inside a talking clip is shortened, neither a long sentence gap
   // nor jumpCut's (no gap limit, no jump, no split); a sound in a break that is no heard word is still cut (#2554). A
   // template launch's own speech edit runs as before.
   const keepPauses = finish?.keepPauses === true && !template;
   if (keepPauses) notes.push("keepPauses: no pause inside a clip is shortened; a sound in one that is no heard word is still cut");
+  else if (trim) notes.push(`pauseTrim ${finish.pauseTrim}: a pause over ${trim.maxGap}s inside a clip is cut to about ${trim.keepAfter + trim.keepBefore}s`);
   tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, keepPauses ? null : lineGap, keepPauses ? null : jump,
     template ? storyboard : null, template ? manifest.templateMotion.editingTreatment : null, notes,
     keepPauses ? Infinity : SENTENCE_GAP_MAX_SEC);
+  // pauseTrim: each join inside a take fades its sound (PAUSE_JOIN_FADE_SEC); a level cuts close to the words.
+  if (trim && !keepPauses) for (const seg of spine) if (seg.cuts?.length) seg.joinFadeSec = PAUSE_JOIN_FADE_SEC;
   trimJoins(spine, reactionCues, scriptLines, pace ? PACE_GAP_MAX_SEC : null, finish?.talkTrim === true);
   if (pace) {
     // The pieces of one take alternate between the plain frame and the
@@ -3327,6 +3717,16 @@ function assembleTimeline({
     seg.fadeInSec = quietStart(levels && seg.inSec > 0
       ? { ...levels, db: levels.db.slice(Math.floor(seg.inSec / levels.windowSec)) } : levels, seg.seconds);
   });
+  // addedCuts (COP-355, a run's saved sheet): the framing changes where a take runs too long with no cut; no time and
+  // no sound moves. A template's clock or a measured map keeps its framing.
+  if (finish?.addedCuts) {
+    // With no line marked whole (no board, no script text) nothing says where a cut may not go, so none is added.
+    notes.push(template || measure
+      ? "addedCuts: a cut on a template's clock or a measured map keeps its framing, so no cut was added"
+      : !finish.wholeLines?.length
+        ? "addedCuts: no line of the script is marked whole, so no cut was added"
+        : placeAddedCuts(spine, scriptLines, ADDED_CUTS[finish.addedCuts], finish.wholeLines));
+  }
   // A copied shot no voice runs in lasts its shot's length, its clip trimmed or its last frame held.
   const shotOf = (n) => plans.get(n)?.sourceShot ?? null;
   const shotSec = (n) => {
@@ -3947,7 +4347,7 @@ function mappedPiece(seg, i, { addInput, filters, tails, level, resolve }) {
  * the voice and everything under it are also written to. `pcmMix` keeps the
  * render's sound uncompressed, for a mix the loudness pass then encodes once.
  */
-export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, sound = null }) {
+export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, sound = null, voiceOnly = false }) {
   const level = finish && finish.levelSegments === false ? "anull" : LOUDNORM;
   const inputs = [];
   let count = 0;
@@ -3984,7 +4384,14 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       filters.push(`[${i}:a]${stereo},asplit=${pieces}${Array.from({ length: pieces }, (_, p) => `[ap${i}_${p}]`).join("")}`);
       for (let p = 0; p < pieces; p++) {
         const end = p < cuts.length ? `:end=${kept[2 * p + 1].toFixed(6)}` : "";
-        filters.push(`[ap${i}_${p}]atrim=start=${kept[2 * p].toFixed(6)}${end},asetpts=PTS-STARTPTS[aq${i}_${p}]`);
+        // pauseTrim (COP-355): a short fade in and out at each join inside the take; no length changes. A piece shorter
+        // than two fades fades over half its length at each end, so neither fade starts before it nor runs past it.
+        const fade = seg.joinFadeSec;
+        const length = p < cuts.length ? Number(kept[2 * p + 1].toFixed(6)) - Number(kept[2 * p].toFixed(6)) : Infinity;
+        const d = fade && length < 2 * fade ? (Math.max(0, length) / 2).toFixed(6) : fade;
+        const fades = !fade ? "" : `${p > 0 ? `,afade=t=in:d=${d}` : ""}${p < cuts.length
+          ? `,afade=t=out:st=${Math.max(0, length - Number(d)).toFixed(6)}:d=${d}` : ""}`;
+        filters.push(`[ap${i}_${p}]atrim=start=${kept[2 * p].toFixed(6)}${end},asetpts=PTS-STARTPTS${fades}[aq${i}_${p}]`);
       }
       filters.push(
         `${Array.from({ length: pieces }, (_, p) => `[aq${i}_${p}]`).join("")}concat=n=${pieces}:v=0:a=1[ac${i}]`,
@@ -4001,9 +4408,16 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       }
     }
     if (seg.holdSec > 0.01) fit.push(`tpad=stop_mode=clone:stop_duration=${sec(seg.holdSec)}`);
-    if (seg.punchIn) fit.push(PUNCH_IN);
-    if (seg.paceZoom) fit.push(PACE_ZOOM);
-    filters.push(`${norm(`${i}:v`)}${fit.length ? `,${fit.join(",")}` : ""}[v${i}]`);
+    // addedCuts (COP-355): a segment with framing changes is split by frame into pieces, every other one in its other framing.
+    const own = [...(seg.punchIn ? [PUNCH_IN] : []), ...(seg.paceZoom ? [PACE_ZOOM] : [])];
+    // voiceOnly (COP-353): the voice-alone pass draws no picture.
+    if (!voiceOnly) {
+      if (seg.framing?.length > 0 || (seg.framing && seg.otherFirst)) filters.push(...framedPicture(`${norm(`${i}:v`)}${fit.length ? `,${fit.join(",")}` : ""}`, i, seg, own));
+      else {
+        fit.push(...own);
+        filters.push(`${norm(`${i}:v`)}${fit.length ? `,${fit.join(",")}` : ""}[v${i}]`);
+      }
+    }
     // A segment split around a reaction beat starts partway into its sound too.
     const skipIn = inSec > 0.001 ? `atrim=start=${sec(inSec)},asetpts=PTS-STARTPTS,` : "";
     const [fadeIn, fadeOut] = [seg.fadeInSec ?? EDGE_FADE_SEC, seg.fadeOutSec ?? EDGE_FADE_SEC];
@@ -4039,10 +4453,12 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     } else {
       filters.push(`anullsrc=r=48000:cl=stereo,atrim=0:${sec(seg.seconds)}[a${i}]`);
     }
-    pairs.push(`[v${i}][a${i}]`);
+    pairs.push(voiceOnly ? `[a${i}]` : `[v${i}][a${i}]`);
   }
 
-  filters.push(`${pairs.join("")}concat=n=${pairs.length}:v=1:a=1[vcat][voicecat]`);
+  filters.push(voiceOnly
+    ? `${pairs.join("")}concat=n=${pairs.length}:v=0:a=1[voicecat]`
+    : `${pairs.join("")}concat=n=${pairs.length}:v=1:a=1[vcat][voicecat]`);
   // The sound is padded or cut to the picture's exact length, so every stream
   // ends on its own. No -shortest: ffmpeg 8 held the whole ad's frames for it,
   // and Debian's ffmpeg 5.1 (the worker's) never ended at all (#2988).
@@ -4071,6 +4487,14 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     filters.push("[spoken][whole]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[voice]");
   } else {
     filters.push(`[voicecat]apad,${toPicture}[voice]`);
+  }
+  // voiceOnly (COP-353): the voice alone after the chain `finish.clean` names, as the render joins it, with no picture
+  // and nothing under it (the silences the worker's guard reads; COP-354: the voice's level a room bed is set against);
+  // a reaction's tail, which is not the spoken voice, left out.
+  if (voiceOnly) {
+    filters.push(...tails.map((label) => `${label}anullsink`));
+    filters.push(`[voice]${finish?.clean?.voice ?? "anull"}[measured]`);
+    return ["-y", "-hide_banner", "-loglevel", "error", ...inputs, "-filter_complex", filters.join(";"), "-map", "[measured]", "-c:a", "pcm_s16le", out];
   }
 
   let videoLabel = "vcat";
@@ -4170,7 +4594,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       );
       beds.push(`[set${j}]`);
     });
-  } else if (sound?.roomTone !== false && (!timeline.mapped || !timeline.wholeVoice) && !timeline.wholeVoice?.songOnly) {
+  } else if (!finish?.room && sound?.roomTone !== false && (!timeline.mapped || !timeline.wholeVoice) && !timeline.wholeVoice?.songOnly) {
     filters.push(timeline.mapped
       ? `${ROOM_TONE},atrim=end_sample=${Math.round(pictureSec * EDIT_SAMPLE_RATE)}[room]`
       : `${ROOM_TONE}[room]`);
@@ -4227,6 +4651,16 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     });
     voice = "[voiced]";
     under = [...ducked.map((_, j) => `[ud${j}]`), ...tails];
+  }
+  // COP-354, roomSound: the cut's own bed under the whole film, after the voice's chain and the duck, and not ducked.
+  if (finish?.room?.file) {
+    const r = finish.room;
+    const k = addInput("-i", r.file);
+    filters.push(
+      `[${k}:a]${stereo},atrim=0:${pictureSec.toFixed(6)},asetpts=PTS-STARTPTS,volume=${r.gainDb}dB,` +
+        `afade=t=in:d=${ROOM_FADE_SEC},afade=t=out:st=${sec(pictureSec - ROOM_FADE_SEC)}:d=${ROOM_FADE_SEC}[roombed]`,
+    );
+    under = [...under, "[roombed]"];
   }
   if (finish?.meters) {
     // cutChecks: the voice, and everything under it mixed, each also written alone to be measured.
@@ -4834,10 +5268,13 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
     `Style: Cap,Helvetica,${capSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,${thick ? 7 : 1.5},${thick ? 4 : 2},5,60,60,0,1`,
     "Style: Card,Helvetica,60,&H00141414,&H00141414,&H00FFFFFF,&H50000000,-1,0,0,0,100,100,0,0,3,18,4,5,0,0,0,1",
     `Style: End,Helvetica,${Math.round(H * 0.045)},&H00FFFFFF,&H00FFFFFF,&H20101010,&H00000000,-1,0,0,0,100,100,2,0,3,40,0,5,0,0,0,1`,
-    ...(endLayers ? endCardStyles(endLayers.colors, H) : []), "",
+    ...(endLayers ? endCardStyles(endLayers.colors, H) : []),
+    ...(cards.some((c) => c.label && c.headline) ? [headlineStyle(H)] : []), "",
     "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ...captions.map((c, k) => `Dialogue: 1,${csTime(starts[k])},${end(c, k)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`),
-    ...cards.filter((c) => c.label).map((c) => `Dialogue: 2,${at(c.in)},${at(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`),
+    ...cards.filter((c) => c.label).flatMap((c) => (c.headline
+      ? headlineDialogues(c, W, H, at)
+      : [`Dialogue: 2,${at(c.in)},${at(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`])),
     ...(hook?.text ? [`Dialogue: 3,${at(hook.in)},${at(hook.out)},Card,,0,0,0,,{${box(hook.box)}\\fs${Math.round(H * 0.026)}}${assText(hook.text)}`] : []),
     ...(endCard ? [`Dialogue: 4,${at(endCard.in)},${at(endCard.out)},End,,0,0,0,,{\\pos(${W / 2},${H / 2})\\fad(120,0)}${assText(endCard.text)}`] : []),
     ...(endLayers ? endCardDialogues(endLayers, W, H, at) : []),
@@ -4867,9 +5304,14 @@ export const END_CARD_SEC = 2;
  * speaks is left out.
  */
 export function storyboardCards(storyboard, timeline) {
+  return cardsOnLines(storyboard, timeline).map(({ card }) => card);
+}
+
+/** storyboardCards, each card with the end of the line it is cued to, on the cut's clock. */
+function cardsOnLines(storyboard, timeline) {
   const counts = lineWordCounts(storyboard);
   const ctaId = storyboard?.cta?.overlayId;
-  const cards = [];
+  const placed = [];
   for (const o of storyboard?.overlays ?? []) {
     if (!hasText(o?.text) || !hasText(o?.cueLineId) || o.overlayId === ctaId || PICTURE_OVERLAY.test(o.type ?? "")) continue;
     const seg = timeline.spine.find((s) => !s.reaction && s.lineIds.includes(o.cueLineId));
@@ -4877,12 +5319,105 @@ export function storyboardCards(storyboard, timeline) {
     if (!cue) continue;
     const at = roundMs(Math.max(0, cue.startSec - CARD_LEAD_SEC));
     const lineEnd = seg.startSec + (cueEndInSegment(seg, counts, o.cueLineId) ?? seg.seconds);
-    cards.push({
-      n: cards.length + 1, label: o.text.trim(), box: cardBox(o.placement),
-      in: at, out: roundMs(Math.max(lineEnd, at + BROLL_MIN_HOLD_SEC)), on: `line ${o.cueLineId}`,
+    placed.push({
+      card: {
+        n: placed.length + 1, label: o.text.trim(), box: cardBox(o.placement),
+        in: at, out: roundMs(Math.max(lineEnd, at + BROLL_MIN_HOLD_SEC)), on: `line ${o.cueLineId}`,
+      },
+      lineEnd,
     });
   }
-  return cards;
+  return placed;
+}
+
+/**
+ * COP-356, cardPlace "top" (a run's sheet, through the worker): the card as a headline at the top for the opening, as
+ * Luke's hook test clips carry one. Heavy dark words over a white rounded box, centred left to right with its middle an
+ * eighth of the way down the frame, from the first frame to the end of the line the card is cued to, and held
+ * HEADLINE_MIN_SEC to HEADLINE_MAX_SEC of the finished film. It keeps its place: captions set high give way to it and
+ * sit low (the worker writes them so, video/lib/sheetFinish.ts sheetFinishOf), as Luke's kit moves its captions off a
+ * banner's place. The numbers are ours.
+ */
+export const HEADLINE_MIN_SEC = 2.5;
+export const HEADLINE_MAX_SEC = 6;
+/** The band the headline is centred in at the top: its middle at an eighth of the frame's height. */
+export const HEADLINE_BOX = [0.08, 0.1, 0.92, 0.15];
+/** The white box around the words, in pixels of a 1920-high frame: its padding and its corners' radius. */
+const HEADLINE_PAD_PX = 18;
+const HEADLINE_RADIUS_PX = 21;
+const headlineFontPx = (H) => Math.round(H * 0.036);
+
+/**
+ * The words' width on the worker's font, which draws "Helvetica" Bold as DejaVu Sans Bold (its image holds only DejaVu):
+ * DejaVu Sans Bold's advance widths in its units, printable ASCII from the space, then the quotes and dashes the card
+ * takes. libass sizes a font so its ascent and descent (2384 units) are the font size. Any other character counts as the
+ * widest letter, so the box is never narrower than the words there; a mark counts as nothing (a letter's accent).
+ */
+const HEADLINE_ADVANCE = [
+  713, 934, 1067, 1716, 1425, 2052, 1786, 627, 936, 936, 1071, 1716, 778, 850, 778, 748, 1425, 1425, 1425, 1425, 1425, 1425,
+  1425, 1425, 1425, 1425, 819, 819, 1716, 1716, 1716, 1188, 2048, 1585, 1561, 1503, 1700, 1399, 1399, 1681, 1714, 762, 762,
+  1587, 1305, 2038, 1714, 1741, 1501, 1741, 1577, 1475, 1397, 1663, 1585, 2259, 1579, 1483, 1485, 936, 748, 936, 1716, 1024,
+  1024, 1382, 1466, 1214, 1466, 1389, 891, 1466, 1458, 702, 702, 1362, 702, 2134, 1458, 1407, 1466, 1466, 1010, 1219, 979,
+  1458, 1335, 1892, 1321, 1335, 1192, 1458, 748, 1458, 1716,
+];
+const HEADLINE_ADVANCE_MORE = { "\u2018": 778, "\u2019": 778, "\u201C": 1346, "\u201D": 1346, "\u2013": 1024, "\u2014": 2048 };
+const HEADLINE_FONT_UNITS = 2384;
+const HEADLINE_WIDEST = 2259;
+
+/** The headline's words' width in pixels at `fontPx` (HEADLINE_ADVANCE). */
+export function headlineWordsPx(text, fontPx) {
+  let units = 0;
+  for (const char of String(text).normalize("NFD")) {
+    if (/\p{M}/u.test(char)) continue;
+    const code = char.codePointAt(0);
+    units += (code >= 32 && code <= 126 ? HEADLINE_ADVANCE[code - 32] : HEADLINE_ADVANCE_MORE[char]) ?? HEADLINE_WIDEST;
+  }
+  return (units * fontPx) / HEADLINE_FONT_UNITS;
+}
+
+/**
+ * The cards as storyboardCards places them, the first as the headline (cardPlace "top"): from the first frame to the end
+ * of its line, HEADLINE_MIN_SEC to HEADLINE_MAX_SEC of the film at `speed`, in HEADLINE_BOX.
+ */
+export function headlineCards(storyboard, timeline, { speed = 1 } = {}) {
+  return cardsOnLines(storyboard, timeline).map(({ card, lineEnd }, k) => (k > 0 ? card : {
+    ...card,
+    box: HEADLINE_BOX,
+    in: 0,
+    out: roundMs(Math.min(Math.max(lineEnd, HEADLINE_MIN_SEC * speed), HEADLINE_MAX_SEC * speed)),
+    headline: true,
+  }));
+}
+
+/** The headline's style: bold, near-black words with no edge or shadow, centred; its box is a drawing in the same style. */
+function headlineStyle(H) {
+  return `Style: Head,Helvetica,${headlineFontPx(H)},&H00141414,&H00141414,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1`;
+}
+
+/** A rounded box `w` by `h` as an ASS drawing from its top left corner, its corners quarter circles of radius `r`. */
+function roundedBoxPath(w, h, r) {
+  const k = Math.round(r * 0.5523);
+  return [
+    `m ${r} 0`, `l ${w - r} 0`, `b ${w - r + k} 0 ${w} ${r - k} ${w} ${r}`,
+    `l ${w} ${h - r}`, `b ${w} ${h - r + k} ${w - r + k} ${h} ${w - r} ${h}`,
+    `l ${r} ${h}`, `b ${r - k} ${h} 0 ${h - r + k} 0 ${h - r}`,
+    `l 0 ${r}`, `b 0 ${r - k} ${r - k} 0 ${r} 0`,
+  ].join(" ");
+}
+
+/** The headline's two events: the white rounded box under, the words over, both on for the headline's time. */
+function headlineDialogues(c, W, H, at) {
+  const fontPx = headlineFontPx(H);
+  const cx = Math.round(((c.box[0] + c.box[2]) / 2) * W);
+  const cy = Math.round(((c.box[1] + c.box[3]) / 2) * H);
+  const w = Math.min(W, Math.ceil(headlineWordsPx(assText(c.label), fontPx)) + 2 * HEADLINE_PAD_PX);
+  const h = fontPx + 2 * HEADLINE_PAD_PX;
+  const x0 = Math.round(cx - w / 2);
+  const y0 = Math.round(cy - h / 2);
+  return [
+    `Dialogue: 2,${at(c.in)},${at(c.out)},Head,,0,0,0,,{\\an7\\pos(${x0},${y0})\\1c&HFFFFFF&\\p1}${roundedBoxPath(w, h, HEADLINE_RADIUS_PX)}`,
+    `Dialogue: 3,${at(c.in)},${at(c.out)},Head,,0,0,0,,{\\pos(${cx},${cy})}${assText(c.label)}`,
+  ];
 }
 
 /**
@@ -5767,7 +6302,18 @@ export function readLoudness(stderr) {
  * worker's, stops the pass: "Cannot select channel layout for the link between
  * filters". ffmpeg 8 makes the same sound either way.
  */
-export function loudnessApplyArgs(mix, measured, out, limiter = null) {
+export function loudnessApplyArgs(mix, measured, out, limiter = null, linear = false) {
+  // COP-354: under a room bed, pass one's gain alone, the same for every sample, ahead of the limiter: loudnorm's dynamic
+  // mode would lift the bed in a long pause. Only with the limiter: without it a plain gain can end over the peak bar
+  // where loudnorm keeps the film under it, so that cut takes today's pass.
+  if (linear && measured && limiter) {
+    return [
+      "-y", "-hide_banner", "-loglevel", "error", "-i", mix,
+      "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+      "-af", `volume=${round2(FINISH_LUFS - measured.i)}dB${limiter ? `,${limiter}` : ""},${stereo}`,
+      "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
+    ];
+  }
   const second = measured
     ? `:measured_I=${measured.i}:measured_TP=${measured.tp}:measured_LRA=${measured.lra}` +
       `:measured_thresh=${measured.thresh}:offset=${measured.offset}:linear=true`
@@ -5811,8 +6357,8 @@ function ffmpegReason(res) {
 }
 
 /** The mix normalized with pass one's numbers into `out`, through the limiter at `limit` when one is given. */
-function applyLoudness(mix, measured, out, limit) {
-  const args = loudnessApplyArgs(mix, measured, out, limit == null ? null : peakLimiter(limit));
+function applyLoudness(mix, measured, out, limit, linear = false) {
+  const args = loudnessApplyArgs(mix, measured, out, limit == null ? null : peakLimiter(limit), linear);
   const res = spawnSync("ffmpeg", args, { stdio: ["inherit", "inherit", "pipe"], encoding: "utf8", maxBuffer: 1 << 26 });
   if (res.status !== 0) {
     // ffmpeg's words still reach the log, and its reason leads the error:
@@ -5827,17 +6373,18 @@ function applyLoudness(mix, measured, out, limit) {
 /** Both passes on the mix, then the finished cut measured again. A receipt may
  * retain that final observation without changing the legacy mastering result.
  * `limit` (limitPeaks) is the limiter's ceiling, PEAK_LIMIT; a limited cut over
- * the limit is limited again lower (LIMIT_AGAIN_MAX), one under it is left as it is. */
-export function finishLoudnessPass(mix, out, limit = null, onMeasured = null) {
+ * the limit is limited again lower (LIMIT_AGAIN_MAX), one under it is left as it is.
+ * `linear` (COP-354, a room bed laid): pass two is pass one's gain alone (loudnessApplyArgs). */
+export function finishLoudnessPass(mix, out, limit = null, onMeasured = null, linear = false) {
   const measured = measureLoudness(mix);
   let ceiling = limit;
-  let finished = applyLoudness(mix, measured, out, ceiling);
+  let finished = applyLoudness(mix, measured, out, ceiling, linear);
   let again = 0;
   while (ceiling != null && finished && finished.tp > TRUE_PEAK_MAX_DB && again < LIMIT_AGAIN_MAX) {
     const lower = lowerPeakLimit(ceiling, finished.tp);
     if (lower >= ceiling) break;
     ceiling = lower;
-    finished = applyLoudness(mix, measured, out, ceiling);
+    finished = applyLoudness(mix, measured, out, ceiling, linear);
     again++;
   }
   const refusal = truePeakRefusal(finished);
@@ -5847,6 +6394,117 @@ export function finishLoudnessPass(mix, out, limit = null, onMeasured = null) {
     lufs: round2(finished.i), truePeak: round2(finished.tp), passes: measured ? 2 : 1,
     ...(limit != null ? { limited: true } : {}), ...(again > 0 ? { limitedAgain: again, limit: ceiling } : {}),
   };
+}
+
+/**
+ * COP-353: the worker's last guard (scout auto-cut.ts deadStretch) reads silences off the finished film with ffmpeg's
+ * silencedetect at these numbers (media-probe.ts SILENCE_NOISE, SILENCE_MIN_DURATION_SEC). A picked voice chain lifts
+ * the film's quiet floor over that noise level, so the cut reads them off the voice alone instead (heardSilences).
+ */
+export const GUARD_SILENCE = { noise: "-50dB", minSec: 0.5 };
+/** COP-353: said when other sounds lie under the voice, so the voice alone is not the film's silence. */
+const SOUNDS_UNDER_NOTE = "voiceSilences: music lies under the voice, so the worker's last guard reads the film's own silences, as today";
+/**
+ * A sound effect, a bed of its own or a reaction's tail sounds under only part of the voice: the voice alone is not the
+ * film's silence, and the film's own silences would be filled by a picked chain's floor or a room bed. So the pick is
+ * not used there, and the worker's last guard reads the film as today.
+ */
+const partlyUnderNote = (what, kept) =>
+  `${what}: a sound effect, a bed or a reaction's end lies under part of the voice, so the worker's last guard could not ` +
+  `hear a silent stretch with it; ${kept}`;
+
+/**
+ * COP-353: the voice's silences as today's cut would deliver it: the voice alone through `clean` (today's chain, or
+ * none), at the film's level (the loudness pass's gain, with finishLoudness), read as the worker reads a film's (paired
+ * starts and ends; a start with no end left out, as there), on the finished film's clock (the voice is the mix's clock,
+ * before the speed step); null when ffmpeg cannot make or read it.
+ */
+function heardSilences(timeline, { resolve, out, clean, levelSegments, finishLoudness, speed }) {
+  const base = path.resolve(path.dirname(out), path.basename(out, path.extname(out)));
+  const file = `${base}.voice-silence.wav`;
+  try {
+    const args = buildFfmpegArgs(timeline, { resolve, music: null, out: file, finish: { levelSegments, ...(clean ? { clean } : {}) }, voiceOnly: true });
+    if (spawnSync("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] }).status !== 0) return null;
+    const lufs = finishLoudness ? measureLufs(file) : null;
+    const gainDb = heardVoice(lufs) ? round2(FINISH_LUFS - lufs) : 0;
+    // The shortest silence on the film's clock: the voice runs before the speed step, so it is that much longer here.
+    const res = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-af",
+      `volume=${gainDb}dB,silencedetect=n=${GUARD_SILENCE.noise}:d=${roundMs(GUARD_SILENCE.minSec * speed)}`, "-f", "null", "-"],
+      { encoding: "utf8", maxBuffer: 1 << 26 });
+    if (res.status !== 0) return null;
+    const runs = [];
+    for (const line of String(res.stderr ?? "").split(/\r?\n/)) {
+      // COP-361: ffmpeg prints a tiny number with %g ("6.25e-05"); the exponent and a sign are part of the number.
+      const start = line.match(/silence_start\s*[:=]\s*([-+]?[\d.]+(?:e[-+]?\d+)?)/i);
+      if (start) {
+        runs.push({ start: Number(start[1]), duration: NaN });
+        continue;
+      }
+      const end = line.match(/silence_end\s*[:=]\s*([-+]?[\d.]+(?:e[-+]?\d+)?).*?silence_duration\s*[:=]\s*([-+]?[\d.]+(?:e[-+]?\d+)?)/i);
+      if (!end) continue;
+      const last = runs.at(-1);
+      if (last && !Number.isFinite(last.duration)) Object.assign(last, { end: Number(end[1]), duration: Number(end[2]) });
+      else runs.push({ start: Number(end[1]) - Number(end[2]), end: Number(end[1]), duration: Number(end[2]) });
+    }
+    return runs.filter((r) => Number.isFinite(r.duration))
+      .map((r) => ({ start: roundMs(r.start / speed), end: roundMs(r.end / speed), duration: roundMs(r.duration / speed) }));
+  } finally {
+    rmSync(file, { force: true });
+  }
+}
+
+/** COP-354: the two working files of a room bed, beside the cut: the voice measured alone, and the bed. */
+function roomPaths(out) {
+  const base = path.resolve(path.dirname(out), path.basename(out, path.extname(out)));
+  return { voice: `${base}.voice-level.wav`, bed: `${base}.room.wav` };
+}
+
+/** COP-354: a sound file's RMS level (dBFS), decoded as floats; null when ffmpeg cannot read it or it is silent. */
+function rmsDbOf(file) {
+  const res = spawnSync("ffmpeg", ["-v", "error", "-i", file, "-map", "0:a:0", "-ac", "1", "-f", "f32le", "-"], { maxBuffer: 1 << 30 });
+  if (res.status !== 0 || !res.stdout?.length) return null;
+  const bytes = res.stdout.subarray(0, res.stdout.length & ~3);
+  const x = new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));
+  let power = 0;
+  for (const v of x) power += v * v;
+  return power > 0 ? round2(10 * Math.log10(power / x.length)) : null;
+}
+
+/**
+ * COP-354: a room bed for this cut: the voice measured alone after its chain (one pass of its sound, no picture), the
+ * bed made by its preset for the film's whole length and measured, and the gain that puts its RMS ROOM_UNDER_DB under
+ * the voice's integrated loudness (gainUnder). Or, when one cannot be had, the note that says why; the cut then keeps
+ * its own faint bed.
+ */
+function roomBed(name, timeline, { resolve, out, clean, levelSegments, pictureSec }) {
+  const files = roomPaths(out);
+  const voiceArgs = buildFfmpegArgs(timeline, { resolve, music: null, out: files.voice, finish: { levelSegments, ...(clean ? { clean } : {}) }, voiceOnly: true });
+  if (spawnSync("ffmpeg", voiceArgs, { stdio: ["ignore", "ignore", "pipe"] }).status !== 0) {
+    rmSync(files.voice, { force: true });
+    return { note: `roomSound ${name}: ffmpeg could not render the voice alone, so the cut's own faint room tone stayed` };
+  }
+  const voiceLufs = measureLufs(files.voice);
+  rmSync(files.voice, { force: true });
+  if (!heardVoice(voiceLufs)) {
+    return { note: `roomSound ${name}: the voice had no loudness to set the room against, so the cut's own faint room tone stayed` };
+  }
+  const made = spawnSync("ffmpeg", roomBedArgs(name, pictureSec, files.bed), { stdio: ["ignore", "ignore", "pipe"] });
+  const bedRmsDb = made.status === 0 ? rmsDbOf(files.bed) : null;
+  const gainDb = gainUnder(voiceLufs, ROOM_UNDER_DB, bedRmsDb, null);
+  if (gainDb === null) {
+    rmSync(files.bed, { force: true });
+    return { note: `roomSound ${name}: ffmpeg could not make the room, so the cut's own faint room tone stayed` };
+  }
+  return { room: { file: files.bed, gainDb }, record: { sound: name, voiceLufs, bedRmsDb, gainDb, underDb: ROOM_UNDER_DB } };
+}
+
+/**
+ * COP-354: whether the cut lays its own faint room tone (ROOM_TONE), the bed a room sound stands in for: not on a cut
+ * laid on its measured map, a voice laid whole, a run with beds of its own (ElevenLabs), or one whose manifest turns
+ * the room tone off.
+ */
+export function laysOwnRoomTone({ mapped, wholeVoice, fileBeds, roomTone }) {
+  return !mapped && !wholeVoice && !fileBeds && roomTone !== false;
 }
 
 /** The filters of `names` this ffmpeg does not have. */
@@ -7007,10 +7665,14 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (finish?.pacePass && !paced) notes.push("this cut keeps a real-time clock, so pacePass did not speed it up or zoom it");
   const paceSpeed = finish?.paceSpeed ?? PACE_PASS.speed;
   if (paced) notes.push(paceZooms(timeline.spine, paceSpeed));
+  // addedCuts (COP-355): with each take's own framing now set, no join between two takes shows the same picture.
+  framingAtJoins(timeline.spine);
   const speed = paced
     ? paceSpeed
     : finish?.cutPace && !template && !timeline.wholeVoice && !protectedMotion ? speedFor(pictureSec, finish.targetSeconds) : 1;
   if (finish?.cutPace && (template || protectedMotion)) notes.push("template/action/listening/ending clocks remain real time; cutPace does not accelerate the cut");
+  // addedCuts (COP-355): the framing changes made, on the delivered film's clock, for the worker's last guard.
+  const framingChangesSec = finish?.addedCuts ? framingChangeTimes(timeline.spine, speed, timeline.cutaways) : null;
   if (timeline.sourceMap) {
     // The exact bytes every measured clock was read from, for whoever binds an approval to them.
     timeline.sourceMap.sources = readClocks.files().filter(exists).map((file) => {
@@ -7099,7 +7761,13 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ? lineCaptionScreens(timed(lineWords(timeline, storyboard)), cap)
           : captionScreens(timed(wordRows(timeline)), cap), endLayers);
       if (finish.captions) burned = screens;
-      burnedCards = finish.cards ? (copied ? copied.cards : storyboardCards(storyboard, timeline)) : [];
+      // COP-356: a run's sheet may put its card at the top, as a headline for the opening.
+      const headline = finish.cards && !copied && finish.cardPlace === "top";
+      burnedCards = finish.cards
+        ? (copied ? copied.cards : headline ? headlineCards(storyboard, timeline, { speed }) : storyboardCards(storyboard, timeline))
+        : [];
+      const drawn = burnedCards.find((c) => c.headline && c.label);
+      if (drawn) notes.push(`cardPlace: the card is a headline at the top, from the first frame to ${roundMs(drawn.out / speed)} s`);
       writeFileSync(here(ass), editAss({
         captions: finish.captionColours ? colourScreens(screens, storyboard) : screens,
         cap,
@@ -7119,13 +7787,28 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       );
     }
   }
-  // cleanVoice, where this ffmpeg has the filters. A voice laid whole is a song, kept as it is.
+  // cleanVoice, where this ffmpeg has the filters. A voice laid whole is a song, kept as it is. COP-353: voiceSound
+  // names another of the cut's chains in VOICE_CLEAN's place; where this ffmpeg lacks one of its filters, the voice is
+  // cleaned as before, and the record says why.
   let clean = null;
+  // The chain today's cut would clean the voice with (none where it would not), for the silences the guard reads.
+  let todayClean = null;
   if (finish?.cleanVoice && !timeline.mapped) {
-    const missing = timeline.wholeVoice ? [] : missingFilters(CLEAN_FILTERS);
+    const picked = finish.voiceSound ? VOICE_SOUNDS[finish.voiceSound] : null;
+    const needs = picked ? [...new Set([...chainFilters(picked), ...UNDER_FILTERS])] : [];
+    const missing = timeline.wholeVoice ? [] : missingFilters(picked ? [...new Set([...CLEAN_FILTERS, ...needs])] : CLEAN_FILTERS);
+    const own = CLEAN_FILTERS.filter((name) => missing.includes(name));
+    const pickedMissing = needs.filter((name) => missing.includes(name));
+    if (!timeline.wholeVoice && own.length === 0) todayClean = { voice: VOICE_CLEAN, under: UNDER_VOICE };
     if (timeline.wholeVoice) notes.push("the voice is a song laid whole, so it was kept as it is, not cleaned");
-    else if (missing.length > 0) notes.push(`this ffmpeg has no ${missing.join(", ")} filter, so the voice was not cleaned`);
-    else clean = { voice: VOICE_CLEAN, under: UNDER_VOICE };
+    else if (picked && pickedMissing.length === 0) clean = { voice: picked, under: UNDER_VOICE };
+    else if (own.length > 0) notes.push(`this ffmpeg has no ${own.join(", ")} filter, so the voice was not cleaned`);
+    else {
+      if (picked) {
+        notes.push(`this ffmpeg has no ${pickedMissing.join(", ")} filter, so the voice was cleaned as before, not with voiceSound ${finish.voiceSound}`);
+      }
+      clean = { voice: VOICE_CLEAN, under: UNDER_VOICE };
+    }
   }
   let peakLimit = null;
   if (finish?.limitPeaks) {
@@ -7136,7 +7819,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const rendered = finish?.finishLoudness ? paths.mix : out;
   const meters = finish?.cutChecks ? {
     voice: paths.voice, bed: paths.bed,
-    ...(manifest.templateMotion?.enabled === true || manifest.roomTone === false ? { allowAbsentBed: true } : {}),
+    ...(manifest.templateMotion?.enabled === true || manifest.roomTone === false || finish.roomSound === "none" ? { allowAbsentBed: true } : {}),
   } : null;
   // The burn reads its file from the folder ffmpeg runs in, so every path is absolute then.
   const at = ass ? (file) => path.resolve(dir, file) : here;
@@ -7216,6 +7899,65 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       timeline.musicSource = { file: music, ...decoded, loop: true };
     }
   }
+  // COP-353: a picked chain lifts the film's quiet floor over the worker's silence probe (-50 dB), which would then
+  // hear no held, voiceless stretch. So the voice is heard alone, as today's cut would deliver it (its own chain, at the
+  // film's level, no bed), and its silences go to the worker in the record (`voiceSilences`). If they cannot be read,
+  // the pick is not used and the voice is cleaned as before. The voice alone is the film's silence only when nothing
+  // else lies under it. Music runs under the whole film and fills its silences today already, so the worker reads the
+  // film's own silences, as today, and the record says so. A sound effect, a bed of its own or a reaction's tail lies
+  // under only part of it: the film's other silences would be hidden from the guard, so the pick is not used.
+  const musicUnder = Boolean(music);
+  const partlyUnder = !musicUnder && ((mixSound?.effects?.length ?? 0) > 0 || (mixSound?.beds?.length ?? 0) > 0 ||
+    timeline.spine.some((seg) => seg.audio === "clip" && seg.reaction?.tail));
+  let voiceSilencesHeard = null;
+  if (clean && finish.voiceSound && clean.voice === VOICE_SOUNDS[finish.voiceSound]) {
+    if (musicUnder) {
+      notes.push(SOUNDS_UNDER_NOTE);
+    } else if (partlyUnder) {
+      notes.push(partlyUnderNote(`voiceSound ${finish.voiceSound}`, "the voice was cleaned as before"));
+      clean = todayClean;
+    } else {
+      voiceSilencesHeard = heardSilences(timeline, {
+        resolve: here, out, clean: todayClean, levelSegments: !finish.finishLoudness, finishLoudness: finish.finishLoudness, speed,
+      });
+      if (!voiceSilencesHeard) {
+        notes.push(`voiceSound ${finish.voiceSound}: the voice's silences could not be read, so the voice was cleaned as before`);
+        clean = todayClean;
+      }
+    }
+  }
+  // COP-354, roomSound: the cut's own bed in the place of its faint brown one, where it lays that one; none lays none.
+  let room = null;
+  let roomRecord = null;
+  if (finish?.roomSound) {
+    const laysOwn = laysOwnRoomTone({ mapped: timeline.mapped === true, wholeVoice: Boolean(timeline.wholeVoice), fileBeds: mixSound?.beds?.length ?? 0, roomTone: mixSound?.roomTone });
+    if (!laysOwn) notes.push(`roomSound ${finish.roomSound} was not applied: this cut lays no room tone of its own`);
+    else if (finish.roomSound === "none") {
+      room = { none: true };
+      roomRecord = { sound: "none" };
+    } else {
+      // A bed fills every silence of the film: the worker's guard reads the voice's own (COP-353's pass, once a cut),
+      // unless music lies under the voice too, which fills the film's silences today already. A sound under only part
+      // of it (partlyUnder) keeps the cut's own faint bed.
+      if (!musicUnder && !partlyUnder) {
+        voiceSilencesHeard ??= heardSilences(timeline, {
+          resolve: here, out, clean: todayClean, levelSegments: !finish.finishLoudness, finishLoudness: finish.finishLoudness, speed,
+        });
+      }
+      const made = partlyUnder
+        ? { note: partlyUnderNote(`roomSound ${finish.roomSound}`, "the cut's own faint room tone stayed") }
+        : musicUnder || voiceSilencesHeard
+          ? roomBed(finish.roomSound, timeline, { resolve: at, out, clean, levelSegments: !finish.finishLoudness, pictureSec })
+          : { note: `roomSound ${finish.roomSound}: the voice's silences could not be read, so the cut's own faint room tone stayed` };
+      if (made.note) notes.push(made.note);
+      else {
+        ({ room, record: roomRecord } = made);
+        if (musicUnder && !notes.includes(SOUNDS_UNDER_NOTE)) notes.push(SOUNDS_UNDER_NOTE);
+      }
+    }
+  }
+  // With neither a picked chain nor a bed in the film after all, the film is today's: the worker reads its own silences.
+  if (!room?.file && !(clean && finish?.voiceSound && clean.voice === VOICE_SOUNDS[finish.voiceSound])) voiceSilencesHeard = null;
   const ffmpegArgs = buildFfmpegArgs(timeline, {
     resolve: at,
     music: music ? at(music) : null,
@@ -7224,6 +7966,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       ? {
         finish: {
           levelSegments: !finish.finishLoudness, ass, speed, ...(finish.finishLoudness ? { pcmMix: true } : {}),
+          ...(room ? { room } : {}),
           ...(pictures.length ? { pictures } : {}), ...(clean ? { clean } : {}), ...(meters ? { meters } : {}),
           ...(endLayers ? { endCard: endLayers } : {}),
         },
@@ -7236,6 +7979,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     rmSync(meters.bed, { force: true });
   }
   const res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass ? { cwd: path.resolve(dir) } : {}) });
+  if (room?.file) rmSync(room.file, { force: true });
   if (res.status !== 0) {
     const quoted = ffmpegArgs.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
     throw new FirstCutError(1, `ffmpeg failed. The command it ran:\n  ffmpeg ${quoted}`);
@@ -7251,7 +7995,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (finish?.finishLoudness) {
     try {
       loudness = finishLoudnessPass(rendered, out, peakLimit, template
-        ? (measured) => { loudnessMeasurement = measured; } : null);
+        ? (measured) => { loudnessMeasurement = measured; } : null, Boolean(room?.file));
     } catch (error) {
       // A limited pass already limited itself again (#4573); the same mix would only be refused the same way.
       if (!template || peakLimit != null || !(error instanceof FirstCutError)) throw error;
@@ -7405,10 +8149,17 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     // COP-300: the caption file is timed on the finished, sped-up cut's clock, as it is burned after the speed step.
     ...(ass && speed !== 1 ? { captionClock: "final" } : {}),
     ...(sync ? { sync: syncRecord(sync) } : {}),
+    // COP-353: the voice's silences as today's cut delivers it, which the worker's last guard reads in place of the film's.
+    ...(voiceSilencesHeard ? { voiceSilences: voiceSilencesHeard } : {}),
+    // COP-354: the room sound the cut laid, and its level against the voice.
+    ...(roomRecord ? { room: roomRecord } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
   writeFileSync(paths.pace, `${JSON.stringify(pace, null, 2)}\n`);
-  return withSound({ out, durationSec, manifest, timeline, music, rows, sidecars, pace, ...(sync ? { sync } : {}) });
+  return withSound({
+    out, durationSec, manifest, timeline, music, rows, sidecars, pace, ...(sync ? { sync } : {}),
+    ...(framingChangesSec ? { framingChangesSec } : {}),
+  });
 }
 
 /**
@@ -7491,7 +8242,10 @@ function main() {
     console.log("Sound at the edges (listen before uploading; the cut is unchanged):");
     for (const line of edges) console.log("  " + line);
   }
-  console.log(`Room tone: ${manifest.roomTone === false ? "off" : "under the whole ad"}. Music bed: ${music ?? "none"}`);
+  // COP-354: a room sound of the run's saved sheet is named, with its level; with none, there is none.
+  const room = cut.pace?.room;
+  const roomWords = room ? (room.sound === "none" ? "none" : `${room.sound}, ${ROOM_UNDER_DB} dB under the voice`) : null;
+  console.log(`Room tone: ${roomWords ?? (manifest.roomTone === false ? "off" : "under the whole ad")}. Music bed: ${music ?? "none"}`);
   if (cut.pace) {
     const { pace } = cut;
     const loud = pace.loudness ? `, ${pace.loudness.lufs} LUFS, true peak ${pace.loudness.truePeak} dBTP` : "";

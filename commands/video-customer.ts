@@ -109,7 +109,8 @@ export interface CustomerRun {
    */
   waitingScenes?: CustomerHeldScene[];
   /** #4582: what the run has spent (the server's own figure, "so far" while it works) beside its estimate. */
-  spend?: { spentUsd: number; estimateUsd: number | null; final: boolean; line: string };
+  /** #4811: `storyboardEstimate`, at the storyboard stop, the storyboard's own estimate when it differs. Absent from older servers. */
+  spend?: { spentUsd: number; estimateUsd: number | null; final: boolean; line: string; storyboardEstimate?: { usd: number; sentence: string } };
   /** #4582: the video reached its estimate and waits on the member's answer, in the server's sentence. */
   spendAsk?: { sentence: string };
   /** #4582: the member's last keep going. */
@@ -544,7 +545,7 @@ export function customerStatusLines(run: CustomerRun, dashboardUrl: string): str
     run.mode === "guided" ? "Storyboard first" : "In one go",
     "",
     ...customerStageLines(run, page),
-    ...(run.spend ? [run.spend.line] : []),
+    ...(run.spend ? [run.spend.line, ...(run.spend.storyboardEstimate ? [run.spend.storyboardEstimate.sentence] : [])] : []),
     ...spendAskLines(run, run.runId),
     ...(run.scenes ?? []).flatMap(scene => scene.clip?.speech
       ? [`Scene ${scene.sceneIndex} speech:`, ...speechSummaryLines(scene.clip.speech).map(line => `  ${line}`)] : []),

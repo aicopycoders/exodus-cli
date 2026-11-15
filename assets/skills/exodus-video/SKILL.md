@@ -1032,10 +1032,14 @@ say yes. If the price changed by then, the start refuses and says the new
 price: show that and ask again. An older CLI is told to update first. An
 admin's start begins at once, as before.
 
-**A video that reached its estimate.** A regular video (not One-take) keeps
-the estimate it showed before the start. When its next take would cost more
-than that, it stops before ordering it and waits for the member. `exodus
-video status` then prints a line that starts "Waiting for you:", with what
+**A video that needs the member's OK to spend more.** A regular video (not
+One-take) keeps the estimate it showed before the start. A scene's first take
+does not stop to ask, even past it; when any other take would take the video's cost
+past it, the video stops before ordering that take and waits for the member,
+often while its cost so far is still under the estimate. At the storyboard,
+`exodus video status` says the storyboard's own estimate when it differs from
+the one the member started with. When the video waits, `exodus video status`
+prints a line that starts "Waiting for you:", with what
 the video has cost so far, its estimate, what it wants to film next and
 about what that costs, and under it two commands: `exodus video keep-going
 <runId>` and `exodus video stop-here <runId>`. That choice is the member's,

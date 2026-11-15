@@ -283,7 +283,7 @@ export function customerStatusLines(run, dashboardUrl) {
         run.mode === "guided" ? "Storyboard first" : "In one go",
         "",
         ...customerStageLines(run, page),
-        ...(run.spend ? [run.spend.line] : []),
+        ...(run.spend ? [run.spend.line, ...(run.spend.storyboardEstimate ? [run.spend.storyboardEstimate.sentence] : [])] : []),
         ...spendAskLines(run, run.runId),
         ...(run.scenes ?? []).flatMap(scene => scene.clip?.speech
             ? [`Scene ${scene.sceneIndex} speech:`, ...speechSummaryLines(scene.clip.speech).map(line => `  ${line}`)] : []),

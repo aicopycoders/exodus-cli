@@ -97,6 +97,10 @@ export interface CustomerRun {
         estimateUsd: number | null;
         final: boolean;
         line: string;
+        storyboardEstimate?: {
+            usd: number;
+            sentence: string;
+        };
     };
     spendAsk?: {
         sentence: string;

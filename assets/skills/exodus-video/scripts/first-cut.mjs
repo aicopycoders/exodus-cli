@@ -288,6 +288,205 @@ function wholeLinesOf(raw) {
   return ids.length > 0 ? { wholeLines: ids } : {};
 }
 
+/**
+ * COP-357, the phone look: a run's saved sheet ("Ultra realism"), written by the worker as three settings, each read only when
+ * true, on a cut of its own clock (not a template launch's, not one laid on its measured map).
+ * - fps30: the finished file runs at DELIVERY_FPS. The last step of the picture, after the words are burned in, repeats
+ *   one frame in four (the fps filter), so the cut's own clock (FPS), its edges, its speed step, its captions and its
+ *   sound stay as they are.
+ * - lensSmudge: LENS_SMUDGE, a soft haze of the picture itself laid back over it near one top corner, the brighter
+ *   one about 1.0 s into the joined takes (brighterSide).
+ * - phonePass: PHONE_PASS, grain that changes every frame, softer colour, a light halo and a slow drift of the
+ *   exposure. No shake.
+ * Both picture passes run on the joined takes, before any cutaway, picture, end card or burned word is laid over them,
+ * so those stay sharp. The numbers are Luke's, from his free realism test at its light strength and his locked smudge
+ * at half strength: tuned at 720x1280, the smudge's places and sizes are scaled here to WIDTH x HEIGHT; his own 1080 run
+ * of the phone pass kept its numbers. A pass whose filters this ffmpeg lacks is left out, with a note.
+ * With either picture pass the takes are also read before the look, in the same render (LOOK_PROBE); a 30 fps film's
+ * motion is read back on FPS, and its caption check reads each caption on the frame the delivered file shows it on.
+ */
+export const DELIVERY_FPS = 30;
+export const LENS_SMUDGE = {
+  /** Where the side is read: this far into the cut. */
+  readAtSec: 1,
+  /** The mask: its peak of 255 (half of full), its reach in pixels, how it stretches across and down, its falloff. */
+  strength: 117, radius: 900, stretch: [1.1, 0.9], power: 1.25,
+  /** The mask's centre on each side, in pixels of WIDTH x HEIGHT. */
+  centre: { left: [165, 570], right: [900, 450] },
+  /** The haze: the picture made this small, blurred round (sigma) and along a line (angle, radius), averaged, scaled up. */
+  haze: { width: 180, height: 320, sigma: 6.5, angle: 32, radius: 17 },
+  /** The haze softened before it is merged in. */
+  tone: { contrast: 0.8, brightness: 0.05, saturation: 0.9 },
+};
+export const PHONE_PASS = {
+  grain: { luma: 4, chroma: 2 },
+  chromaBlur: 0.8,
+  halo: { size: 5, amount: 0.35 },
+  /** The exposure's drift, as eq expressions of the time. */
+  brightness: "0.008*sin(2*PI*t*0.23+1)+0.004*sin(2*PI*t*0.71+2.4)",
+  gamma: "1+0.016*sin(2*PI*t*0.17)",
+};
+/** The filters each picture pass needs that a build of ffmpeg may leave out. */
+export const LOOK_FILTERS = {
+  lensSmudge: ["gblur", "dblur", "blend", "eq", "geq", "maskedmerge"],
+  phonePass: ["gblur", "eq", "unsharp", "noise"],
+};
+
+/**
+ * COP-357, fix A: the look's exposure drift hides a frozen picture from both freeze checks (its grain from the worker's
+ * too): the worker's freezedetect compares each frame with the first of the freeze, the cut's motion read each frame with
+ * the one before, and the drift steps the picture a whole level at a time. So with either
+ * picture pass the joined takes are split before the look, in the same render, and a probe branch reads them as the
+ * two checks read a film: freezedetect at the worker's -60 dB (scout media-probe.ts FREEZE_NOISE) from 0.2 s, as the
+ * guard reads a film whose framing the cut changed (scout auto-cut.ts FRAMING_FREEZE_MIN_SEC: an added cut halves a
+ * held pause into pieces under 2 s), and the cut's motion rows, each into a side file in the folder (read, then taken
+ * away). The worker joins the runs that meet at a framing change and drops those under 2 s, as it does the film's own.
+ * Its times are the takes' clock, before the speed step.
+ */
+export const LOOK_PROBE = { noise: "-60dB", minSec: 0.2, freeze: "edit.lookfreeze.txt", motion: "edit.lookmotion.txt" };
+/** The motion read of a picture: each frame's change from the one before, on a 90 px wide copy (motionArgs, LOOK_PROBE). */
+const MOTION_READ = "scale=90:-2,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG";
+
+/** The probe branch's filters, from the takes' split to its sink. */
+export function lookProbeFilter() {
+  return `freezedetect=n=${LOOK_PROBE.noise}:d=${LOOK_PROBE.minSec},metadata=print:file=${LOOK_PROBE.freeze},` +
+    `${MOTION_READ}:file=${LOOK_PROBE.motion},nullsink`;
+}
+
+/** freezedetect's hits in the probe's side file as runs, in its order; one still open at the end runs to `endSec`. */
+export function lookFreezeRunsOf(text, endSec) {
+  const runs = [];
+  let open = null;
+  for (const line of String(text ?? "").split("\n")) {
+    // ffmpeg prints a time with %g ("4.16667e-05" for frame 0): the exponent and a sign are part of the number (COP-361).
+    const hit = line.match(/^lavfi\.freezedetect\.freeze_(start|end)=([-+]?[\d.]+(?:e[-+]?\d+)?)/i);
+    if (!hit) continue;
+    if (hit[1] === "start") open = Number(hit[2]);
+    else if (open !== null) {
+      runs.push([open, Number(hit[2])]);
+      open = null;
+    }
+  }
+  if (open !== null && endSec > open) runs.push([open, endSec]);
+  return runs;
+}
+
+/** The span from `from` to `to` less each covered [a, b]: the pieces left. */
+function uncovered(from, to, covered) {
+  let pieces = [[from, to]];
+  for (const [a, b] of covered) {
+    pieces = pieces.flatMap(([s, e]) => (b <= s || a >= e ? [[s, e]] : [[s, Math.min(e, a)], [Math.max(s, b), e]].filter(([x, y]) => y - x > 1e-9)));
+  }
+  return pieces;
+}
+
+/**
+ * What the probe leaves out, on the takes' clock: what covers the whole frame, so the takes are not seen there (a
+ * cutaway, the end card). A product picture sits in its box with the takes around it, so it covers nothing.
+ */
+export function lookCovered({ cutaways = [], pictures: _pictures = [], endCard = null }) {
+  return [...cutaways.map((c) => [c.startSec, c.startSec + c.seconds]), ...(endCard ? [[endCard.in, endCard.out]] : [])];
+}
+
+/**
+ * The probe's two side files, read on the film's clock (divided by the speed), with what covers the whole frame left
+ * out (lookCovered): the freeze runs for the worker's guard, and the motion rows for the cut's freeze check (a covered
+ * row never counts as still), and how many frame changes it read of the takes' (`rowsRead` of `changes`). Null when
+ * either file cannot be read. Both files are taken away.
+ */
+function readLookProbe(here, { pictureSec, speed, covered }) {
+  let freezeText;
+  let motionText;
+  try {
+    freezeText = readFileSync(here(LOOK_PROBE.freeze), "utf8");
+    motionText = readFileSync(here(LOOK_PROBE.motion), "utf8");
+  } catch {
+    return null;
+  } finally {
+    rmSync(here(LOOK_PROBE.freeze), { force: true });
+    rmSync(here(LOOK_PROBE.motion), { force: true });
+  }
+  const freezes = lookFreezeRunsOf(freezeText, pictureSec)
+    .flatMap(([from, to]) => uncovered(from, to, covered))
+    .map(([from, to]) => ({ start: roundMs(from / speed), end: roundMs(to / speed), duration: roundMs(to / speed - from / speed) }));
+  const read = readMotion(motionText);
+  const rows = read.map((r) => ({ t: r.t / speed, y: covered.some(([a, b]) => r.t >= a && r.t < b) ? Infinity : r.y }));
+  return { freezes, rows, rowsRead: read.length, changes: Math.max(0, Math.round(pictureSec * FPS) - 1) };
+}
+
+/** Two freeze runs of one hold, read on two clocks, can miss each other by less than a frame: one run within this. */
+const FREEZE_JOIN_SEC = 1 / FPS;
+
+/** Freeze runs ({ at, sec }) merged where they overlap or come within FREEZE_JOIN_SEC, in time order. */
+export function mergedFreezes(runs) {
+  const out = [];
+  for (const run of [...runs].sort((a, b) => a.at - b.at)) {
+    const last = out.at(-1);
+    if (last && run.at <= last.at + last.sec + FREEZE_JOIN_SEC + 1e-9) last.sec = roundMs(Math.max(last.at + last.sec, run.at + run.sec) - last.at);
+    else out.push({ ...run });
+  }
+  return out;
+}
+
+/**
+ * COP-357: when the cut's 24 fps frame that starts at `sec` is first seen in its file repeated to `fps` frames a second.
+ * The fps filter shows frame n first at frame floor(n x fps / 24 + 0.5) (rounding to nearest, its default).
+ */
+export function deliveredSeenSec(sec, fps) {
+  const n = Math.round(sec * FPS);
+  return Math.floor((n * fps) / FPS + 0.5) / fps;
+}
+
+/** lensSmudge's filters, from the picture labelled `input` to `output`, its mask centred on the `side` top corner. */
+export function lensSmudgeFilters(input, side, output) {
+  const s = LENS_SMUDGE;
+  const [x, y] = s.centre[side];
+  const h = s.haze;
+  const t = s.tone;
+  return [
+    `[${input}]format=gbrp,split=3[lkpic][lkbase][lksmall]`,
+    `[lksmall]scale=${h.width}:${h.height},split[lksmall1][lksmall2]`,
+    `[lksmall1]gblur=sigma=${h.sigma}[lkround]`,
+    `[lksmall2]dblur=angle=${h.angle}:radius=${h.radius}[lkline]`,
+    `[lkround][lkline]blend=all_mode=average,scale=${WIDTH}:${HEIGHT}:flags=bilinear[lkhaze]`,
+    `[lkpic][lkhaze]blend=all_mode=screen:all_opacity=1,eq=contrast=${t.contrast}:brightness=${t.brightness}:saturation=${t.saturation},format=gbrp[lkhazed]`,
+    // One frame of mask, made once: maskedmerge holds an input's last frame to the end of the others (ffmpeg's framesync).
+    `nullsrc=s=${WIDTH}x${HEIGHT}:r=${FPS},format=gray,` +
+      `geq=lum=${s.strength}*pow(clip(1-hypot((X-${x})/${s.stretch[0]}\\,(Y-${y})/${s.stretch[1]})/${s.radius}\\,0\\,1)\\,${s.power}),` +
+      "trim=end_frame=1,format=gbrp[lkmask]",
+    `[lkbase][lkhazed][lkmask]maskedmerge,format=yuv420p[${output}]`,
+  ];
+}
+
+/** phonePass's filter chain. */
+export function phonePassFilter() {
+  const p = PHONE_PASS;
+  const { size, amount } = p.halo;
+  return `gblur=sigma=${p.chromaBlur}:planes=6,unsharp=${size}:${size}:${amount}:${size}:${size}:0,` +
+    `noise=c0s=${p.grain.luma}:c0f=t+u:c1s=${p.grain.chroma}:c1f=t+u:c2s=${p.grain.chroma}:c2f=t+u,` +
+    `eq=brightness=${p.brightness}:gamma=${p.gamma}:eval=frame`;
+}
+
+/**
+ * lensSmudge's side: the top corner that is brighter, "left" or "right", in one frame of `file` at `atSec`, made 2 by 3
+ * pixels of grey (each top pixel is one half of the frame's top third); null when the frame cannot be read.
+ */
+export function brighterSide(file, atSec) {
+  const res = spawnSync("ffmpeg", [
+    "-v", "error", "-ss", sec(atSec), "-i", file, "-frames:v", "1", "-vf", "scale=2:3:flags=area,format=gray", "-f", "rawvideo", "-",
+  ], { maxBuffer: 1 << 16 });
+  const px = res.status === 0 && res.stdout?.length >= 2 ? res.stdout : null;
+  return px ? (px[0] > px[1] ? "left" : "right") : null;
+}
+
+/** The take and its time that the cut shows about `atSec` in (a still shows its picture from its start). */
+function spineFrameAt(spine, atSec) {
+  const seg = spine.find((s) => s.startSec + s.seconds > atSec) ?? spine.at(-1);
+  if (!seg) return null;
+  const into = Math.max(0, Math.min(atSec - seg.startSec, seg.seconds));
+  return { file: seg.file, atSec: seg.source === "clip" ? (seg.inSec ?? 0) + into : 0 };
+}
+
 /** Plan 14's on/off cut checks, each read only with cutChecks; paceCheck also carries its numbers. */
 const PLAN_14_CHECKS = ["floorCheck", "flashCheck", "levelStepCheck", "voFitCheck", "dashGapCheck", "nameCheck"];
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -343,6 +542,9 @@ export function finishingOf(manifest) {
     // COP-355: a saved sheet's pause level and cuts added, each by its name; the lines no added cut falls inside with it.
     ...(nameIn(PAUSE_TRIMS, f.pauseTrim) ? { pauseTrim: f.pauseTrim } : {}),
     ...(nameIn(ADDED_CUTS, f.addedCuts) ? { addedCuts: f.addedCuts, ...wholeLinesOf(f.wholeLines) } : {}),
+    ...(f.fps30 === true ? { fps30: true } : {}),
+    ...(f.lensSmudge === true ? { lensSmudge: true } : {}),
+    ...(f.phonePass === true ? { phonePass: true } : {}),
     // COP-356: the card as a headline at the top (headlineCards), a name only the worker writes from a run's sheet.
     ...(on.cards && f.cardPlace === "top" ? { cardPlace: "top" } : {}),
   };
@@ -1075,6 +1277,13 @@ const SETTLED_WINDOWS = 10;
  * silence goes while a soft breath and room tone stay (scout trim.ts).
  */
 const SOUND_OVER_FLOOR_DB = 25;
+/**
+ * #4803 (a number of ours, for Daniel): reading a word's sound out past its listed edge at a pause level, a dip under
+ * SOUND_DB this long or shorter is still the word (the hush before a "t", as in "eight").
+ */
+const PAUSE_EDGE_BRIDGE_SEC = 0.1;
+/** #4803 (a number of ours, for Daniel): a run past such a dip is the word's when it comes within this of the word's loudest. */
+const PAUSE_EDGE_WORD_DB = 12;
 const FAINT_SOUND_DB = -45;
 /** The directions that ask for a pause (scout clip-qc.ts PAUSE_DIRECTION, NO_PAUSE_DIRECTION, lineWrittenPause). */
 const PAUSE_DIRECTION =
@@ -1139,28 +1348,24 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
   });
   const aligned = alignScript(words ?? [], written);
   if (!aligned) return [];
-  const { expected, heardTokenOf, heardWordOf, spokenWords: spoken } = aligned;
+  const { expected, heard: heardTokens, heardTokenOf, heardWordOf, spokenWords: spoken } = aligned;
+  // COP-355 (#4803): at one of Luke's pause levels, a pause's cut reads where the words' sound really ends and starts.
+  const level = PAUSE_LEVELS.has(jump) && levels ? jump : null;
   const cuts = [];
-  for (let t = 0; t + 1 < heardWordOf.length; t++) {
-    if (heardTokenOf[t + 1] !== heardTokenOf[t] + 1) continue;
-    const to = heardWordOf[t + 1];
-    if (heardWordOf[t] === to) continue;
-    // A joined script token keeps its first word's line and lead-in.
-    const [a, b] = [pieces[expected.sourceIndex[t]], pieces[expected.sourceIndex[t + 1]]];
-    const newLine = a.li !== b.li;
-    // A name heard split in two (#2300) ends on its last heard word.
-    const [earlier, later] = [words[spoken.findLast((w) => w < to)], words[to]];
-    const sentenceBreak = newLine || SENTENCE_END.test(b.before) || heardSentenceEnd(earlier.w);
+  const cutPause = (earlier, later, { sentenceBreak, newLine, nextLine }) => {
     // Inside a sentence only jumpCut acts, and only on a pause over its longest.
-    if (!sentenceBreak && !(jump && jumpCutSpan(earlier.e, later.s, jump))) continue;
-    if (WRITTEN_PAUSE.test(b.before) || lines[a.li].asksPause || lines[b.li].asksPause) continue;
-    if (newLine && lines[a.li].cuesBeat) continue;
+    if (!sentenceBreak && !(jump && jumpCutSpan(earlier.e, later.s, jump))) return;
     const gap = later.s - earlier.e;
     const heard = levels && soundBetween(levels, earlier.e, later.s);
     // A sound's frame edges widen the cut, so none of it is left in.
     const sound = heard && { s: Math.max(floorFrame(heard.s), ceilFrame(earlier.e)), e: ceilFrame(heard.e) };
     const removed = sound ? sound.e - sound.s : 0;
     const spans = sound ? [sound] : [];
+    // #4803: a word list can time a word late or far too short ("eight" listed from 4.50 s when it is heard from
+    // 4.24 s), so at a level the air each side is kept from where the words' sound really ends and starts (heardEdge).
+    // Which pauses are cut still goes by the listed gap.
+    const wordEnd = level ? heardEdge(levels, earlier.e, 1, sound ? sound.s : later.s, peakDbOf(levels, earlier)) : earlier.e;
+    const wordStart = level ? heardEdge(levels, later.s, -1, sound ? sound.e : wordEnd, peakDbOf(levels, later)) : later.s;
     const [breakMax, gapKeep] =
       lineGap && newLine ? [lineGap.max, lineGap.keep] : [gapMax, SENTENCE_GAP_KEEP_SEC];
     // jumpCut: a pause over its longest keeps its two edges, with a sound in it taken out whole.
@@ -1172,11 +1377,11 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
       // between the kept length and the longest allowed.
       const back = (t) => (sound && t > sound.s ? t + removed : t);
       const [keepAfter, keepBefore] = jumped ? [jump.keepAfter, jump.keepBefore] : [gapKeep / 2, gapKeep / 2];
-      const after = ceilFrame(earlier.e + keepAfter);
+      const after = ceilFrame(wordEnd + keepAfter);
       // COP-355: at one of Luke's pause levels, a sound that starts inside the air kept after the word takes that air
       // with it: the silence's cut starts with the sound's, so no piece of the pause of a frame or two is left between them.
       const s = jumped && PAUSE_LEVELS.has(jump) && sound && sound.s < after - 1e-6 ? sound.s : back(after);
-      const e = back(floorFrame(later.s - removed - keepBefore));
+      const e = back(floorFrame(wordStart - removed - keepBefore));
       if (e > s) spans.push({ s, e });
     }
     const merged = [];
@@ -1186,11 +1391,36 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
       else merged.push({ ...span });
     }
     const kept = gap - merged.reduce((sum, c) => sum + c.e - c.s, 0);
-    const split = lineGap && newLine && paused ? b.li : null;
+    const split = lineGap && newLine && paused ? nextLine : null;
     merged.forEach(({ s, e }, m) => {
       const cut = { s, e, after: earlier.w, gap, kept, sound: Boolean(sound) };
       cuts.push(split !== null && m === merged.length - 1 ? { ...cut, atLine: split } : cut);
     });
+  };
+  for (let t = 0; t + 1 < heardWordOf.length; t++) {
+    const to = heardWordOf[t + 1];
+    if (heardWordOf[t] === to) continue;
+    // A joined script token keeps its first word's line and lead-in.
+    const [a, b] = [pieces[expected.sourceIndex[t]], pieces[expected.sourceIndex[t + 1]]];
+    const newLine = a.li !== b.li;
+    const keptWhole = WRITTEN_PAUSE.test(b.before) || lines[a.li].asksPause || lines[b.li].asksPause || (newLine && lines[a.li].cuesBeat);
+    if (heardTokenOf[t + 1] !== heardTokenOf[t] + 1) {
+      // #4806: at one of Luke's pause levels, a word heard between two script words that the script does not have (an
+      // "um") is a heard word like any other: each pause from the earlier script word through it to the later one is
+      // cut at the level. Neither word is touched, and the pauses a script word's place keeps whole stay whole.
+      if (!PAUSE_LEVELS.has(jump) || keptWhole) continue;
+      const from = heardTokens.lastSourceIndex[heardTokenOf[t]];
+      const chain = [from, ...spoken.filter((w) => w > from && w < to), to];
+      for (let k = 0; k + 1 < chain.length; k++) {
+        cutPause(words[chain[k]], words[chain[k + 1]], { sentenceBreak: false, newLine: false, nextLine: null });
+      }
+      continue;
+    }
+    // A name heard split in two (#2300) ends on its last heard word.
+    const [earlier, later] = [words[spoken.findLast((w) => w < to)], words[to]];
+    const sentenceBreak = newLine || SENTENCE_END.test(b.before) || heardSentenceEnd(earlier.w);
+    if (keptWhole) continue;
+    cutPause(earlier, later, { sentenceBreak, newLine, nextLine: b.li });
   }
   return cuts;
 }
@@ -1222,6 +1452,43 @@ function soundBetween(levels, fromSec, toSec) {
     resumed = settled;
   }
   return resumed < 0 ? null : { s: quiet * windowSec, e: resumed * windowSec };
+}
+
+/**
+ * #4803: at one of Luke's pause levels, where a word's sound really ends (`dir` 1, from its listed end `from`) or starts
+ * (`dir` -1, from its listed start) on the pause's side, never past `bound`. A run of windows at SOUND_DB or over, from
+ * the listed edge or past a dip of PAUSE_EDGE_BRIDGE_SEC or less, is the word's when it comes within PAUSE_EDGE_WORD_DB
+ * of the word's own loudest window (`wordPeakDb`): the rest of a word its list timed too short ("eight" listed from
+ * 4.50 s and heard from 4.24 s, its "t" after a hush), where a breath, a click or a room's steady noise is quieter. The
+ * edge only ever moves out into the pause.
+ */
+export function heardEdge(levels, from, dir, bound, wordPeakDb) {
+  const { db, windowSec } = levels;
+  const bridge = Math.round(PAUSE_EDGE_BRIDGE_SEC / windowSec);
+  const step = dir > 0 ? 1 : -1;
+  const inPause = (i) => i >= 0 && i < db.length && (dir > 0 ? i * windowSec < bound - 1e-9 : (i + 1) * windowSec > bound + 1e-9);
+  const edgeOf = (i) => (dir > 0 ? Math.min(bound, (i + 1) * windowSec) : Math.max(bound, i * windowSec));
+  let i = dir > 0 ? Math.ceil(from / windowSec - 1e-9) : Math.floor(from / windowSec + 1e-9) - 1;
+  let edge = from;
+  for (;;) {
+    let dip = 0;
+    while (inPause(i) && db[i] < SOUND_DB && dip <= bridge) { i += step; dip++; }
+    if (!inPause(i) || dip > bridge) break;
+    let loudest = -Infinity;
+    let far = i;
+    for (; inPause(i) && db[i] >= SOUND_DB; i += step) { loudest = Math.max(loudest, db[i]); far = i; }
+    if (loudest < wordPeakDb - PAUSE_EDGE_WORD_DB) break;
+    edge = edgeOf(far);
+  }
+  return dir > 0 ? Math.max(from, edge) : Math.min(from, edge);
+}
+
+/** The loudest window of a word's listed span, in dB; -Infinity for none. */
+function peakDbOf(levels, word) {
+  const { db, windowSec } = levels;
+  let peak = -Infinity;
+  for (let i = Math.floor(word.s / windowSec + 1e-9); i < db.length && i * windowSec < word.e - 1e-9; i++) peak = Math.max(peak, db[i]);
+  return peak;
 }
 
 /** Scanning forward from `from`, the first window of the first run of SETTLED_WINDOWS quiet windows, or -1. */
@@ -1837,9 +2104,9 @@ const HEARD_COMMA = /,["'”’)\]]*$/;
  * addedCuts (COP-355): Luke's locked rule for one take, on its own clock before the speed-up. `realCuts` are the
  * cuts the take holds already; its two edges count as cuts too. `whole` holds the
  * [start, end] spans of the lines no cut may fall inside. A place is the middle of the silence after a heard word that
- * ends a sentence or has a comma, when it is not inside a whole line. While the longest stretch between two cuts runs
- * over `everySec`, a cut goes at a place in it at least ADDED_CUT.clearSec from both its ends: a sentence's end before
- * a comma, then the place nearest its middle. When that stretch has no such place, no more is added. Returns the times
+ * ends a sentence or has a comma, when it is not inside a whole line. While the longest stretch between two cuts that runs
+ * over `everySec` has a place at least ADDED_CUT.clearSec from both its ends, a cut goes at one: a sentence's end
+ * before a comma, then the place nearest its middle. A stretch with no such place is left as it is (#4804). Returns the times
  * of the cuts added, in order, and the longest stretch left with no cut.
  */
 export function addedCutPlan({ words, seconds, realCuts = [], joins = [], everySec, whole = [] }) {
@@ -1855,24 +2122,27 @@ export function addedCutPlan({ words, seconds, realCuts = [], joins = [], everyS
     places.push({ t, rank });
   }
   const added = [];
-  const longestOf = () => {
+  const stretches = () => {
     const marks = [...new Set([0, ...realCuts, ...added, seconds])].sort((a, b) => a - b);
-    return marks.slice(1).reduce(
-      (best, to, k) => (to - marks[k] > best.length + 1e-9 ? { length: to - marks[k], from: marks[k], to } : best),
-      { length: 0, from: 0, to: 0 },
-    );
+    return marks.slice(1).map((to, k) => ({ length: to - marks[k], from: marks[k], to }));
   };
-  for (let gap = longestOf(); gap.length > everySec + 1e-9; gap = longestOf()) {
+  const placesIn = (gap) => places.filter((p) =>
+    p.t >= gap.from + ADDED_CUT.clearSec - 1e-9 && p.t <= gap.to - ADDED_CUT.clearSec + 1e-9 &&
+    added.every((t) => Math.abs(p.t - t) > 0.01));
+  // #4804: a stretch with no place (a line no cut falls inside) is passed over, and the next longest one over
+  // `everySec` is cut, until none over it has a place.
+  for (;;) {
+    const gap = stretches()
+      .filter((g) => g.length > everySec + 1e-9 && placesIn(g).length > 0)
+      .reduce((best, g) => (!best || g.length > best.length + 1e-9 ? g : best), null);
+    if (!gap) break;
     const mid = (gap.from + gap.to) / 2;
-    const inside = places.filter((p) =>
-      p.t >= gap.from + ADDED_CUT.clearSec - 1e-9 && p.t <= gap.to - ADDED_CUT.clearSec + 1e-9 &&
-      added.every((t) => Math.abs(p.t - t) > 0.01));
-    if (inside.length === 0) break;
-    const best = inside.reduce((a, b) =>
+    const best = placesIn(gap).reduce((a, b) =>
       b.rank < a.rank || (b.rank === a.rank && Math.abs(b.t - mid) < Math.abs(a.t - mid) - 1e-9) ? b : a);
     added.push(best.t);
   }
-  return { added: added.map(r6).sort((a, b) => a - b), longest: r6(longestOf().length) };
+  const longest = stretches().reduce((most, g) => Math.max(most, g.length), 0);
+  return { added: added.map(r6).sort((a, b) => a - b), longest: r6(longest) };
 }
 
 /**
@@ -1895,16 +2165,34 @@ function breaksOf(seg) {
 
 /**
  * addedCuts: the frames where a take's framing changes, from the times of its cuts: on whole frames, in order, none
- * within FRAMING_MIN_FRAMES of the one before it or of the take's two edges (`frames` long).
+ * within FRAMING_MIN_FRAMES of the one before it or of the take's two edges (`frames` long). #4805: nor within
+ * FRAMING_MIN_FRAMES of a jump the picture makes inside the take (`jumps`, frames), which is a cut already.
  */
-export function framingFrames(times, frames) {
+export function framingFrames(times, frames, jumps = []) {
   const kept = [];
   for (const f of [...new Set(times.map((t) => Math.round(t * FPS)))].sort((a, b) => a - b)) {
     if (f < FRAMING_MIN_FRAMES || f > frames - FRAMING_MIN_FRAMES) continue;
     if (kept.length > 0 && f - kept.at(-1) < FRAMING_MIN_FRAMES) continue;
+    if (jumps.some((j) => Math.abs(f - j) < FRAMING_MIN_FRAMES)) continue;
     kept.push(f);
   }
   return kept;
+}
+
+/**
+ * #4805: where a take's own picture jumps (`fileJumps`, seconds on its file's clock) on the segment's clock: past the
+ * pauses cut out of it before (seg.cuts, on the file's clock) and its trimmed lead-in. A jump inside a part cut out,
+ * or outside the segment, is not on it.
+ */
+export function takeJumpTimes(seg, fileJumps) {
+  const cuts = [...(seg.cuts ?? [])].sort((a, b) => a.s - b.s);
+  const out = [];
+  for (const r of fileJumps) {
+    if (cuts.some((c) => r >= c.s - 1e-6 && r < c.e - 1e-6)) continue;
+    const t = r - cuts.reduce((sum, c) => sum + (c.e <= r + 1e-6 ? c.e - c.s : 0), 0) - (seg.inSec ?? 0);
+    if (t > 1e-6 && t < seg.seconds - 1e-6) out.push(r6(t));
+  }
+  return out;
 }
 
 /** addedCuts: where each script line of a talking segment is heard, [start, end] on the segment's clock, by line id. */
@@ -1956,8 +2244,9 @@ function lineSpans(seg, scriptLines) {
  * framing changes: at every cut it counts, those it held and those added. A line marked whole that its words do not
  * show is taken to run through the whole take, so nothing is added there. Answers the cut's note.
  */
-function placeAddedCuts(spine, scriptLines, everySec, wholeLines) {
+function placeAddedCuts(spine, scriptLines, everySec, wholeLines, readJumps = () => []) {
   const whole = new Set(wholeLines);
+  const jumpsOf = new Map();
   let count = 0;
   let longest = 0;
   for (const seg of spine) {
@@ -1966,11 +2255,18 @@ function placeAddedCuts(spine, scriptLines, everySec, wholeLines) {
     const held = (seg.lineIds ?? []).filter((id) => whole.has(id)).map((id) => spans.get(id) ?? [0, seg.seconds]);
     const breaks = breaksOf(seg);
     const realCuts = breaks.filter((b) => b.counts).map((b) => b.t);
-    const plan = addedCutPlan({ words: seg.words, seconds: seg.seconds, realCuts, joins: breaks.map((b) => b.t), everySec, whole: held });
+    // #4805: a jump the video service made inside the take is a cut the viewer sees: no stretch runs across it, and no
+    // framing change lands within FRAMING_MIN_FRAMES of it.
+    if (!jumpsOf.has(seg.file)) jumpsOf.set(seg.file, readJumps(seg.file) ?? []);
+    const jumps = takeJumpTimes(seg, jumpsOf.get(seg.file));
+    const plan = addedCutPlan({
+      words: seg.words, seconds: seg.seconds, realCuts: [...realCuts, ...jumps], joins: breaks.map((b) => b.t), everySec, whole: held,
+    });
     const frames = Math.round(seg.seconds * FPS);
-    const framing = framingFrames([...realCuts, ...plan.added], frames);
+    const jumpFrames = jumps.map((t) => Math.round(t * FPS));
+    const framing = framingFrames([...realCuts, ...plan.added], frames, jumpFrames);
     const added = plan.added.filter((t) => framing.includes(Math.round(t * FPS)));
-    const edges = [0, ...framing, frames];
+    const edges = [...new Set([0, ...framing, ...jumpFrames, frames])].sort((a, b) => a - b);
     longest = Math.max(longest, ...edges.slice(1).map((f, k) => (f - edges[k]) / FPS));
     // Set on every take the row reaches, even with no change, so its join with the take before it is seen to (framingAtJoins).
     seg.framing = framing;
@@ -2028,6 +2324,19 @@ export function framingChangeTimes(spine, speed = 1, cutaways = []) {
   const covered = cutaways.filter((c) => c.seconds > 0).map((c) => [onFilm(c.startSec) - near, onFilm(c.startSec + c.seconds) + near]);
   return spine.flatMap((seg) => (seg.framing ?? []).map((f) => onFilm(seg.startSec + f / FPS)))
     .filter((t) => !covered.some(([from, to]) => t >= from && t <= to));
+}
+
+/**
+ * #4805, pauseTrim: where a pause cut at one of Luke's levels joins a take to itself, in seconds on the delivered film's
+ * clock (as framingChangeTimes), so the worker can tell a fault the trim made.
+ */
+export function pauseJoinTimes(spine, speed = 1) {
+  const onFilm = (sec) => Math.round((sec / speed) * FPS) / FPS;
+  return spine.flatMap((seg, k) => [
+    // cutPace: a take split at a pause it cut (splitAtPauses) joins its two pieces at the second one's start.
+    ...(k > 0 && seg.cuts?.length && samePiece(spine[k - 1], seg) ? [onFilm(seg.startSec)] : []),
+    ...(seg.cuts?.length && seg.words ? breaksOf(seg).map((b) => onFilm(seg.startSec + b.t)) : []),
+  ]);
 }
 
 /**
@@ -3354,7 +3663,7 @@ export function buildTimeline(args) {
 
 function assembleTimeline({
   manifest, storyboard, skip, probe, exists, readWords, readLevels = () => null, stillFill = false, finish = null,
-  wholeVoice = null, sourceAd = null, measure = null,
+  wholeVoice = null, sourceAd = null, measure = null, readJumps = () => [],
 }) {
   if (measure) {
     // The measured map: a word's last phoneme end rides with the word through every shift.
@@ -3725,7 +4034,7 @@ function assembleTimeline({
       ? "addedCuts: a cut on a template's clock or a measured map keeps its framing, so no cut was added"
       : !finish.wholeLines?.length
         ? "addedCuts: no line of the script is marked whole, so no cut was added"
-        : placeAddedCuts(spine, scriptLines, ADDED_CUTS[finish.addedCuts], finish.wholeLines));
+        : placeAddedCuts(spine, scriptLines, ADDED_CUTS[finish.addedCuts], finish.wholeLines, readJumps));
   }
   // A copied shot no voice runs in lasts its shot's length, its clip trimmed or its last frame held.
   const shotOf = (n) => plans.get(n)?.sourceShot ?? null;
@@ -4346,6 +4655,10 @@ function mappedPiece(seg, i, { addInput, filters, tails, level, resolve }) {
  * chain and the duck under it, and `meters` (cutChecks) names the two files
  * the voice and everything under it are also written to. `pcmMix` keeps the
  * render's sound uncompressed, for a mix the loudness pass then encodes once.
+ * COP-357: `look` lays the lens smudge (`smudge`, its side) and the phone pass
+ * on the joined takes before anything else touches the picture, with `probe`
+ * splitting them off first to LOOK_PROBE's side files, and `deliverFps`
+ * repeats the finished picture's frames to that rate, last.
  */
 export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, sound = null, voiceOnly = false }) {
   const level = finish && finish.levelSegments === false ? "anull" : LOUDNORM;
@@ -4498,6 +4811,20 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   }
 
   let videoLabel = "vcat";
+  // COP-357, the phone look: on the joined takes, before any cutaway, picture, end card or burned word is laid over them.
+  // Fix A: with a picture pass, the takes are first split off to the probe, which reads them before the look.
+  if (finish?.look?.probe) {
+    filters.push(`[${videoLabel}]split=2[lookin][lookprobe]`, `[lookprobe]${lookProbeFilter()}`);
+    videoLabel = "lookin";
+  }
+  if (finish?.look?.smudge) {
+    filters.push(...lensSmudgeFilters(videoLabel, finish.look.smudge, "smudged"));
+    videoLabel = "smudged";
+  }
+  if (finish?.look?.phonePass) {
+    filters.push(`[${videoLabel}]${phonePassFilter()}[phoned]`);
+    videoLabel = "phoned";
+  }
   timeline.cutaways.forEach((c, j) => {
     const i =
       c.source === "clip"
@@ -4576,6 +4903,11 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   if (finish?.ass) {
     filters.push(`[${videoLabel}]subtitles=filename=${finish.ass}[burned]`);
     videoLabel = "burned";
+  }
+  // COP-357, fps30: the finished picture, words and all, at the delivered rate by repeated frames; the clock above is FPS.
+  if (finish?.deliverFps) {
+    filters.push(`[${videoLabel}]fps=${finish.deliverFps}[delivered]`);
+    videoLabel = "delivered";
   }
 
   const beds = [];
@@ -4694,7 +5026,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     ...inputs,
     "-filter_complex", filters.join(";"),
     "-map", `[${videoLabel}]`, "-map", `[${audioLabel}]`,
-    "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", String(FPS),
+    "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", String(finish?.deliverFps ?? FPS),
     // COP-300: a mix the loudness pass finishes keeps its sound uncompressed, so the finished cut's sound is AAC-encoded once.
     ...(finish?.pcmMix ? ["-c:a", "pcm_s16le"] : ["-c:a", "aac", "-b:a", "192k"]),
     "-movflags", "+faststart",
@@ -5830,12 +6162,13 @@ export function checkVerdict(c, bars = CHECK_BARS) {
 }
 
 /** Frame-to-frame change of a file's picture, on a 90 px wide copy, printed per frame. `from`/`seconds` read a stretch. */
-export function motionArgs(file, from = null, seconds = null) {
+export function motionArgs(file, from = null, seconds = null, readFps = null) {
   return [
     "-hide_banner", "-nostats",
     ...(from !== null ? ["-ss", sec(from)] : []), ...(seconds !== null ? ["-t", sec(seconds)] : []),
     "-i", file, "-an",
-    "-vf", "scale=90:-2,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+    // COP-357: a film repeated to 30 frames a second is read back on `readFps` (FPS), its own frames, before the change.
+    "-vf", `${readFps ? `fps=${readFps},` : ""}${MOTION_READ}:file=-`,
     "-f", "null", "-",
   ];
 }
@@ -5969,6 +6302,27 @@ export function takesOf(timeline, plans, speed = 1) {
 }
 
 /**
+ * #4805: the frames where a picture jumps, as the flash check reads a cut: a change of a cut's size (FLASH_BARS'
+ * spikeYavg, and spikeOverMedian times the median change), from readMotion's rows. Each is the time of the first frame
+ * of the new picture.
+ */
+export function pictureJumps(motion, bars = FLASH_BARS) {
+  const values = motion.map((m) => m.y).sort((a, b) => a - b);
+  const median = values.length ? values[Math.floor(values.length / 2)] : 0;
+  return motion.filter((r) => r.y >= bars.spikeYavg && r.y >= median * bars.spikeOverMedian).map((r) => r.t);
+}
+
+/**
+ * #4805: where a clip's own picture jumps (pictureJumps), on its own clock; none when its picture cannot be read. Read
+ * on the cut's own frame grid (FPS), as the flash check reads a film repeated to 30 frames a second (COP-357), so a
+ * frame shown twice is never a change of its own.
+ */
+function clipJumps(file) {
+  const read = spawnSync("ffmpeg", motionArgs(file, null, null, FPS), { encoding: "utf8", maxBuffer: 1 << 28 });
+  return read.status === 0 ? pictureJumps(readMotion(read.stdout)) : [];
+}
+
+/**
  * flashCheck (P-7, Plan 13's 0.12 s piece and one-frame leaks): every shot on
  * screen under maxSec (a one-frame piece included), and every single frame of
  * picture the motion read shows as a flash: a change into it and a change out
@@ -5991,6 +6345,16 @@ export function flashes(shots, motion, bars = FLASH_BARS) {
     i++;
   }
   return out.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * freezeCheck's runs: the finished film's, and (COP-357, fix A) the takes' read before the look, merged; the end card,
+ * which the check leaves out, is left out of both.
+ */
+function cutFreezes(motion, lookRows, endCard, speed) {
+  const found = freezes(motion);
+  if (!lookRows) return found;
+  return mergedFreezes([...found, ...freezes(endCard ? lookRows.filter((r) => r.t < endCard.in / speed) : lookRows)]);
 }
 
 /** The power mean of some loudness windows, in dB. */
@@ -6242,11 +6606,11 @@ const roleOf = (seg) => (seg.reaction || seg.audio === "clip" ? "a-roll" : seg.a
  * slow push-in is still picture by design, so freezeCheck reads only the
  * picture before it.
  */
-function checkCut({ timeline, storyboard, screens, rows, scenes, out, loudness, levels, finish = null, sourceAd = null, shotOf = () => null, cards = [], speed = 1, endCard = null }) {
+function checkCut({ timeline, storyboard, screens, rows, scenes, out, loudness, levels, finish = null, sourceAd = null, shotOf = () => null, cards = [], speed = 1, endCard = null, lookRows = null, readFps = null }) {
   const roles = new Map(timeline.spine.map((seg) => [seg.sceneIndex, roleOf(seg)]));
   for (const c of timeline.cutaways) roles.set(c.sceneIndex, "b-roll");
   const shots = scenes.map((p) => ({ n: p.scene, role: roles.get(p.scene) ?? "b-roll", start: p.startSec, end: roundMs(p.startSec + p.seconds) }));
-  const read = spawnSync("ffmpeg", motionArgs(out), { encoding: "utf8", maxBuffer: 1 << 28 });
+  const read = spawnSync("ffmpeg", motionArgs(out, null, null, readFps), { encoding: "utf8", maxBuffer: 1 << 28 });
   const motion = read.status === 0 ? readMotion(read.stdout) : [];
   const finished = loudness ? { i: loudness.lufs, tp: loudness.truePeak } : measureLoudness(out);
   const checks = {
@@ -6260,7 +6624,7 @@ function checkCut({ timeline, storyboard, screens, rows, scenes, out, loudness, 
     // null: ffmpeg could not read the motion, so no shot was checked.
     slowShots: motion.length ? slowShots(motionByShot(motion, shots)) : null,
     ...(finish?.blipCheck ? { blips: blips(shots.map((s) => ({ ...s, srcSec: sourceShotSec(sourceAd, shotOf(s.n)) }))) } : {}),
-    ...(finish?.freezeCheck ? { freezes: freezes(endCard ? motion.filter((r) => r.t < endCard.in / speed) : motion) } : {}),
+    ...(finish?.freezeCheck ? { freezes: cutFreezes(endCard ? motion.filter((r) => r.t < endCard.in / speed) : motion, lookRows, endCard, speed) } : {}),
     ...plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, cards, speed }),
     lufs: finished ? round2(finished.i) : null,
     truePeak: finished ? round2(finished.tp) : null,
@@ -7637,6 +8001,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       return Array.isArray(rows) && rows.length > 0 ? rows : null;
     },
     readLevels: (file) => clipLevels(here(file)),
+    readJumps: (file) => clipJumps(here(file)),
     ...(readClocks ? { measure: readClocks } : {}),
     ...(finish ? { finish } : {}),
     ...(wholeVoice ? { wholeVoice } : {}),
@@ -7673,6 +8038,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (finish?.cutPace && (template || protectedMotion)) notes.push("template/action/listening/ending clocks remain real time; cutPace does not accelerate the cut");
   // addedCuts (COP-355): the framing changes made, on the delivered film's clock, for the worker's last guard.
   const framingChangesSec = finish?.addedCuts ? framingChangeTimes(timeline.spine, speed, timeline.cutaways) : null;
+  // #4805: the joins a pause level made, on the same clock, so the worker can make the film again without them.
+  const pauseJoinsSec = finish?.pauseTrim && !finish.keepPauses ? pauseJoinTimes(timeline.spine, speed) : null;
   if (timeline.sourceMap) {
     // The exact bytes every measured clock was read from, for whoever binds an approval to them.
     timeline.sourceMap.sources = readClocks.files().filter(exists).map((file) => {
@@ -7810,6 +8177,40 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       clean = { voice: VOICE_CLEAN, under: UNDER_VOICE };
     }
   }
+  // COP-357, the phone look, on a cut of its own clock only.
+  let look = null;
+  let deliverFps = null;
+  const lookAsked = ["fps30", "lensSmudge", "phonePass"].filter((key) => finish?.[key]);
+  if (lookAsked.length && (template || timeline.mapped)) {
+    notes.push(`${lookAsked.join(", ")} ${lookAsked.length === 1 ? "is" : "are"} not applied to a template launch's cut or one laid on its measured map`);
+  } else if (lookAsked.length) {
+    if (finish.lensSmudge) {
+      const missing = missingFilters(LOOK_FILTERS.lensSmudge);
+      if (missing.length) notes.push(`this ffmpeg has no ${missing.join(", ")} filter, so the lens smudge was not added`);
+      else {
+        const frame = spineFrameAt(timeline.spine, LENS_SMUDGE.readAtSec);
+        const side = frame ? brighterSide(here(frame.file), frame.atSec) : null;
+        look = { smudge: side ?? "right" };
+        notes.push(side
+          ? `lensSmudge: a light smudge on the top ${side}, the brighter corner ${LENS_SMUDGE.readAtSec.toFixed(1)} s into the takes`
+          : `lensSmudge: a light smudge on the top right; the picture ${LENS_SMUDGE.readAtSec.toFixed(1)} s into the takes could not be read for its brighter corner`);
+      }
+    }
+    if (finish.phonePass) {
+      const missing = missingFilters(LOOK_FILTERS.phonePass);
+      if (missing.length) notes.push(`this ffmpeg has no ${missing.join(", ")} filter, so the phone pass was not added`);
+      else {
+        look = { ...look, phonePass: true };
+        notes.push("phonePass: grain and a light phone pass on the takes' picture, no shake");
+      }
+    }
+    // Fix A: a picture pass laid, so the takes are read before it too.
+    if (look) look = { ...look, probe: true };
+    if (finish.fps30) {
+      deliverFps = DELIVERY_FPS;
+      notes.push(`fps30: the film is delivered at ${DELIVERY_FPS} frames a second, one frame in four shown twice; the cut's clock stays at ${FPS}`);
+    }
+  }
   let peakLimit = null;
   if (finish?.limitPeaks) {
     if (hasFilter("alimiter")) peakLimit = PEAK_LIMIT;
@@ -7821,8 +8222,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     voice: paths.voice, bed: paths.bed,
     ...(manifest.templateMotion?.enabled === true || manifest.roomTone === false || finish.roomSound === "none" ? { allowAbsentBed: true } : {}),
   } : null;
-  // The burn reads its file from the folder ffmpeg runs in, so every path is absolute then.
-  const at = ass ? (file) => path.resolve(dir, file) : here;
+  // The burn reads its file from the folder ffmpeg runs in, so every path is absolute then; so does the look's probe,
+  // which writes its side files there.
+  const at = ass || look ? (file) => path.resolve(dir, file) : here;
 
   const templateCut = manifest.templateMotion?.enabled === true || manifest.videoChoice?.videoModel === "template-video";
   const songMaster = templateCut && timeline.wholeVoice?.songOnly === true;
@@ -7969,6 +8371,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ...(room ? { room } : {}),
           ...(pictures.length ? { pictures } : {}), ...(clean ? { clean } : {}), ...(meters ? { meters } : {}),
           ...(endLayers ? { endCard: endLayers } : {}),
+          ...(look ? { look } : {}), ...(deliverFps ? { deliverFps } : {}),
         },
       }
       : {}),
@@ -7978,11 +8381,20 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     rmSync(meters.voice, { force: true });
     rmSync(meters.bed, { force: true });
   }
-  const res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass ? { cwd: path.resolve(dir) } : {}) });
+  if (look) for (const file of [LOOK_PROBE.freeze, LOOK_PROBE.motion]) rmSync(here(file), { force: true });
+  const res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass || look ? { cwd: path.resolve(dir) } : {}) });
   if (room?.file) rmSync(room.file, { force: true });
   if (res.status !== 0) {
     const quoted = ffmpegArgs.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
     throw new FirstCutError(1, `ffmpeg failed. The command it ran:\n  ffmpeg ${quoted}`);
+  }
+  // COP-357, fix A: the takes as read before the look, on the film's clock, less what is laid over them.
+  const lookProbe = look ? readLookProbe(here, {
+    pictureSec, speed, covered: lookCovered({ cutaways: timeline.cutaways, pictures, endCard: endLayers }),
+  }) : null;
+  if (look && !lookProbe) notes.push("the takes before the look could not be read for a frozen picture, so only the finished film was checked");
+  if (lookProbe && lookProbe.rowsRead < lookProbe.changes) {
+    notes.push(`the takes before the look were read for ${lookProbe.rowsRead} of their ${lookProbe.changes} frame changes, so a frozen picture in them may have been missed`);
   }
   let meterLevels = null;
   if (meters) {
@@ -8037,7 +8449,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   }
   writeFileSync(sidecars.scenes, `${JSON.stringify(scenes, null, 2)}\n`);
   const sync = finish?.captionCheck
-    ? cutSync({ out, speed, scenes, rows, screens: ass && burned ? burned : [], manifest, here, readJson })
+    ? cutSync({ out, speed, scenes, rows, screens: ass && burned ? burned : [], manifest, here, readJson, ...(deliverFps ? { deliverFps } : {}) })
     : null;
   if (sync) writeFileSync(paths.sync, `${JSON.stringify(sync, null, 2)}\n`);
 
@@ -8129,6 +8541,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ? checkCut({
         timeline, storyboard, screens: burned, rows, scenes, out, loudness, levels: meterLevels,
         finish, sourceAd, shotOf: (n) => plans?.get(n)?.sourceShot ?? null, cards: burnedCards, speed, endCard: endLayers,
+        ...(lookProbe ? { lookRows: lookProbe.rows } : {}), ...(deliverFps ? { readFps: FPS } : {}),
       })
     : null;
   // The pace record: the cut's own numbers, the settings it was cut with (so
@@ -8159,6 +8572,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   return withSound({
     out, durationSec, manifest, timeline, music, rows, sidecars, pace, ...(sync ? { sync } : {}),
     ...(framingChangesSec ? { framingChangesSec } : {}),
+    ...(pauseJoinsSec ? { pauseJoinsSec } : {}),
+    // COP-357, fix A: for the worker's guard, the takes' frozen runs read before the look, on the film's clock.
+    ...(lookProbe ? { lookFreeze: lookProbe.freezes } : {}),
   });
 }
 
@@ -8169,14 +8585,16 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
  * The sections are the cut's takes. The captions, sections and heard words come back with the verdicts, so the
  * worker can judge Check B again on a listen of its own, and cut again from the heard words.
  */
-function cutSync({ out, speed, scenes, rows, screens, manifest, here, readJson }) {
+function cutSync({ out, speed, scenes, rows, screens, manifest, here, readJson, deliverFps = null }) {
   const sections = [];
   for (const p of scenes) {
     const last = sections.at(-1);
     if (last && last.id === p.scene) last.endSec = roundMs(p.startSec + p.seconds);
     else sections.push({ id: p.scene, startSec: p.startSec, endSec: roundMs(p.startSec + p.seconds) });
   }
-  const captions = screens.map((c) => ({ text: c.text, seenSec: roundMs(captionSeenSec(captionStartCs(c.s / speed))) }));
+  // COP-357: a film repeated to deliverFps shows each caption on the delivered frame that first holds its 24 fps frame.
+  const seenOn = (t) => (deliverFps ? deliveredSeenSec(t, deliverFps) : t);
+  const captions = screens.map((c) => ({ text: c.text, seenSec: roundMs(seenOn(captionSeenSec(captionStartCs(c.s / speed)))) }));
   const takes = (manifest.scenes ?? []).flatMap((scene) => {
     const file = scene.wordsFrom === "voice" ? scene.voice : scene.clip;
     const words = readJson(scene.words);

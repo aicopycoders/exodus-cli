@@ -337,6 +337,18 @@ export interface CutPace {
   loudness?: { lufs: number; truePeak: number; passes: 1 | 2; limited?: true; limitedAgain?: number; limit?: number };
   /** Present only with cutChecks. */
   checks?: CutChecks;
+  /**
+   * #4805, written by the worker (scout cut-additions.ts): the sheet's additions the film was made again without,
+   * because its last check found a fault at one of them.
+   */
+  remadeWithout?: Array<"addedCuts" | "pauseTrim" | "roomSound">;
+  /**
+   * #4805, written by the worker: a fault at one of the sheet's additions that making the film again without them did
+   * not fix; the film waits for its member, and `sentence` says why.
+   */
+  finishHold?: { sentence: string; additions: Array<"addedCuts" | "pauseTrim" | "roomSound"> };
+  /** #4805, written by the worker: the sentence the member reads of either (convex customerRunView.ts cutCheckNotes). */
+  additionsNote?: string;
   /** COP-300: present when a sped-up cut burned its captions: the caption file is on the finished cut's clock. */
   captionClock?: "final";
   /**
@@ -370,6 +382,20 @@ export interface CutSync {
   /** The free listener's words of the finished film. */
   heard: Array<{ text: string; start: number; end: number; lagMs: number; match: number }>;
 }
+
+/** COP-357, fps30: the frame rate a film with the phone look is delivered at, by repeated frames. */
+export const DELIVERY_FPS: number;
+
+/** The bars checkVerdict holds a finished cut to. */
+export const CHECK_BARS: {
+  voiceOverBedDb: number;
+  minBrollSec: number;
+  truePeak: number;
+  lufs: number;
+  blipSec: number;
+  freezeSec: number;
+  freezeYavg: number;
+};
 
 /** What cutChecks measured on the finished cut, and what fails its bars. */
 export interface CutChecks {
@@ -511,6 +537,12 @@ export interface FirstCut {
   pace?: CutPace;
   /** COP-300: present only with captionCheck. */
   sync?: CutSync;
+  /**
+   * COP-357, fix A: present only when a picture pass of the phone look was laid and the takes were read before it: their
+   * frozen runs (freezedetect at -60 dB from 0.2 s), on the finished film's clock, less what a cutaway or the end card
+   * covers. The worker joins them at the cut's framing changes, drops those under 2 s, and adds them to the film's own.
+   */
+  lookFreeze?: Array<{ start: number; end: number; duration: number }>;
   /** The cut's words on the finished film's clock, as written beside it. */
   rows?: Array<{ text: string; start: number; end: number; scene?: number }>;
   /** Present only when the manifest names sounds, beds, a ducked music bed or a music-only master. */
@@ -522,6 +554,11 @@ export interface FirstCut {
    * present only with the cuts row on. The worker's last guard joins a freeze that one splits (auto-cut.ts withFramingJoins).
    */
   framingChangesSec?: number[];
+  /**
+   * #4805, pauseTrim: where a pause cut at one of Luke's levels joins a take to itself, in seconds on the delivered
+   * film's clock; present only with a pause level picked.
+   */
+  pauseJoinsSec?: number[];
   /** Present only when the manifest asked for the measured map.
    * Authored picture time is reserved once per take; only its final split piece
    * may extend, so earlier pieces never replay the resumed piece's source audio.
@@ -629,5 +666,8 @@ export function sentenceGapCuts(
 /** jumpCut: a pause over maxGap between two heard words keeps keepAfter after the earlier word and keepBefore before the later. */
 export interface JumpCut { maxGap: number; keepAfter: number; keepBefore: number }
 export const JUMP_CUT: JumpCut;
+
+/** COP-357, fix A: how the cut reads the takes before the phone look (freezedetect's noise and length) and its side files. */
+export const LOOK_PROBE: { readonly noise: string; readonly minSec: number; readonly freeze: string; readonly motion: string };
 /** jumpCut on one pause: the span it takes out, or null when it keeps the pause whole. */
 export function jumpCutSpan(endSec: number, startSec: number, jump?: JumpCut): { s: number; e: number } | null;

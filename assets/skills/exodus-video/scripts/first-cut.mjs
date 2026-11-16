@@ -1875,6 +1875,59 @@ export function brollWindow(seg, counts, cueLineId, texts, broll) {
 }
 
 /**
+ * #4835: the most air a join keeps before a scene's first word (trimJoins: the new-speaker beat, floored to a whole
+ * frame, so up to one frame more).
+ */
+const OPENING_AIR_MAX_SEC = JOIN_LEAD_NEW_SPEAKER_SEC + 1 / FPS;
+
+/**
+ * #4835: a cutaway laid from a line's first word, when that line opens its scene, started after the scene's picture did:
+ * the air a join keeps before the first word showed the speaking scene for a few frames (3 at 24 fps), then the
+ * cutaway. A cutaway that starts inside that air (after its scene's first frame, no later than its first word) starts
+ * on the scene's first frame instead, and its own first frame is held over the air (`leadHoldSec`), so every frame it
+ * showed before stays where it was and its end does not move. A scene that opens on an action (actionLeadSec) keeps
+ * it, a scene with more air than a join keeps is left as it is, and so is a shot copied from a source ad.
+ */
+export function coverOpeningAir(cutaways, spine) {
+  const moves = cutaways.flatMap((c) => {
+    // A shot copied from a source ad keeps its source's place.
+    if (c.method === "source") return [];
+    const owner = spine.find((seg) => seg.startSec < c.startSec - 1e-6 && c.startSec < seg.startSec + seg.seconds);
+    if (!owner?.words?.length || owner.actionLeadSec > 0) return [];
+    const air = c.startSec - owner.startSec;
+    const firstWord = Math.min(...owner.words.map((w) => w.s));
+    if (air > firstWord + 1e-6 || firstWord > OPENING_AIR_MAX_SEC + 1e-6) return [];
+    // Another cutaway on that air already covers it, or starts with this one: nothing flashes, so nothing moves.
+    if (cutaways.some((d) => d !== c && d.seconds > 0 && d.startSec <= c.startSec + 1e-6 && d.startSec + d.seconds > owner.startSec + 1e-6)) return [];
+    return [{ c, from: owner.startSec, air }];
+  });
+  for (const { c, from, air } of moves) {
+    c.startSec = from;
+    c.seconds += air;
+    c.leadHoldSec = air;
+  }
+}
+
+/**
+ * #4835: how long a cutaway holds its first frame before its clip plays; none when what is left of it after the hold
+ * is under a frame (cut short inside the air), so the render never trims its clip to nothing.
+ */
+const cutawayLeadHold = (c) => (c.leadHoldSec > 0 && c.seconds - c.leadHoldSec >= 1 / FPS - 1e-9 ? c.leadHoldSec : 0);
+
+/**
+ * #4835: the frames of a cutaway moved back from `wasSec` to its scene's first frame at `startSec`. The render lays a
+ * cutaway's frames from `setpts=...+<start>/TB` on the 24 fps clock, which ffmpeg truncates to a whole frame, so its
+ * first frame landed on frame trunc(wasSec * FPS) (the start as written, to the millisecond). The moved cutaway's own
+ * frames land there still, after `clones` copies of its first frame from the scene's `first` frame on, so every frame it
+ * showed before is the one it shows now. Its frames are stamped half a frame past `first` (truncated to `first`) and it
+ * is shown from half a frame before it, so a start written to the millisecond can never fall just after its frame.
+ */
+export function openingAirFrames(startSec, wasSec) {
+  const first = Math.round(startSec * FPS);
+  return { first, clones: Math.max(0, Math.trunc(Number(sec(wasSec)) * FPS) - first) };
+}
+
+/**
  * Cut the dead air out of each join between clips that play their own sound: a
  * clip's lead-in silence stacked on the previous clip's tail ran past a second
  * (#2388). Each side comes back to a beat that reads as one conversation, a
@@ -4221,6 +4274,8 @@ function assembleTimeline({
     }
     cutaways.push(placed);
   }
+  // #4835: a cutaway starting in the air before its scene's first word starts with that scene instead.
+  if (!measure && !template) coverOpeningAir(cutaways, spine);
   if (measure) {
     for (const c of cutaways) {
       c.startSec = Math.round(c.startSec * FPS) / FPS;
@@ -4510,18 +4565,20 @@ export function holdBroll(timeline, minSec, speed, clipSeconds) {
   const kept = [];
   const left = [];
   for (const c of timeline.cutaways) {
-    const shown = c.seconds / speed;
+    // #4835: judged on its own clip's time, as before its first frame was held over its scene's opening air.
+    const lead = cutawayLeadHold(c);
+    const shown = (c.seconds - lead) / speed;
     if (c.motionProtection || shown >= minSec - 1e-6) {
       kept.push(c);
       continue;
     }
     const why = `cutaway ${c.sceneIndex}: ${shown.toFixed(2)}s on screen, under the ${minSec}s B-roll minimum, so it is left out and`;
     const before = kept.at(-1);
-    if (before && !before.motionProtection && Math.abs(before.startSec + before.seconds - c.startSec) < 0.5 / FPS) {
+    if (before && !before.motionProtection && Math.abs(before.startSec + before.seconds - (c.startSec + lead)) < 0.5 / FPS) {
       before.seconds = roundMs(c.startSec + c.seconds - before.startSec);
       if (c.cutShortBy) before.cutShortBy = c.cutShortBy;
       else delete before.cutShortBy;
-      const hold = before.source === "clip" ? roundMs(before.seconds - clipSeconds(before.file)) : 0;
+      const hold = before.source === "clip" ? roundMs(before.seconds - cutawayLeadHold(before) - clipSeconds(before.file)) : 0;
       if (hold > 0) before.holdSec = hold;
       left.push(`${why} cutaway ${before.sceneIndex} plays on over it`);
     } else {
@@ -4549,7 +4606,7 @@ export function speedUpSlowBroll(timeline, motionOf, clipSeconds) {
       .map((seg) => ({ n: seg.sceneIndex, role: roleOf(seg), file: seg.file, from: seg.inSec ?? 0, sec: seg.seconds - (seg.holdSec ?? 0) })),
     ...timeline.cutaways
       .filter((c) => c.source === "clip")
-      .map((c) => ({ n: c.sceneIndex, role: "b-roll", file: c.file, from: 0, sec: c.seconds, cutaway: c })),
+      .map((c) => ({ n: c.sceneIndex, role: "b-roll", file: c.file, from: 0, sec: c.seconds - cutawayLeadHold(c), cutaway: c })),
   ].filter((s) => s.sec > 0);
   const measured = shots.map((s) => ({ ...s, motion: motionOf(s.file, s.from, s.sec) }));
   const notes = [];
@@ -4557,12 +4614,13 @@ export function speedUpSlowBroll(timeline, motionOf, clipSeconds) {
     const c = slow.cutaway;
     if (!c || c.motionProtection) continue;
     const have = clipSeconds(c.file);
-    if (!(have > c.seconds + 0.05)) {
+    const played = c.seconds - cutawayLeadHold(c);
+    if (!(have > played + 0.05)) {
       notes.push(`cutaway ${c.sceneIndex} barely moves, but its clip (${have.toFixed(2)}s) is no longer than its time on screen (${c.seconds.toFixed(2)}s), so it plays as it is`);
       continue;
     }
-    c.speed = roundMs(Math.min(have / c.seconds, SLOW_SHOT_SPEED_MAX));
-    notes.push(`cutaway ${c.sceneIndex} barely moves, so it plays ${c.speed}x faster: ${(c.seconds * c.speed).toFixed(2)}s of its clip in ${c.seconds.toFixed(2)}s`);
+    c.speed = roundMs(Math.min(have / played, SLOW_SHOT_SPEED_MAX));
+    notes.push(`cutaway ${c.sceneIndex} barely moves, so it plays ${c.speed}x faster: ${(played * c.speed).toFixed(2)}s of its clip in ${c.seconds.toFixed(2)}s`);
   }
   return notes;
 }
@@ -4861,12 +4919,18 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     // speedUpSlowBroll: a slow cutaway plays faster; brollMinSec: one that plays on past its clip holds its last frame.
     const faster = c.speed > 1 ? `,setpts=PTS/${c.speed}` : "";
     const hold = c.holdSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${sec(c.holdSec)}` : "";
+    // #4835: one that starts with its scene holds its first frame over the scene's opening air (openingAirFrames).
+    const lead = cutawayLeadHold(c);
+    const air = lead > 0 ? openingAirFrames(c.startSec, c.startSec + lead) : null;
+    const from = air ? (air.first - 0.5) / FPS : c.startSec;
+    const at = air ? (air.first + 0.5) / FPS : c.startSec;
+    const held = air?.clones ? `,setpts=PTS-STARTPTS,tpad=start_mode=clone:start=${air.clones}` : "";
     filters.push(
-      `${norm(`${i}:v`)}${faster}${hold},trim=${c.inSec ? sec(c.inSec) : 0}:${sec((c.inSec ?? 0) + c.seconds)},setpts=PTS-STARTPTS+${sec(c.startSec)}/TB[cv${j}]`,
+      `${norm(`${i}:v`)}${faster}${hold},trim=${c.inSec ? sec(c.inSec) : 0}:${sec((c.inSec ?? 0) + c.seconds - lead)}${held},setpts=PTS-STARTPTS+${sec(at)}/TB[cv${j}]`,
     );
     // eof_action=pass keeps the spine showing once the cutaway's frames end.
     filters.push(
-      `[${videoLabel}][cv${j}]overlay=enable=between(t\\,${sec(c.startSec)}\\,${sec(end)}):eof_action=pass[ov${j}]`,
+      `[${videoLabel}][cv${j}]overlay=enable=between(t\\,${sec(from)}\\,${sec(end)}):eof_action=pass[ov${j}]`,
     );
     videoLabel = `ov${j}`;
   });
@@ -5272,6 +5336,8 @@ export function inTheCut(timeline) {
         ? "word times"
         : `proportion: scene ${c.spineSceneIndex} has no word times`;
     const cut = c.cutShortBy ? `, cut short where ${c.cutShortBy}` : "";
+    // #4835: started with its scene, over the air before the scene's first word.
+    const held = c.leadHoldSec > 0 ? `, its first frame held ${c.leadHoldSec.toFixed(2)}s from the start of scene ${c.spineSceneIndex ?? "under it"}` : "";
     const covers = !c.broll
       ? ""
       : c.coversFound
@@ -5281,7 +5347,7 @@ export function inTheCut(timeline) {
       n: c.sceneIndex,
       line:
         `cutaway ${c.sceneIndex}: ${label} at ${c.startSec.toFixed(2)}s for ${c.seconds.toFixed(1)}s, ` +
-        `cued to ${c.cueLineId} in scene ${c.spineSceneIndex} (${how})${covers}${cut}`,
+        `cued to ${c.cueLineId} in scene ${c.spineSceneIndex} (${how})${covers}${held}${cut}`,
     });
   }
   return rows.sort((a, b) => a.n - b.n).map((r) => r.line);

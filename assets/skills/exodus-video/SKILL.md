@@ -290,6 +290,10 @@ move someone (Micro-drama template only), or stop.
   with `--accept-findings`. A `--one-shot` run stops here too when the check
   before pictures finds a problem: `status` prints what it found, scene by
   scene. Show it to the member; accepting it is their call, never yours.
+  When `status` also says the plan broke one of the app's planning rules,
+  accepting draws the scene pictures and the video stops once more at them,
+  so the member looks at the pictures before anything is filmed. That second
+  stop is a normal storyboard review: show it and approve only on their yes.
 - Redo a picture: `exodus video retry-frame <runId> --node <nodeId> --scene <n>
   --note "<what is wrong>"`, with the node id from the `Redo one frame:` line
   `status` printed. It redraws one picture. The CLI prints no price for it:

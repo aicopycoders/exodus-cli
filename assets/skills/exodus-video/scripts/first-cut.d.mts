@@ -386,6 +386,12 @@ export interface CutSync {
 /** COP-357, fps30: the frame rate a film with the phone look is delivered at, by repeated frames. */
 export const DELIVERY_FPS: number;
 
+/** The finished cut's frames on its own 24 fps clock: the joined picture's, or round(frames / speed) after a speed step. */
+export function filmFrames(pictureSec: number, speed?: number | null): number;
+
+/** #4817: the frames a film delivered at `deliverFps` has, so its picture runs as long as its sound (filmFrames after a speed step, else pictureSec), rounded up. */
+export function deliveredFrames(pictureSec: number, speed: number | null, deliverFps: number): number;
+
 /** The bars checkVerdict holds a finished cut to. */
 export const CHECK_BARS: {
   voiceOverBedDb: number;

@@ -5901,24 +5901,14 @@ export async function statusFlow(
       if (row.frame?.lastRedo) lines.push(`       picture: ${row.frame.lastRedo.label}`);
       for (const found of row.clip?.findings ?? []) {
         const finding = choiceMade(row.clip) ? { ...found, detail: heldChoiceMade(found.detail) } : found;
-        // Local night fix F1 and F2(b): the words a kept one-take take said in place of the script's, and its label
-        // check, are the worker's own plain sentences for the member, printed as they are.
-        if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
-          if (finding.code === ONE_TAKE_LABEL_ALL_FLIPPED_CODE) {
-            if (allFlippedSaid) continue;
-            allFlippedSaid = true;
-          }
-          lines.push(`       ${finding.detail}`);
-          continue;
+        if (finding.code === ONE_TAKE_LABEL_ALL_FLIPPED_CODE) {
+          if (allFlippedSaid) continue;
+          allFlippedSaid = true;
         }
-        lines.push(`       ${finding.code} (${finding.severity}): ${finding.detail}`);
+        // #4817: a finding's own sentence, never its check's code name or level; --json keeps both.
+        lines.push(`       ${finding.detail}`);
         // #1784: what the checker itself said, when it adds something.
-        const judgeSeverity = finding.judgeSeverity ?? finding.severity;
-        if (finding.judgeDetail) {
-          lines.push(`         checker said (${judgeSeverity}): ${finding.judgeDetail}`);
-        } else if (judgeSeverity !== finding.severity) {
-          lines.push(`         checker rated it ${judgeSeverity}`);
-        }
+        if (finding.judgeDetail) lines.push(`         checker said: ${finding.judgeDetail}`);
       }
       if (row.clip?.error) lines.push(`       ${row.clip.error}`);
       const usedIdea = row.clip?.artifact?.type === "video" ? row.clip.artifact.replannedIdea : undefined;
@@ -5936,7 +5926,7 @@ export async function statusFlow(
         lines.push("       word timings: measured on the original voice (close, not frame-exact)");
       }
       for (const finding of row.frame?.findings ?? []) {
-        lines.push(`       picture: ${finding.code} (${finding.severity}): ${finding.detail}`);
+        lines.push(`       picture: ${finding.detail}`);
       }
     }
     if (outputsOfNodeKind(run, "voiceover").some(isNarrationMaster)) {
@@ -6048,8 +6038,6 @@ const ONE_TAKE_LABEL_ALL_FLIPPED_CODE = "one-take-label-flipped-all";
  */
 export const ONE_TAKE_SAID_WRONG_CODES = ["one-take-said-wrong", "one-take-second-listen-failed"] as const;
 
-/** The one-take findings `video status` prints as their plain sentence alone, with no code before it. */
-const ONE_TAKE_PLAIN_FINDING_CODES: readonly string[] = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES, ...ONE_TAKE_SAID_WRONG_CODES];
 
 // The run page's Director panel words (director-panel.tsx), so the two agree.
 const DIRECTOR_STATUS_WORDS: Record<NonNullable<RunDirector["status"]>, string> = {

@@ -4273,23 +4273,14 @@ export async function statusFlow(runId, json, deps) {
                 lines.push(`       picture: ${row.frame.lastRedo.label}`);
             for (const found of row.clip?.findings ?? []) {
                 const finding = choiceMade(row.clip) ? { ...found, detail: heldChoiceMade(found.detail) } : found;
-                if (ONE_TAKE_PLAIN_FINDING_CODES.includes(finding.code)) {
-                    if (finding.code === ONE_TAKE_LABEL_ALL_FLIPPED_CODE) {
-                        if (allFlippedSaid)
-                            continue;
-                        allFlippedSaid = true;
-                    }
-                    lines.push(`       ${finding.detail}`);
-                    continue;
+                if (finding.code === ONE_TAKE_LABEL_ALL_FLIPPED_CODE) {
+                    if (allFlippedSaid)
+                        continue;
+                    allFlippedSaid = true;
                 }
-                lines.push(`       ${finding.code} (${finding.severity}): ${finding.detail}`);
-                const judgeSeverity = finding.judgeSeverity ?? finding.severity;
-                if (finding.judgeDetail) {
-                    lines.push(`         checker said (${judgeSeverity}): ${finding.judgeDetail}`);
-                }
-                else if (judgeSeverity !== finding.severity) {
-                    lines.push(`         checker rated it ${judgeSeverity}`);
-                }
+                lines.push(`       ${finding.detail}`);
+                if (finding.judgeDetail)
+                    lines.push(`         checker said: ${finding.judgeDetail}`);
             }
             if (row.clip?.error)
                 lines.push(`       ${row.clip.error}`);
@@ -4309,7 +4300,7 @@ export async function statusFlow(runId, json, deps) {
                 lines.push("       word timings: measured on the original voice (close, not frame-exact)");
             }
             for (const finding of row.frame?.findings ?? []) {
-                lines.push(`       picture: ${finding.code} (${finding.severity}): ${finding.detail}`);
+                lines.push(`       picture: ${finding.detail}`);
             }
         }
         if (outputsOfNodeKind(run, "voiceover").some(isNarrationMaster)) {
@@ -4368,7 +4359,6 @@ export const ONE_TAKE_HEARD_AS_CODE = "one-take-words-heard-as";
 export const ONE_TAKE_LABEL_CODES = ["one-take-label-flipped", "one-take-label-unsure", "one-take-label-held", "one-take-label-flipped-all"];
 const ONE_TAKE_LABEL_ALL_FLIPPED_CODE = "one-take-label-flipped-all";
 export const ONE_TAKE_SAID_WRONG_CODES = ["one-take-said-wrong", "one-take-second-listen-failed"];
-const ONE_TAKE_PLAIN_FINDING_CODES = [ONE_TAKE_HEARD_AS_CODE, ...ONE_TAKE_LABEL_CODES, ...ONE_TAKE_SAID_WRONG_CODES];
 const DIRECTOR_STATUS_WORDS = {
     reviewing: "Watching this run",
     waiting: "Waiting for redos to finish",

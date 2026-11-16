@@ -306,6 +306,22 @@ function wholeLinesOf(raw) {
  * motion is read back on FPS, and its caption check reads each caption on the frame the delivered file shows it on.
  */
 export const DELIVERY_FPS = 30;
+
+/** The finished cut's frames on FPS: the joined picture's, or round(frames / speed) after a speed step, as its sound ends. */
+export function filmFrames(pictureSec, speed = null) {
+  const frames = Math.round(pictureSec * FPS);
+  return speed ? Math.round(frames / speed + 1e-9) : frames;
+}
+
+/**
+ * #4817: the frames a film delivered at `deliverFps` has, so its picture runs as long as its sound: after a speed step
+ * the sound ends on filmFrames on FPS, with none it ends on pictureSec itself. Rounded up to a whole delivered frame, so
+ * the picture never ends before the sound, and never by a whole frame after it.
+ */
+export function deliveredFrames(pictureSec, speed, deliverFps) {
+  const soundSec = speed ? filmFrames(pictureSec, speed) / FPS : Number(pictureSec.toFixed(6));
+  return Math.ceil(soundSec * deliverFps - 1e-9);
+}
 export const LENS_SMUDGE = {
   /** Where the side is read: this far into the cut. */
   readAtSec: 1,
@@ -4905,8 +4921,11 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     videoLabel = "burned";
   }
   // COP-357, fps30: the finished picture, words and all, at the delivered rate by repeated frames; the clock above is FPS.
+  // #4817: it ends on exactly the frames its sound needs (deliveredFrames), its last frame repeated when the graph
+  // ends a frame early, as Debian's ffmpeg 5.1 (the worker's) does after the lens smudge's maskedmerge.
   if (finish?.deliverFps) {
-    filters.push(`[${videoLabel}]fps=${finish.deliverFps}[delivered]`);
+    const frames = deliveredFrames(pictureSec, speed, finish.deliverFps);
+    filters.push(`[${videoLabel}]fps=${finish.deliverFps},tpad=stop_mode=clone:stop=-1,trim=end_frame=${frames}[delivered]`);
     videoLabel = "delivered";
   }
 
@@ -5016,7 +5035,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     // COP-300: the faster sound padded or cut to the faster picture's own length, as each segment's is to its
     // picture's: `fps` ends the picture on round(frames / speed) frames, and atempo runs on past it. The cut can land
     // in a word's tail, so the last END_FADE_SAMPLES fade out, as each segment's edges do, and the end never clicks.
-    const end = Math.round(Math.round(pictureSec * FPS) / speed + 1e-9) * SAMPLES_PER_FRAME;
+    const end = filmFrames(pictureSec, speed) * SAMPLES_PER_FRAME;
     filters.push(`[mix]atempo=${speed},apad,atrim=end_sample=${end},afade=t=out:ss=${end - END_FADE_SAMPLES}:ns=${END_FADE_SAMPLES}[mixfaster]`);
     audioLabel = "mixfaster";
   }

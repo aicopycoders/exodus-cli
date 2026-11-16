@@ -114,6 +114,9 @@ export interface CustomerRun {
     planHold?: {
         atBoard?: boolean;
         beforePictures: boolean;
+        notes?: string[];
+        acceptFindings?: boolean;
+        findings?: CustomerPlanFinding[];
     };
     place?: {
         name: string;
@@ -161,6 +164,12 @@ export interface CustomerStoryboard {
     stage: CustomerRunStage;
     scenes: CustomerRunScene[] | null;
     noPictureBeforeApproval?: true;
+    beforePictures?: true;
+    findings?: CustomerPlanFinding[];
+}
+export interface CustomerPlanFinding {
+    text: string;
+    scenes: number[];
 }
 export interface CustomerItem {
     sceneIndex: number;

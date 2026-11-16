@@ -498,11 +498,12 @@ Options:
   --no-music           Leave the music bed off (start), which it already is
   --broll              Cut away to B-roll shots in the ad (start, with
                        --conceit). Only for accounts with B-roll switched on
-  --one-shot           Make the whole video with no stop (start, with
+  --one-shot           Make the whole video in one go (start, with
                        --conceit). The app approves its own storyboard when
                        its checks pass and goes straight on to the clips,
-                       which is the part that costs. Without it the run is
-                       Guided: it stops at the storyboard for your yes
+                       which is the part that costs. When a check finds a
+                       problem it stops at the storyboard for you. Without it
+                       the run is Guided: it stops at the storyboard for your yes
   --review-storyboard  Stop at the storyboard so you can approve it yourself
                        (start, with --conceit). This is the default, so the
                        flag changes nothing. Kept for scripts that pass it

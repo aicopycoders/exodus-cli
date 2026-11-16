@@ -97,6 +97,16 @@ function heldSceneChoiceLines(run, scenes, page) {
             : []),
     ];
 }
+function findingLines(findings) {
+    return (findings ?? []).map((f) => {
+        const n = f.scenes;
+        const where = n.length === 0 ? "" : n.length === 1 ? `Scene ${n[0]}: ` : `Scenes ${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}: `;
+        return `  ${where}${f.text}`;
+    });
+}
+function acceptFindingsLine(id) {
+    return `Go on anyway, accepting what the check found:  exodus video approve ${id} --accept-findings`;
+}
 export function customerAnswer(data) {
     return typeof data === "object" && data !== null && data.view === "customer"
         ? data
@@ -228,6 +238,16 @@ export function customerStageLines(run, page) {
                 `Watch it here: ${page}`,
             ];
         case "review":
+            if (run.planHold?.acceptFindings) {
+                return [
+                    ...(run.planHold.notes?.length ? run.planHold.notes : ["The app's check found a problem with this plan."]),
+                    ...findingLines(run.planHold.findings),
+                    ...(run.place?.imageUrl ? [`The place:    ${run.place.imageUrl}`] : []),
+                    `Read it:      exodus video storyboard ${id}`,
+                    acceptFindingsLine(id),
+                    `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
+                ];
+            }
             if (noPictureBeforeApproval(run) && run.place) {
                 return [
                     "Your script, place and voice are waiting for your yes. No take is filmed before you approve.",
@@ -311,13 +331,28 @@ export function customerStoryboardLines(board) {
             `Check where it is: exodus video status ${id}`,
         ];
     }
+    const scriptLines = (scenes) => scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]);
+    const found = board.findings?.length ? ["", "What the app's check found:", ...findingLines(board.findings)] : [];
+    const approve = board.findings?.length ? acceptFindingsLine(id) : `approve with: exodus video approve ${id}`;
     if (board.noPictureBeforeApproval) {
         return [
             "Script",
-            ...board.scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]),
+            ...scriptLines(board.scenes),
+            ...found,
             "",
             "No take gets a picture before you approve.",
-            `approve with: exodus video approve ${id}`,
+            approve,
+            `pick voices: exodus video voices ${id}`,
+        ];
+    }
+    if (board.beforePictures) {
+        return [
+            "Storyboard",
+            ...scriptLines(board.scenes),
+            ...found,
+            "",
+            "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
+            approve,
             `pick voices: exodus video voices ${id}`,
         ];
     }

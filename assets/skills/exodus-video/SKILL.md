@@ -287,7 +287,9 @@ move someone (Micro-drama template only), or stop.
   (with the pilot stop, the pilot first), the expensive part. The CLI prints
   no price for them at this stop: say so, and approve on their yes. A storyboard the app's check stopped is
   refused with the reason. Tell the member, and on their yes approve again
-  with `--accept-findings`.
+  with `--accept-findings`. A `--one-shot` run stops here too when the check
+  before pictures finds a problem: `status` prints what it found, scene by
+  scene. Show it to the member; accepting it is their call, never yours.
 - Redo a picture: `exodus video retry-frame <runId> --node <nodeId> --scene <n>
   --note "<what is wrong>"`, with the node id from the `Redo one frame:` line
   `status` printed. It redraws one picture. The CLI prints no price for it:

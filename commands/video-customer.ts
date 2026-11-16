@@ -117,8 +117,12 @@ export interface CustomerRun {
   spendWentOn?: { sentence: string };
   /** #4582: the member said stop here. */
   spendStopped?: { sentence?: string };
-  /** COP-218/COP-337: the run waits at its storyboard; `beforePictures` when a pictures step follows it. */
-  planHold?: { atBoard?: boolean; beforePictures: boolean };
+  /**
+   * COP-218/COP-337: the run waits at its storyboard; `beforePictures` when a pictures step follows it. #4825:
+   * `acceptFindings` when the check before pictures stopped it there, with the server's `notes` and what it found
+   * (`findings`), which approving accepts. Absent from older servers.
+   */
+  planHold?: { atBoard?: boolean; beforePictures: boolean; notes?: string[]; acceptFindings?: boolean; findings?: CustomerPlanFinding[] };
   /**
    * COP-351: at that stop, the place its board drew, or tried to draw, before it: its name and look, and its picture's
    * address, null when none came out. Absent when the board drew none, and from older servers.
@@ -283,6 +287,30 @@ export interface CustomerStoryboard {
   scenes: CustomerRunScene[] | null;
   /** COP-337: no take gets a picture before this approval, and the approve is open. Absent from older servers. */
   noPictureBeforeApproval?: true;
+  /** #4825: the run waits at its storyboard before any picture is drawn. Absent from older servers. */
+  beforePictures?: true;
+  /** #4825: what the check before pictures found, which approving accepts. Absent when none, and from older servers. */
+  findings?: CustomerPlanFinding[];
+}
+
+/** #4825: one thing the check before pictures found, in the server's sentence, with the scenes it names. */
+export interface CustomerPlanFinding {
+  text: string;
+  scenes: number[];
+}
+
+/** #4825: each finding on its own line, led by the scenes it names ("Scene 4:", "Scenes 2 and 4:"). */
+function findingLines(findings: readonly CustomerPlanFinding[] | undefined): string[] {
+  return (findings ?? []).map((f) => {
+    const n = f.scenes;
+    const where = n.length === 0 ? "" : n.length === 1 ? `Scene ${n[0]}: ` : `Scenes ${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}: `;
+    return `  ${where}${f.text}`;
+  });
+}
+
+/** #4825: the approve that goes on past the check's findings, said with what it means. */
+function acceptFindingsLine(id: string): string {
+  return `Go on anyway, accepting what the check found:  exodus video approve ${id} --accept-findings`;
 }
 
 export interface CustomerItem {
@@ -485,6 +513,17 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         `Watch it here: ${page}`,
       ];
     case "review":
+      // #4825: the check before pictures stopped the video here (a One-shot one too, as its start promised).
+      if (run.planHold?.acceptFindings) {
+        return [
+          ...(run.planHold.notes?.length ? run.planHold.notes : ["The app's check found a problem with this plan."]),
+          ...findingLines(run.planHold.findings),
+          ...(run.place?.imageUrl ? [`The place:    ${run.place.imageUrl}`] : []),
+          `Read it:      exodus video storyboard ${id}`,
+          acceptFindingsLine(id),
+          `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
+        ];
+      }
       // COP-351: the place too, only when the view carries it (the board drew it, or tried to, before the stop).
       if (noPictureBeforeApproval(run) && run.place) {
         return [
@@ -571,14 +610,32 @@ export function customerStoryboardLines(board: CustomerStoryboard): string[] {
       `Check where it is: exodus video status ${id}`,
     ];
   }
+  const scriptLines = (scenes: CustomerRunScene[]) =>
+    scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]);
+  // #4825: the check before pictures' findings, which the approve below accepts.
+  const found = board.findings?.length ? ["", "What the app's check found:", ...findingLines(board.findings)] : [];
+  const approve = board.findings?.length ? acceptFindingsLine(id) : `approve with: exodus video approve ${id}`;
   // COP-337: a stop that draws no picture before its approval is the takes' script, with nothing to wait for.
   if (board.noPictureBeforeApproval) {
     return [
       "Script",
-      ...board.scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]),
+      ...scriptLines(board.scenes),
+      ...found,
       "",
       "No take gets a picture before you approve.",
-      `approve with: exodus video approve ${id}`,
+      approve,
+      `pick voices: exodus video voices ${id}`,
+    ];
+  }
+  // #4825: a stop before any picture (the check before pictures stopped the plan) has no picture to wait for.
+  if (board.beforePictures) {
+    return [
+      "Storyboard",
+      ...scriptLines(board.scenes),
+      ...found,
+      "",
+      "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
+      approve,
       `pick voices: exodus video voices ${id}`,
     ];
   }

@@ -195,7 +195,7 @@ One edge case worth knowing: the CLI reads the workflow's input list before it u
 npx @aicopycoders/exodus workflow run "Launch Flow" --input brief="new cortisol offer, problem-aware" --wait
 ```
 
-`--wait` polls to a terminal status and prints the run's collected outputs — text inline, image URLs. Without `--wait` the command returns the `runId` and you poll it yourself:
+`--wait` polls to a terminal status and prints the run's collected outputs — text inline, each image as its address, which stays with you (give the run's page). Without `--wait` the command returns the `runId` and you poll it yourself:
 
 ```bash
 npx @aicopycoders/exodus workflow status --id <runId>
@@ -214,7 +214,7 @@ npx @aicopycoders/exodus workflow status --id <runId> --out ./deliverables
 
 Every delivered slot becomes a file named `<workflow>-<runId tail>-<slot key>.<ext>` — text as `.md`, storyboards and frame sets as `.json`, images/video/audio downloaded from their URLs — and each written path is printed. Unfulfilled slots are reported, never written. The directory is created if it doesn't exist.
 
-Report the outputs plus a short take. Don't call a run "done" off the kickoff line alone. **`status` prints one `status:` line, and it says one of seven words:** `Queued`, `Running`, `Awaiting approval`, `Succeeded`, `Succeeded with warnings`, `Failed`, `Cancelled`. Some of them carry a short "why" after a dash — `Awaiting approval — needs repair`, `Awaiting approval — needs inputs`, `Running — sub-workflow` (it's waiting on a child workflow, not on you), `Failed — nothing delivered` (steps failed AND not one promised slot arrived, so it is not a success no matter what the run row says). `Succeeded with warnings` means some steps were skipped or failed but the run still delivered. `Awaiting approval` means it **parked** and is waiting on you (see the next section). Read `status` before declaring victory.
+Report the outputs plus a short take: text inline, and for an image, a video, audio or a document, the run's page on the dashboard at `/runs/<runId>` (the CLI prints it in full as `Or in the app:` when the run parks). Don't call a run "done" off the kickoff line alone. **`status` prints one `status:` line, and it says one of seven words:** `Queued`, `Running`, `Awaiting approval`, `Succeeded`, `Succeeded with warnings`, `Failed`, `Cancelled`. Some of them carry a short "why" after a dash — `Awaiting approval — needs repair`, `Awaiting approval — needs inputs`, `Running — sub-workflow` (it's waiting on a child workflow, not on you), `Failed — nothing delivered` (steps failed AND not one promised slot arrived, so it is not a success no matter what the run row says). `Succeeded with warnings` means some steps were skipped or failed but the run still delivered. `Awaiting approval` means it **parked** and is waiting on you (see the next section). Read `status` before declaring victory.
 
 ## 2. Runs that park
 

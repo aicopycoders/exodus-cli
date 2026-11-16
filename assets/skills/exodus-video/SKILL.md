@@ -101,6 +101,24 @@ Conceit is the family plus Wrapper, Narrator Person, and Delivery. Style is the
 look. Narrated Story is the voice-over family and Acted Story is the dialogue
 family (`familyTree.ts`). Those family names stay the code's names.
 
+## What the member sees: pages, never file addresses
+
+A **page** is a dashboard link the CLI printed (`Watch it:`, `… on the
+dashboard:`, `The video's page:`), on the host it printed: `/video?door=swipe…`,
+`/video/runs/<id>`, `/runs/<id>`, `/workflows/…`. Every link you give the
+member is a page. A **file address** is any other link: a stored picture,
+clip, song or finished video, a voice sample, a vendor's or signed link, an
+API address. It opens for anyone who holds it, with no sign-in, so it stays
+out of every reply: also when the CLI printed it and when `--json` carried it.
+Say which page shows it. When the member asks for the file or "the file
+link", the thing is theirs: say in one line that a file's link opens for
+anyone who has it, give the page, and save the file for them (`exodus video
+pull <runId> --out <dir>` for a run's video and pieces) and name it on their
+disk. People, rooms and voices: a name and one line each, the recommended one
+with the row's reason, then one page where they are seen and heard (a swipe's page with `&sheet=person`, or the run page). The picks stop
+has no page yet: say so, save them with `exodus video picks <runId> --out
+<dir>` (also after the pick) and name the folder. Their own ad's link, which they gave, is theirs.
+
 ## From one sentence to a film
 
 The member types one sentence, such as "swipe this ad as a microdrama for my
@@ -121,8 +139,9 @@ naming what it refused ("Beta testers"): tell the member and stop. Do not retry.
 Two rules hold at every stop:
 
 - **The run page link.** The start prints `Watch it: <link>`. Keep it and give
-  it to the member at every stop: the faces, rooms, pictures, voice samples
-  and clips open there. `status` leaves it out at the storyboard stop.
+  it to the member at every stop: the pictures, voice samples and clips open
+  there. It is a page, the only kind of link you give ("What the member
+  sees"). `status` leaves it out at the storyboard stop.
 - **A yes before every paid step.** Tell the member what the step buys
   and its price, then wait for their yes. The price is the one the CLI
   printed: `maximumUsd` and `estimatedUsd` under `preparationQuote` from
@@ -249,10 +268,11 @@ the member.
 Today a run goes from the script straight to the storyboard. Run this stop
 only when `status` says the run is waiting for picks.
 
-1. `exodus video picks <runId>` lists, for each person, four faces and the
-   voices; four rooms for the set; the camera styles, when the run offers them.
-   Each face, room and voice sample has its own link. Show it all with the run
-   page link.
+1. `exodus video picks <runId> --out ./picks-<runId>` lists, for each person,
+   four faces and the voices; four rooms for the set; the camera styles, when
+   the run offers them. It saves each face, room and voice sample as a file in
+   that folder. The dashboard has no page for the picks yet: say so in one
+   line, name the folder, and give the run page link.
 2. Ask for one face and one voice per person, one room, and a style when
    one is offered. Send the answers as:
 
@@ -279,10 +299,11 @@ then `picks` again.
 ### Stop 3: the storyboard
 
 `status` says "Parked: the storyboard is waiting for your yes."
-`exodus video storyboard <runId>` prints each scene's line and picture, and who
-speaks with which voice ("Reading the storyboard gate" has the detail). Show it
-with the run page link, then ask: approve, redo a picture, change a voice,
-move someone (Micro-drama template only), or stop.
+`exodus video storyboard <runId>` prints each scene's line, whether its picture
+is drawn, and who speaks with which voice ("Reading the storyboard gate" has the
+detail). Say the lines in your words and give the run page link, where the
+pictures are, then ask: approve, redo a picture, change a voice, move someone
+(Micro-drama template only), or stop.
 
 - Approve: `exodus video approve <runId>`. It approves the storyboard and
   buys the voices and the clips
@@ -320,8 +341,10 @@ move someone (Micro-drama template only), or stop.
 - Stop: `exodus workflow cancel <runId>`.
 
 **The song format** waits twice more. `exodus video song <runId>` prints the
-Song master, its listen link and its sha256 once one is ready. The member
-listens; on their yes,
+Song master and its sha256 once one is ready, and the video's page
+(`/video/runs/<runId>`) where it plays until it is approved: give that page
+(after the approval, `exodus video song <runId> --out <dir>` saves it as a
+file; name it); on their yes,
 `exodus video song approve <runId> --master <masterSha256>`. Before its clips
 the run parks with "Parked: final provider requests are prepared".
 `exodus video quote <runId>` prints each request's price and the total; on
@@ -375,7 +398,8 @@ the run started:
   status <runId>": make no cut of your own, and read `status` again in a
   minute. `exodus video wait <runId>` waits through it. On a run started with `--one-shot` that cut is delivered by itself,
   with no approve: on an admin key `status` then says "Final cut: approved
-  and delivered.", and on a beta tester's key "Your video is ready: <link>".
+  and delivered.", and on a beta tester's key "Your video is ready." with
+  "Watch it on the dashboard: <page>" at the end of the block.
   In the minute between the cut and the delivery, `status` on an admin key
   says "Final cut: made. This run delivers it by itself; look again in a
   minute.": read it again then, and send no approve. Only when the app's check of the finished film against its own sound fails
@@ -385,9 +409,9 @@ the run started:
   the member the run page to watch the film. A run that stopped at the
   storyboard waits for the member instead: on an admin key `status` says
   "Final cut: made by the app. Approve it with: exodus video approve <runId>"; on a
-  beta tester's key it says "Your video is ready to watch: <link>" and gives
-  the line that finishes it, `exodus video approve <runId>` (the video's page
-  finishes it too).
+  beta tester's key it says "Your video is ready to watch." with the same page
+  line at the end, and gives the line that finishes it, `exodus video approve
+  <runId>` (the video's page finishes it too).
 - **You make the cut** of any other run (an admin's `video start` or
   `workflow run`). When the cut is already uploaded, give the member the run
   page to watch it. When the run waits for a cut: `exodus video pull <runId>
@@ -450,7 +474,7 @@ By default a swipe is one round: read the ad, one question with the plan, and
 on its yes write and make each video. When the member names no ad, the
 options come first (step 0); "Step by step" asks before each paid step.
 
-**How it talks.** Seven rules; the screens below are their templates (the
+**How it talks.** Ten rules; the screens below are their templates (the
 question's text, options and money line as written; the message in your words).
 
 1. **Decide, then show.** Pick every row you can (how close, where it stops,
@@ -496,6 +520,24 @@ question's text, options and money line as written; the message in your words).
    <runId>`) and speak when it is delivered or stops.
 7. **Details on request**, named once on the first screen: "show sheet", "show
    script", "show people", "why" (step 3).
+8. **One page a thing, and only pages** ("What the member sees"). A swipe has
+   one page and a run has one: give it on its own line, after a few words that
+   say what opens there ("See their faces and hear the voices:").
+9. **Say what they asked for and what they must decide; the rest waits for
+   "why".** A count, a comparison or a check's result nobody asked for stays
+   out ("143 words against their 130"). So does every id, except inside a
+   page's link or a command the member runs themselves; a number shows only
+   where they pick by it ("person 4"). A recommended pick comes with the row's
+   own reason in one clause and what a start does with it; with no reason
+   printed, say whom a start films and leave "recommends" out. Never left out
+   for brevity: the price and what it leaves out, what a start films, a hold's
+   or a refusal's reason, and every line a screen or step below says to tell
+   the member (a retired kind, the dictionary offer, the finish rows, a text
+   card or opening the write left out).
+10. **The question comes last.** While a question is open (the sheet, "Film
+   it?", "What now?"), every reply ends on it, asked again with its spending
+   option's price and the money line, after a "show …" too. Nothing follows
+   the question.
 
 Rule 4's spending options, each figure the one the CLI printed for this swipe.
 An option that runs a `--yes` line and has no row still carries the CLI's
@@ -744,10 +786,13 @@ something: the product, how close, where it stops, music 4. Stop.
 "Change something" asks the rows as questions (rule 3), what each is now first,
 marked "(now)", then sends the sheet again. "show sheet" prints every row as
 `swipe-sheet.md` (beside this file) lays it out. "show script" is their ad's
-script (`status --full`, free), and after the write the written one with its
-direction, Kept and Changed; "show people", each person made with their
-picture's address, and the voices when the sheet has a `voice` row; "why", your
-reasons, one line each.
+script (`status --full`, free), and after the write the written one: how many
+lines, its first line and its last, then the swipe's page, where every line
+is. "paste the script" prints every line, numbered. "show people" is one line
+a person (number, name, who they are), whom a start films and the row's
+reason, the voice when the sheet has a `voice` row, then the swipe's page with
+`&sheet=person`, where the faces are seen and the samples play. "why" is your
+reasons, the direction, Kept and Changed, one line each.
 
 **The yes covers only the list the member last saw.** Before any write or
 start, the member has seen the list and the count, and said yes to them. This
@@ -932,6 +977,7 @@ first. Then read each one's saved sheet and its price, both free (`exodus
 video swipe sheet <swipeId>` and `exodus video swipe sheet price <swipeId>`),
 and send one reply for all their starts, its message as text first (rule 2):
 
+> See the <k> people<, and hear the voices>: <the swipe's page>&sheet=person (only when the sheet has people; "hear the voices" only with a `voice` row)
 > Script ready: <n> lines, <k> takes. Say "show sheet", "show script" or "why"
 
 Its question (`AskUserQuestion`, header "Film it?"), its text:
@@ -980,8 +1026,8 @@ same. Set one only on the member's word. As `sheet` prints them:
 With several videos, the label says how many and the description each one's
 price as printed, never their sum. Each start's `--max-usd`, and each write's
 `--people-max-usd`, is that video's own printed "at most", never a sum. "show sheet" prints each saved sheet's rows
-(with each person made, their picture's address, and the one recommended, when
-the sheet shows them) and the swipe's dashboard page each prints, whose
+(with each person made by number and name, and the one recommended, when the
+sheet shows them) and the swipe's dashboard page each prints, whose
 Pre-production card on Your version shows the same picks: a change made there
 is to this same saved sheet, so read it and its price again. That link with
 `&sheet=finish` added (or another section's `id` from `--json`, such as
@@ -1044,10 +1090,13 @@ the member's own words for it (one short line; a refusal says what fits). The
 screen's price is `exodus video swipe sheet price <swipeId>` (free) at the
 sheet's rows, with the most it can cost; the option's description ends with
 what it leaves out, shortened (the table's "Film it?" row). "why" gives each
-line of the price. A 480p draft or the first take only is a row the member
-sets (`size=480p`, `takes=first`) when the price lists them; read the price
-again after a set. The first take only is a cheap check of the method and the
-size, not of the final person: the whole video after it is a second start,
+line of the price. A 480p draft, 1080p or the first take only is a row the
+member sets (`size=480p`, `size=1080p`, `takes=first`) when the price lists
+them; read the price again after a set. 1080p is sharper and each take costs
+2.5 times its 720p price; say so, with the price's own 1080p lines, before the
+member chooses it. Set it only when the member asks for it, since a start with
+no pick films the kind's own size. The first take only is a cheap check of the
+method and the size, not of the final person: the whole video after it is a second start,
 paid on its own (`takes=all`, then `swipe start <swipeId> --again`), and it
 casts the person and draws the pictures again. Say so before that yes.
 **A money limit.** When the member gave one ("keep the whole thing under
@@ -1063,7 +1112,12 @@ the price again, and say on the sheet in one line that it is a 480p draft, the
 size that fits their limit: their yes to that sheet is the yes to it. A limit
 given after they saw the sheets: name the 480p draft and wait for their yes.
 With a money limit and no "at most" printed, the limit cannot be checked: stop
-and ask. For example, with a limit for everything: when the write's cost, the
+and ask. That smaller size is for a video at the kind's own size. When the
+member asked for 1080p and its "at most" does not fit their limit, set nothing
+and call nothing a draft: say that 1080p does not fit and ask, naming the next
+size down that fits, 720p, else the 480p draft, each with the "at most" the
+price printed for it. For example, with a limit for everything: when the
+write's cost, the
 people's most and 720p's "at most" add up to more than the limit, and the same
 sum with 480p's "at most" is under it, set 480p. Every figure in that sum is
 the one the CLI printed for this swipe, never one from memory. When no size
@@ -1109,7 +1163,8 @@ member asks for options. More people are paid on the member's keys: run
 put the price it prints in the option, and after the yes run the line it
 prints (`--yes --max-usd <n>`, the most the price said). Do not add
 `--wait`: it can wait up to 45 minutes. Read the sheet a few minutes later and
-show each person's name and picture address. A sheet with a `voice` row
+show each person in one line, then the swipe's page with `&sheet=person`. A
+sheet with a `voice` row
 (there only while the server offers people and voices to pick from) has its
 voices listed once by the server after the write (when the member has an
 ElevenLabs key), and the row may recommend one and say why: a voice that fits
@@ -1118,8 +1173,9 @@ its videos don't all sound the same. A sheet with no `voice` row has no voices t
 about them. `exodus video swipe sheet voices <swipeId>` lists them again: one
 read of the voice list on the member's ElevenLabs key, and no speech is made,
 so it buys nothing. It prints the voices that fit the person, best fit first,
-each with its age and accent when known ("Sarah · young · American") and a
-sample to hear, then "Recommended: <n> (…). <why> A start with no pick films
+each with its age and accent when known ("Sarah · young · American"), and the
+swipe's page, where each sample plays, then "Recommended: <n> (…). <why> A
+start with no pick films
 it."; after the member's pick, "Recommended: <n> (…). You picked it, so a
 start films it." or "… You picked <m>, so a start films your pick."; or why
 none is. A voice row with no voice prints "List the voices: exodus video swipe
@@ -1148,15 +1204,15 @@ every video has started:
    line the dry write printed (`--yes --people-max-usd <most>`), or `--yes
    --no-people` when the member wants none; a plain `--yes` makes none, and
    says so. With the figure, the write waits up to 5 minutes for the people,
-   then prints each with their picture's address and whom a start with no pick
-   films: the one it recommends, or a new person cast from their speaker's
+   then prints each by number and name, the swipe's page where their faces
+   are, and whom a start with no pick films: the one it recommends, or a new person cast from their speaker's
    type, not one of these (tell the member; set `who=<n>` only on their word;
    never assume one is recommended). When none were made it says so, that
    nothing was paid for them, and how to ask for them (the price first, free).
    After the 5 minutes the write is done: read the sheet a few minutes later.
    The animal, when the script has one, is on the saved sheet's row "The
-   animal" a few minutes later, with its picture's address; a start waits for
-   it. For One-take UGC the write may also write our own text card and pick a
+   animal" a few minutes later, its picture on the swipe's page; a start waits
+   for it. For One-take UGC the write may also write our own text card and pick a
    kind of opening (`headline`, `hookKind`, marked recommended); when Changed
    ends "We left out the text card we wrote: …" or "We left out the kind of
    opening we picked: …", tell the member in one line: they may write their
@@ -1488,9 +1544,10 @@ exodus video swipe sheet price <swipeId>                  the video's price at t
 exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>]
                                                           new people to pick from (member's keys; the price first); who=<n> picks one
 exodus video swipe sheet voices <swipeId>                 the voices that fit the person, best fit first, each with its
-                                                          sample (and its age and accent when known), and the one the
-                                                          row recommends, if any: one read of the voice list on the
-                                                          member's ElevenLabs key, no speech; voice=<n> picks one
+                                                          age and accent when known, the one the row recommends, if
+                                                          any, and the page where the samples play: one read of the
+                                                          voice list on the member's ElevenLabs key, no speech;
+                                                          voice=<n> picks one
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file
 ```
 
@@ -1527,15 +1584,16 @@ CLI words it the way the run page does. On their own brands they can:
   plain transcript out, or wrote a script from a description (see "The script
   file"). `--stop-at-script` prints that script and starts nothing.
 - `video status <runId>`: where the video is, in plain words (waiting in line,
-  planning, drawing, storyboard ready for review, filming, ready with its link,
+  planning, drawing, storyboard ready for review, filming, ready with its page,
   held for a scene they must make again or keep as it is, or stopped and why).
   `--json` prints the server's answer as it came; a held video says
   `"stage": "failed"` with the held scenes in `cutHolds`, and a newer server
   also sends `cutHeldScenes` (each held scene's number and its sentence).
 - `video wait <runId>`: reads the video until it stops for them, is ready
   or stops, then prints where it stands and its page.
-- `video storyboard <runId>`: each scene's line and picture, while the
-  storyboard waits for review.
+- `video storyboard <runId>`: each scene's line and whether its picture is
+  drawn, while the storyboard waits for review. The pictures are on the
+  video's page.
 - `video approve <runId>`: approves the storyboard. At an audition stop,
   `video approve <runId> --audition <digest>` accepts the audition clips, and
   plain `video approve <runId>` pays for another try of the failed audition
@@ -1720,8 +1778,9 @@ The other template flags (`--input-mode`, `--structure`, `--reference`,
 **From the storyboard on.**
 
 ```operator-guide
-exodus video picks <runId>                                a format with a picks stop parks before the storyboard:
-                                                          the faces, voices and rooms it drew, one link each
+exodus video picks <runId> [--out <dir>]                  a format with a picks stop parks before the storyboard:
+                                                          the faces, voices and rooms it drew, by number and name;
+                                                          --out saves each as a file
 exodus video pick <runId> --face <who>=<n> --voice <who>=<n> --room <place>=<n>
                                                           pick one of each; nothing is planned until every slot has one
 exodus video picks <runId> --redo face:<who>|room:<place> --note "…"
@@ -1739,7 +1798,7 @@ exodus video voices <runId> --set <character>=<voiceId>   give a character a voi
 exodus video quote <runId>                                a quoting format: the exact prepared requests and prices
                                                           before any clip; approve them with --request-quote <reviewSha256>
 exodus video approve <runId>                              keep going
-exodus video song <runId>                                 a song-first run: the Song master to listen to
+exodus video song <runId>                                 a song-first run: the Song master, heard on the video's page
 exodus video song approve <runId> --master <sha256>       approve the master you listened to
 exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "…" [--from <s> --to <s>]
                                                           use the member's own recording as the Song
@@ -1770,6 +1829,8 @@ exodus video approve <runId>                              make it the ad
 
 Every command takes `--json`. Read `--json` when you need to decide something
 from the output; read the plain form when you are relaying it to the user.
+Either form may carry a file address: it stays with you ("What the member
+sees").
 
 **Read a run's position with `exodus video status`.** It is the richest reader —
 every scene's clip, voice and picture, with the findings. A `--wait` that landed
@@ -1984,11 +2045,13 @@ things worth knowing before you promise a user anything:
   slots park is still not a landing: it prints its notice once and the loop
   keeps polling, so a resolve from another shell carries the run on. Do not read
   a park banner mid-poll as the wait having finished.
-- **Every link the CLI prints follows the run.** A run opens on
-  `/workflows/<workflowId>/runs/<runId>`. Since #1851 the manifest's
-  `dashboardUrl`, the link in every park block and the link `upload` prints are
-  all minted that way, so they agree. When all the CLI holds is a run id it
-  mints `/runs/<runId>`, the canonical forwarder, which lands on the same page.
+- **Every page the CLI prints follows the run.** An admin's run opens on
+  `/workflows/<workflowId>/runs/<runId>`. A swiped video and every beta
+  tester's run open on `/video/runs/<runId>`. On an admin's run the manifest's
+  `dashboardUrl`, the link in every park block and the link `upload` prints
+  agree with it. When all the CLI holds is a run id it mints `/runs/<runId>`,
+  the forwarder, which lands on the same page. These pages and the swipe's page
+  are the only dashboard links the member is given.
 
 ## The script file
 
@@ -3020,5 +3083,5 @@ including the bundled script. If the audio does not fit, redo the clip with
 Lead with where the run is and what it needs from them. Then, when you pulled
 or cut: how many scenes, which are flagged and why in one line each, what you
 left out, which tool you cut with and anything it changed, the cut's length, and
-the exact command or link for the next step. Never paste the manifest;
-summarize it.
+the exact command or page for the next step. Never paste the manifest;
+summarize it, and leave out the addresses in its `failed[]`.

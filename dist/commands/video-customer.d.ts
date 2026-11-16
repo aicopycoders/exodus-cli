@@ -220,5 +220,5 @@ export declare function finalApproveLines(template: boolean): string[];
 export declare function finalApprovedLines(template: boolean): string[];
 export declare function customerStageLines(run: CustomerRun, page: string): string[];
 export declare function customerStatusLines(run: CustomerRun, dashboardUrl: string): string[];
-export declare function customerStoryboardLines(board: CustomerStoryboard): string[];
+export declare function customerStoryboardLines(board: CustomerStoryboard, page: string): string[];
 export declare function customerVoicesLines(voices: CustomerVoices): string[];

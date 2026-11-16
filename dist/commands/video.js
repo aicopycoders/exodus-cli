@@ -71,9 +71,9 @@ The whole loop, in order:
      launch flags all live in: exodus workflow --help
 
      A format with a picks stop stops first, before anything is planned:
-     exodus video picks <runId>
-       The faces, voices and rooms it drew for each person and place, a link
-       each.
+     exodus video picks <runId> [--out ./picks-<runId>]
+       The faces, voices and rooms it drew for each person and place, by
+       number and name. --out saves each as a file in that folder.
      exodus video pick <runId> --face <who>=<n> --voice <who>=<n> --room <place>=<n>
        Nothing is planned until every slot has a pick. A pick that leaves one
        open is saved and starts nothing.
@@ -81,7 +81,8 @@ The whole loop, in order:
        Four new paid pictures for one face or room.
 
   4. exodus video storyboard <runId>
-     The scene cards: what each scene says and the picture it will look like.
+     The scene cards: what each scene says and whether its picture is drawn.
+     The pictures are on the run's page, which it names.
 
   5. exodus video voices <runId>
      Who is in the ad, which voice each one has, how the voices get applied
@@ -189,10 +190,10 @@ Usage:
   exodus video status <runId> [--rejected-draft] [--json]
   exodus video wait <runId> [--json]
   exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
-  exodus video song <runId> [--json]
+  exodus video song <runId> [--out <dir>] [--json]
   exodus video song approve <runId> --master <masterSha256> [--json]
   exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "<statement>" [--from <s> --to <s>] [--json]
-  exodus video picks <runId> [--redo face:<who>|room:<place>] [--note "..."] [--json]
+  exodus video picks <runId> [--out <dir>] [--redo face:<who>|room:<place>] [--note "..."] [--json]
   exodus video pick <runId> [--face <who>=<n>] [--voice <who>=<n|name|id>] [--room <place>=<n>] [--style <key>] [--move <who>=<x>,<y>] [--note "..."] [--json]
   exodus video storyboard <runId> [--json]
   exodus video map <runId> [--place <place>] [--json]
@@ -235,7 +236,9 @@ Usage:
   exodus video swipe sheet voices <swipeId> [--json]
 
 Options:
-  --out <dir>          Folder to write the pulled pieces into (pull)
+  --out <dir>          Folder to write the pulled pieces into (pull), the
+                       faces, voice samples and rooms to pick from (picks), or
+                       the Song master (song)
   --file <cut.mp4>     Your finished cut (upload). MP4, MOV or WebM, up to 200MB
   --duration <sec>     How long your cut is, in seconds. Only needed when the
                        length can't be read off the file itself
@@ -554,13 +557,13 @@ collected first. Its counts are of the ads it looked through. It holds no
 results and no kind, so it ranks by neither; the kind of an ad is known only
 after it is read. It takes no other verb's flags.
 swipe sheet is free too: the saved sheet, the choices the server keeps for a
-written swipe, and the swipe's page on the dashboard, which does not show the
-saved sheet yet. Each row says its value, where it comes from and why, and
-which step reads it. swipe sheet set <swipeId> <row>=<value> changes rows, all
-or none; <row>= clears one. A choice that buys something is refused with its
-price; set it again with --yes --people-max-usd <n>, the most that price
-showed. The start copies the saved sheet into the video; a
-change after it is for the next video. A kind of ad with no sheet has nothing
+written swipe, and the swipe's page on the dashboard, whose Pre-production card
+on Your version shows the same sheet. Each row says its value, where it comes
+from and why, and which step reads it. swipe sheet set <swipeId>
+<row>=<value> changes rows, all or none; <row>= clears one. A choice that buys
+something is refused with its price; set it again with --yes --people-max-usd
+<n>, the most that price showed. The start copies the saved sheet into the
+video; a change after it is for the next video. A kind of ad with no sheet has nothing
 to set. swipe sheet price <swipeId> is free: the price of the video at the
 sheet's rows and at each size and takes, with the most it can cost. swipe
 start --max-usd <n> holds the start to the most a price showed: a start that
@@ -569,13 +572,13 @@ swipe sheet people is paid, on the member's own keys: new people to pick from
 for the person row, each one or two short text calls on their model key and one
 face picture on their Kie key. Without --yes it says the price and what it buys
 and makes nothing; --yes --max-usd <the price's most> makes them (--count 1 to
-8, 4 by default), --wait waits for them. Each is shown with their picture's
-address; who=<n> picks one, and the video is then filmed with that person and
-that face. swipe sheet voices makes one read of the voice list on the
-member's ElevenLabs key, and no speech: the voices that fit the person, best
-fit first, each with its sample's address and, when known, its age and accent,
-and the one the voice row recommends; voice=<n> picks one, and the video is
-filmed in it.
+8, 4 by default), --wait waits for them. Each is shown by number and name,
+then the swipe's page where their faces are; who=<n> picks one, and the video
+is then filmed with that person and that face. swipe sheet voices makes one
+read of the voice list on the member's ElevenLabs key, and no speech: the
+voices that fit the person, best fit first, each with its age and accent when
+known, the one the voice row recommends, and the swipe's page where the
+samples play; voice=<n> picks one, and the video is filmed in it.
 swipe write also makes people to pick from for a kind whose sheet has a person,
 when the server offers them: without --yes it says their price too, and the
 yes line carries their most (--people-max-usd <n>). The write then makes 4 on
@@ -1264,7 +1267,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                 ? [
                     "Parked: the script, the place and the voice are waiting for your yes. No take is filmed before you approve.",
                     stop.place.imageUrl
-                        ? `The place:    ${stop.place.imageUrl}`
+                        ? `The place:    drawn. See it: ${videoPage || runUrl}`
                         : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
                     `Read them:    exodus video storyboard ${runId}`,
                     `Approve them: exodus video approve ${runId}`,
@@ -1374,19 +1377,19 @@ export function stopLines(stop, runId, runUrl, videoPage) {
             if (stop.memberStop) {
                 const lines = [`${stepName(stop.step)} stopped: ${stop.memberStop.sentence}`];
                 if (stop.error && stop.error !== stop.memberStop.sentence)
-                    lines.push(`What the step said: ${stop.error}`);
+                    lines.push(`What the step said: ${withoutLinks(stop.error)}`);
                 return stop.memberStop.retry
                     ? [...lines, `Try that step again: exodus workflow repair ${runId} retry`, `Or open the run:     ${runUrl}`]
                     : [...lines, `Open the run: ${runUrl}`];
             }
             return [
-                `${stepName(stop.step)} failed${stop.error ? `: ${stop.error}` : "."}`,
+                `${stepName(stop.step)} failed${stop.error ? `: ${withoutLinks(stop.error)}` : "."}`,
                 `Try that step again: exodus workflow repair ${runId} retry`,
                 `Or open the run:     ${runUrl}`,
             ];
         }
         return [
-            `This run failed${stop.error ? `: ${stop.error}` : "."}`,
+            `This run failed${stop.error ? `: ${withoutLinks(stop.error)}` : "."}`,
             `See how far it got: exodus video status ${runId}`,
         ];
     }
@@ -2055,6 +2058,9 @@ export function markPullFailure(manifest, failure) {
     }
 }
 const PULL_CONCURRENCY = 4;
+export function withoutLinks(text) {
+    return text.replace(/\b(?:https?|wss?):\/\/[^\s"'<>)\]]+/gi, (link) => `a file's link${/[.,:;!?]+$/.exec(link)?.[0] ?? ""}`);
+}
 async function runPool(jobs, size) {
     const results = new Array(jobs.length);
     let next = 0;
@@ -4290,7 +4296,7 @@ export async function statusFlow(runId, json, deps) {
                     lines.push(`         checker said: ${finding.judgeDetail}`);
             }
             if (row.clip?.error)
-                lines.push(`       ${row.clip.error}`);
+                lines.push(`       ${withoutLinks(row.clip.error)}`);
             const usedIdea = row.clip?.artifact?.type === "video" ? row.clip.artifact.replannedIdea : undefined;
             if (usedIdea?.framePrompt) {
                 lines.push(`       clip: made from a new idea instead of the approved one. It shows: ${withoutLookRider(usedIdea.framePrompt)}`);
@@ -4480,7 +4486,7 @@ export async function storyboardFlow(runId, json, deps) {
         return errorResult(res, json);
     const board = customerAnswer(res.data);
     if (board) {
-        return { code: 0, lines: json ? [JSON.stringify(board)] : customerStoryboardLines(board) };
+        return { code: 0, lines: json ? [JSON.stringify(board)] : customerStoryboardLines(board, customerRunPage(deps.dashboardUrl, board.runId)) };
     }
     const cards = res.data;
     if (json)
@@ -4560,6 +4566,11 @@ export async function storyboardFlow(runId, json, deps) {
     }
     if (blockingMap)
         lines.push(`see each room and where everyone stands: exodus video map ${runId}`);
+    const drawn = [...blocks.flatMap((block) => block.scenes ?? []), ...loose].some((scene) => Boolean(scene.frame?.imageUrl));
+    if (drawn) {
+        const workflowId = runRes?.ok === true ? asVideoRun(runRes.data).workflowId : undefined;
+        lines.push(`See the pictures: ${reviewUrl(deps.dashboardUrl, { _id: runId, ...(workflowId ? { workflowId } : {}) })}`);
+    }
     return { code: 0, lines };
 }
 function sceneCardLines(scene) {
@@ -4579,7 +4590,7 @@ function sceneCardLines(scene) {
     if (!scene.dialogue?.length && scene.voText)
         lines.push(`    "${scene.voText}"`);
     if (scene.frame?.imageUrl)
-        lines.push(`    picture: ${scene.frame.imageUrl}`);
+        lines.push("    picture: drawn");
     else if (scene.frame?.status)
         lines.push(`    picture: ${scene.frame.status}`);
     return lines;
@@ -4742,7 +4753,73 @@ function pickCommand(runId, view) {
     });
     return `exodus video pick ${runId} ${parts.join(" ")}`.trimEnd();
 }
-export function picksLines(view, runId, runUrl) {
+const pickKey = (kind, owner, item) => `${kind}:${owner}:${item}`;
+const fileNumber = (n) => (Number.isSafeInteger(n) ? String(n) : fileWord(String(n)));
+function fileWord(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
+}
+function picksDownloads(options) {
+    const used = new Set();
+    const unique = (base, ext) => {
+        let name = base;
+        for (let i = 2; used.has(`${name}.${ext}`); i++)
+            name = `${base}-${i}`;
+        used.add(`${name}.${ext}`);
+        return `${name}.${ext}`;
+    };
+    const downloads = [];
+    const add = (key, url, base, family) => {
+        downloads.push({ key, url, file: unique(base, extFor(url, family)) });
+    };
+    const people = new Set();
+    const word = (name, seen) => {
+        const base = fileWord(name);
+        let w = base;
+        for (let i = 2; seen.has(w); i++)
+            w = `${base}-${i}`;
+        seen.add(w);
+        return w;
+    };
+    options.people.forEach((person, p) => {
+        const who = word(person.who, people);
+        person.faces.forEach((face, i) => face.imageUrl && add(pickKey("face", p, i), face.imageUrl, `${who}-face-${fileNumber(face.n)}`, "image"));
+        person.voices.forEach((voice, i) => voice.sampleUrl && add(pickKey("voice", p, i), voice.sampleUrl, `${who}-voice-${fileNumber(voice.n)}`, "audio"));
+    });
+    const places = new Set();
+    options.places.forEach((place, p) => {
+        const where = word(placeName(place), places);
+        place.rooms.forEach((room, i) => room.imageUrl && add(pickKey("room", p, i), room.imageUrl, `${where}-room-${fileNumber(room.n)}`, "image"));
+    });
+    return downloads;
+}
+async function savePicks(options, dir, deps) {
+    const downloads = picksDownloads(options);
+    const none = () => ({ dir, files: new Map(downloads.map((download) => [download.key, null])), replaced: 0 });
+    if (downloads.length === 0)
+        return none();
+    try {
+        deps.mkdirp(dir);
+    }
+    catch {
+        return none();
+    }
+    const already = downloads.map((download) => deps.statFile(path.join(dir, download.file)) !== null);
+    const failures = await runPool(downloads.map((download) => () => downloadWithRetry(download, dir, deps)), PULL_CONCURRENCY);
+    const replaced = already.filter((was, i) => was && !failures[i]).length;
+    return { dir, files: new Map(downloads.map((download, i) => [download.key, failures[i] ? null : path.join(dir, download.file)])), replaced };
+}
+function savedPicksLine(saved) {
+    const all = [...saved.files.values()];
+    const kept = all.filter((file) => file !== null).length;
+    if (all.length === 0)
+        return `Nothing saved in ${saved.dir}: no face, voice sample or room has a file yet.`;
+    const files = (n) => (n === 1 ? "1 file" : `${n} files`);
+    const replaced = saved.replaced > 0 ? ` It replaced ${files(saved.replaced)} of the same name already there.` : "";
+    return kept === all.length
+        ? `Saved the faces, voice samples and rooms in ${saved.dir}: ${files(kept)}.${replaced}`
+        : `Saved ${kept} of ${all.length} in ${saved.dir}. The others could not be saved: run the same command again.${replaced}`;
+}
+export function picksLines(view, runId, runUrl, saved) {
     const options = view.options;
     if (!options) {
         return [
@@ -4762,45 +4839,61 @@ export function picksLines(view, runId, runUrl) {
         ];
         return [
             `Run ${runId} has its picks${chosen.length ? `: ${chosen.join(", ")}` : ""}.`,
+            ...(saved ? [savedPicksLine(saved)] : []),
             `Follow it: exodus video status ${runId}`,
         ];
     }
     if (view.redoing) {
         return [
             `Run ${runId} is drawing new options for ${view.redoing}.`,
+            ...(saved ? [savedPicksLine(saved)] : []),
             `Check back with: exodus video picks ${runId}`,
         ];
     }
     if (!view.parked) {
-        return [`Run ${runId} isn't waiting for picks right now.`, `See where it is: exodus video status ${runId}`];
+        return [`Run ${runId} isn't waiting for picks right now.`, ...(saved ? [savedPicksLine(saved)] : []), `See where it is: exodus video status ${runId}`];
     }
     const chosenFace = (who) => view.choice?.faces.find((f) => f.who === who)?.n;
     const chosenVoice = (who) => view.choice?.voices.find((v) => v.who === who);
     const chosenRoom = (place) => view.choice?.rooms.find((r) => r.place === place)?.n;
     const mark = (yes) => (yes ? "  (picked)" : "");
-    const lines = [`Run ${runId} is waiting for your picks.`, `See the pictures and hear the voices:  ${runUrl}`, ""];
-    for (const person of options.people) {
+    const fileOf = (key, has, none) => (!has ? none : !saved ? "" : (saved.files.get(key) ?? "(could not be saved)"));
+    const row = (...parts) => `  ${parts.filter(Boolean).join("  ")}`.trimEnd();
+    const lines = [
+        `Run ${runId} is waiting for your picks.`,
+        `The run's page (it does not show the picks yet): ${runUrl}`,
+        saved ? savedPicksLine(saved) : `Save them to look and listen: exodus video picks ${runId} --out ./picks-${runId}`,
+        "",
+    ];
+    for (const [p, person] of options.people.entries()) {
         lines.push(`${person.who}  (speaks ${person.lines} ${person.lines === 1 ? "line" : "lines"})`);
         const modelWidth = Math.max(0, ...person.faces.map((f) => f.model.length));
-        for (const face of person.faces) {
-            lines.push(`  face ${face.n}  ${face.model.padEnd(modelWidth)}  ${face.imageUrl ?? "(no link yet)"}${mark(chosenFace(person.who) === face.n)}`);
+        for (const [i, face] of person.faces.entries()) {
+            const file = fileOf(pickKey("face", p, i), Boolean(face.imageUrl), "(no picture yet)");
+            lines.push(`${row(`face ${face.n}`, file ? face.model.padEnd(modelWidth) : face.model, file)}${mark(chosenFace(person.who) === face.n)}`);
         }
         if (person.voices.length === 0) {
             lines.push("  voice: this run's video model casts the voice itself from the script, so there is none to pick.");
         }
         const nameWidth = Math.max(0, ...person.voices.map((v) => v.name.length));
         const voice = chosenVoice(person.who);
-        for (const option of person.voices) {
-            lines.push(`  voice ${option.n}  ${option.name.padEnd(nameWidth)}  ${option.sampleUrl ?? "(no sample link)"}${mark(voice?.voiceId === option.voiceId)}`);
+        for (const [i, option] of person.voices.entries()) {
+            const file = fileOf(pickKey("voice", p, i), Boolean(option.sampleUrl), "(no sample)");
+            lines.push(`${row(`voice ${option.n}`, file ? option.name.padEnd(nameWidth) : option.name, file)}${mark(voice?.voiceId === option.voiceId)}`);
         }
         if (voice && !person.voices.some((o) => o.voiceId === voice.voiceId)) {
             lines.push(`  voice: ${voice.label ?? voice.voiceId}  (picked)`);
         }
     }
-    for (const place of options.places) {
+    for (const [p, place] of options.places.entries()) {
         const from = place.from === "terrain" ? "  (the script names no place, so this is the format's own)" : "";
         lines.push(`${placeName(place).toUpperCase()}${from}`);
-        lines.push(`  ${place.rooms.map((room) => `room ${room.n}  ${room.imageUrl ?? "(no link yet)"}${mark(chosenRoom(place.place) === room.n)}`).join("   ")}`);
+        lines.push(`  ${place.rooms
+            .map((room, i) => {
+            const file = fileOf(pickKey("room", p, i), Boolean(room.imageUrl), "(no picture yet)");
+            return `room ${room.n}${file ? `  ${file}` : ""}${mark(chosenRoom(place.place) === room.n)}`;
+        })
+            .join("   ")}`);
     }
     if (options.styles?.length) {
         lines.push("STYLE");
@@ -4820,14 +4913,41 @@ export function picksLines(view, runId, runUrl) {
     lines.push(`New options for one face or room:  exodus video picks ${runId} --redo face:<who> --note "<what to change>"`);
     return lines;
 }
-export async function picksFlow(runId, json, deps) {
+export function picksForJson(view, saved) {
+    const { options, ...rest } = view;
+    const file = (key, has) => (saved && has ? { file: saved.files.get(key) ?? null } : {});
+    const picture = (key, { n, model, imageUrl }) => ({ n, model, hasPicture: Boolean(imageUrl), ...file(key, Boolean(imageUrl)) });
+    return {
+        ...rest,
+        options: options && {
+            ...options,
+            people: options.people.map((person, p) => ({
+                ...person,
+                faces: person.faces.map((face, i) => picture(pickKey("face", p, i), face)),
+                voices: person.voices.map(({ n, voiceId, name, sampleUrl }, i) => ({ n, voiceId, name, hasSample: Boolean(sampleUrl), ...file(pickKey("voice", p, i), Boolean(sampleUrl)) })),
+            })),
+            places: options.places.map((place, p) => ({
+                ...place,
+                rooms: place.rooms.map((room, i) => picture(pickKey("room", p, i), room)),
+            })),
+        },
+        ...(saved ? { savedTo: saved.dir, failed: unsavedPicks(saved), replaced: saved.replaced } : {}),
+    };
+}
+function unsavedPicks(saved) {
+    return [...saved.files.values()].filter((file) => file === null).length;
+}
+export async function picksFlow(runId, json, deps, outDir) {
     const res = await deps.get(`${PICKS_PATH}?runId=${encodeURIComponent(runId)}`);
     if (!res.ok)
         return errorResult(res, json);
     const view = res.data;
+    const saved = outDir !== undefined && view.options ? await savePicks(view.options, outDir, deps) : undefined;
+    const code = saved && unsavedPicks(saved) > 0 ? 1 : 0;
+    const notSaved = outDir !== undefined && !saved ? `Nothing saved in ${outDir}: the run has no picks drawn yet.` : null;
     if (json)
-        return { code: 0, lines: [JSON.stringify(view, null, 2)] };
-    return { code: 0, lines: picksLines(view, runId, reviewUrl(deps.dashboardUrl, { _id: runId })) };
+        return { code, lines: [JSON.stringify({ ...picksForJson(view, saved), ...(notSaved ? { savedTo: null, notSaved } : {}) }, null, 2)] };
+    return { code, lines: [...picksLines(view, runId, reviewUrl(deps.dashboardUrl, { _id: runId }), saved), ...(notSaved ? [notSaved] : [])] };
 }
 export function parsePickFlags(occurrences) {
     const request = { faces: [], voices: [], rooms: [], moves: [] };
@@ -5143,7 +5263,7 @@ function brollEditLines(edit, now) {
         ? `moving B-roll scene ${edit.sceneIndex} to line ${edit.lineId}`
         : `a new B-roll shot on line ${edit.lineId}`;
     if (edit.error !== undefined) {
-        return [`The last B-roll change (${asked}) didn't work: ${edit.error}`];
+        return [`The last B-roll change (${asked}) didn't work: ${withoutLinks(edit.error)}`];
     }
     if (now - edit.requestedAt >= BROLL_EDIT_STALE_MS) {
         return [`The last B-roll change (${asked}) never finished. You can ask for it again.`];
@@ -5579,7 +5699,7 @@ export async function revoiceFlow(runId, target, json, deps) {
         const sharing = refusedWith.get(r.error) ?? [];
         if (sharing[0] !== r.sceneIndex)
             return [];
-        return [`${sceneListWords(sharing)}: not started. ${r.error}`];
+        return [`${sceneListWords(sharing)}: not started. ${withoutLinks(r.error)}`];
     });
     if (queued === 0)
         return { code, lines: sceneLines };
@@ -5914,7 +6034,7 @@ async function customerPullFlow(run, dir, json, deps) {
                 ? [
                     "",
                     `${failures.length} file${failures.length === 1 ? "" : "s"} did not download:`,
-                    ...failures.map((f) => `  ${f.file}: ${f.error}`),
+                    ...failures.map((f) => `  ${f.file}: ${withoutLinks(f.error)}`),
                     "Run the same command again to retry.",
                 ]
                 : []),
@@ -6014,7 +6134,7 @@ export async function pullFlow(runId, dir, json, deps) {
     if (failed.length > 0) {
         lines.push("", `${failed.length} file${failed.length === 1 ? "" : "s"} did not download:`);
         for (const failure of failed)
-            lines.push(`  ${failure.file}: ${failure.error}`);
+            lines.push(`  ${failure.file}: ${withoutLinks(failure.error)}`);
         lines.push("Run the same command again to retry just those.");
     }
     if (runStopped(run)) {
@@ -6465,29 +6585,49 @@ async function readSongListen(runId, deps) {
     return { res, song: data?.song ?? null, hold: data?.hold ?? null };
 }
 const SONG_NOT_ON_THIS_SERVER = "This Exodus server does not hold Song masters for approval yet.";
-export async function songListenFlow(runId, json, deps) {
+async function saveSongMaster(song, dir, deps) {
+    const download = { url: song.audioUrl, file: `song-master.${extFor(song.audioUrl, "audio")}` };
+    deps.mkdirp(dir);
+    const replaced = deps.statFile(path.join(dir, download.file)) !== null;
+    const failure = await downloadWithRetry(download, dir, deps);
+    return { file: failure ? null : path.join(dir, download.file), replaced };
+}
+export async function songListenFlow(runId, json, deps, outDir) {
     const { res, song, hold } = await readSongListen(runId, deps);
     if (missingRouteLine(res, "exodus video song"))
         return { code: 1, lines: [SONG_NOT_ON_THIS_SERVER] };
     if (!res.ok)
         return errorResult(res, json);
+    const saved = song && outDir !== undefined ? await saveSongMaster(song, outDir, deps) : null;
+    const code = saved && saved.file === null ? 1 : 0;
     if (json)
-        return { code: 0, lines: [JSON.stringify({ runId, song, ...(hold ? { hold } : {}) })] };
+        return { code, lines: [JSON.stringify({ runId, song, ...(hold ? { hold } : {}), ...(saved ? { savedTo: saved.file } : {}) })] };
+    const savedLines = !saved
+        ? []
+        : saved.file
+            ? [`  saved: ${saved.file}${saved.replaced ? " (it replaced a file of the same name)" : ""}`]
+            : [`  saved: no, it could not be saved in ${outDir}. Run the same command again.`];
     if (hold)
-        return { code: 0, lines: [
+        return { code, lines: [
+                ...savedLines,
                 `SONG HELD — ad run ${runId}`,
                 `  ${hold.reason}`,
                 `  No master is ready to approve. Try again on step ${hold.nodeId} to resume the retained song, not a new run.`,
             ] };
-    if (!song)
-        return { code: 0, lines: ["This run holds no Song master yet, so there is nothing to listen to."] };
+    if (!song) {
+        const nothing = outDir !== undefined ? [`Nothing saved in ${outDir}: there is no Song master yet.`] : [];
+        return { code: 0, lines: ["This run holds no Song master yet, so there is nothing to listen to.", ...nothing] };
+    }
     const heard = song.coverage.status === "full" ? "every lyric line heard" : `lyric ${song.coverage.status}${song.coverage.unheardLines.length ? `; no word heard on line ${song.coverage.unheardLines.map((n) => n + 1).join(", ")}` : ""}`;
     return {
-        code: 0,
+        code,
         lines: [
             `SONG MASTER — ad run ${runId} (${song.source}, ${song.status}, ${song.seconds}s, track ${song.identity.track})`,
             `  ${song.stop}`,
-            `  listen: ${song.audioUrl}`,
+            song.status === "approved"
+                ? `  listen: save it as a file: exodus video song ${runId} --out ./song-${runId}`
+                : `  listen: on the video's page: ${customerRunPage(deps.dashboardUrl, runId)}`,
+            ...savedLines,
             `  master sha256: ${song.identity.masterSha256}`,
             `  lyric sha256: ${song.identity.lyricSha256} — ${heard}`,
             ...song.lyric.split("\n").map((line, i) => `    ${i + 1}. ${line}`),
@@ -6828,7 +6968,10 @@ export async function run(flags, occurrences) {
             }
             return printResult(await songImportFlow(songRun, { file, lyric, rights, ...(from !== undefined ? { trim: { from: Number(from), to: Number(to) } } : {}) }, json, defaultDeps));
         }
-        return printResult(await songListenFlow(runId, json, defaultDeps));
+        const out = flagString(flags, "out");
+        if (flags["out"] !== undefined && !out?.trim())
+            usage("video song --out needs a folder: exodus video song <runId> --out ./song-<runId>");
+        return printResult(await songListenFlow(runId, json, defaultDeps, out?.trim()));
     }
     if (sub === "storyboard")
         return printResult(await storyboardFlow(runId, json, defaultDeps));
@@ -6839,9 +6982,14 @@ export async function run(flags, occurrences) {
         const redo = flagString(flags, "redo");
         if (flags["redo"] !== undefined && !redo?.trim())
             usage("video picks --redo needs face:<who> or room:<place>.");
+        if (redo && flags["out"] !== undefined)
+            usage("video picks takes --redo or --out, not both: --redo draws new options, --out saves the ones drawn.");
         if (redo)
             return printResult(await redoPicksFlow(runId, redo.trim(), flagString(flags, "note"), json, defaultDeps));
-        return printResult(await picksFlow(runId, json, defaultDeps));
+        const out = flagString(flags, "out");
+        if (flags["out"] !== undefined && !out?.trim())
+            usage("video picks --out needs a folder: exodus video picks <runId> --out ./picks-<runId>");
+        return printResult(await picksFlow(runId, json, defaultDeps, out?.trim()));
     }
     if (sub === "map") {
         const place = flagString(flags, "place");

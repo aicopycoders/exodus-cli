@@ -562,6 +562,7 @@ export declare function planPull(run: VideoRun, items: NodeItem[], opts: {
     piecesOnly?: true;
 }): PullPlan;
 export declare function markPullFailure(manifest: VideoManifest, failure: PullFailure): void;
+export declare function withoutLinks(text: string): string;
 export declare function missingSetupLabels(progress: ShowRow["setupProgress"]): string[];
 export declare function showsFlow(json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export interface StartOptions {
@@ -748,8 +749,14 @@ export interface PickReceipt {
     done: boolean;
     open: string[];
 }
-export declare function picksLines(view: PicksView, runId: string, runUrl: string): string[];
-export declare function picksFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export interface PicksSaved {
+    dir: string;
+    files: Map<string, string | null>;
+    replaced: number;
+}
+export declare function picksLines(view: PicksView, runId: string, runUrl: string, saved?: PicksSaved): string[];
+export declare function picksForJson(view: PicksView, saved?: PicksSaved): Record<string, unknown>;
+export declare function picksFlow(runId: string, json: boolean, deps: VideoDeps, outDir?: string): Promise<FlowResult>;
 export interface PickRequest {
     faces: Array<{
         who: string;
@@ -1081,7 +1088,7 @@ export declare function parseReviewFlags(flags: Record<string, string | boolean>
 export declare function reviewFlow(runId: string, opts: ReviewOptions & {
     json: boolean;
 }, deps: VideoDeps): Promise<FlowResult>;
-export declare function songListenFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function songListenFlow(runId: string, json: boolean, deps: VideoDeps, outDir?: string): Promise<FlowResult>;
 export declare function songApproveFlow(runId: string, masterSha256: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export interface SongImportOptions {
     file: string;

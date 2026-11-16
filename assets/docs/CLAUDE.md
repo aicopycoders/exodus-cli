@@ -136,6 +136,8 @@ This workspace connects to a live dashboard for:
 
 The dashboard URL and your `EXODUS_API_KEY` live in `.env`.
 
+**Links you give the user.** A page of this dashboard, or the Google Doc, Sheet or Drive file a run made in the user's own Drive. Also fine: a link the user gave you, a public page (for example a Meta Ad Library page), and a page a kit prints on their own machine. Never a file address: when the CLI prints the address of a rendered image, a stored file, a vendor's file or a signed link, give the run's dashboard page, or save the file to disk and name it. When the user asks for the file itself, save it for them and name it, and say in one line that a file's link opens for anyone who has it.
+
 **Keys & setup.** Exodus's own pipelines run server-side and need nothing beyond `EXODUS_API_KEY` — there's no provider key to configure for them. The **manual `genesis-bots` path** (and other local tools) *do* need a provider key in `.env`. Enter your keys once in the dashboard, then pull them down:
 
 - `npx @aicopycoders/exodus keys pull` — writes your dashboard provider + Kie.ai keys into `.env` (the install runs this for you; safe to re-run anytime a key changes). It only upserts the keys and preserves the rest of the file.

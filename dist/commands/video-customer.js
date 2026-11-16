@@ -242,7 +242,7 @@ export function customerStageLines(run, page) {
                 return [
                     ...(run.planHold.notes?.length ? run.planHold.notes : ["The app's check found a problem with this plan."]),
                     ...findingLines(run.planHold.findings),
-                    ...(run.place?.imageUrl ? [`The place:    ${run.place.imageUrl}`] : []),
+                    ...(run.place?.imageUrl ? [`The place:    drawn. See it: ${page}`] : []),
                     `Read it:      exodus video storyboard ${id}`,
                     acceptFindingsLine(id),
                     `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
@@ -252,7 +252,7 @@ export function customerStageLines(run, page) {
                 return [
                     "Your script, place and voice are waiting for your yes. No take is filmed before you approve.",
                     run.place.imageUrl
-                        ? `The place:    ${run.place.imageUrl}`
+                        ? `The place:    drawn. See it: ${page}`
                         : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
                     `Read them:    exodus video storyboard ${id}`,
                     `Approve them: exodus video approve ${id}`,
@@ -274,13 +274,13 @@ export function customerStageLines(run, page) {
             return [
                 ...(run.awaitingSignOff
                     ? [
-                        `Your video is ready to watch: ${run.video?.url ?? page}`,
+                        "Your video is ready to watch.",
                         ...waitingSceneLines(run, page),
                         waitingSceneLines(run, page).length > 0
                             ? `Once each one is answered and you're happy with the video, finish it:  exodus video approve ${id}`
                             : `When you're happy with it, finish it:  exodus video approve ${id}`,
                     ]
-                    : [`Your video is ready: ${run.video?.url ?? page}`]),
+                    : ["Your video is ready."]),
                 ...speechSummaryLines(run.video?.speech),
                 ...(run.video?.notes ?? []),
                 ...(run.video?.wordsOff
@@ -314,7 +314,7 @@ export function customerStatusLines(run, dashboardUrl) {
 function sceneLines(scene) {
     const lines = [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`];
     if (scene.frameStatus === "ready" && scene.imageUrl)
-        lines.push(`    picture: ${scene.imageUrl}`);
+        lines.push("    picture: drawn");
     else if (scene.frameStatus === "failed")
         lines.push("    picture: couldn't be drawn");
     else
@@ -323,7 +323,7 @@ function sceneLines(scene) {
         lines.push(`    ${scene.productNote}`);
     return lines;
 }
-export function customerStoryboardLines(board) {
+export function customerStoryboardLines(board, page) {
     const id = board.runId;
     if (board.stage !== "review" || !board.scenes) {
         return [
@@ -366,6 +366,7 @@ export function customerStoryboardLines(board) {
             : `approve with: exodus video approve ${id}`,
         `redo one scene's picture: exodus video retry-frame ${id} --scene <n>`,
         `pick voices: exodus video voices ${id}`,
+        `See the pictures: ${page}`,
     ];
 }
 export function customerVoicesLines(voices) {

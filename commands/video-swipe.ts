@@ -194,8 +194,9 @@ export interface SavedSheetRow {
   from: SheetFrom | null;
   why: string | null;
   /**
-   * Each a name; a person made for the member also has their picture's address, a voice its sample's address. U13: an
-   * option may say what choosing it does (`line`), and what it buys while choosing it would start a paid ask (`price`).
+   * Each a name; a person made for the member also has their picture's address, a voice its sample's address, which
+   * this CLI never prints and its --json carries only as `hasPicture` or `hasSample` (COP-375). U13: an option may say
+   * what choosing it does (`line`), and what it buys while choosing it would start a paid ask (`price`).
    */
   options: Array<{
     id: string;
@@ -236,7 +237,10 @@ export interface SavedSheetRow {
   recommended?: string;
 }
 
-/** A swipe's saved sheet (video/lib/sheet.ts SheetView), kept on the server; no dashboard page shows it yet. */
+/**
+ * A swipe's saved sheet (video/lib/sheet.ts SheetView), kept on the server; the swipe's page shows it: the
+ * Pre-production card on Your version (COP-339).
+ */
 export interface SavedSheet {
   swipeId: string;
   kind: { key: string; label: string } | null;
@@ -269,7 +273,7 @@ export type SwipePrice =
       swipeId: string;
       kind: { key: string; label: string } | null;
       priced: true;
-      /** Whether this server offers 480p and the first take only; false: the options are the kind's own film alone. */
+      /** Whether this server offers 480p, 1080p and the first take only; false: the options are the kind's own film alone. */
       sizeChoices: boolean;
       scriptTakes: number;
       picked: Extract<SwipePriceRow, { costUsd: number }>;
@@ -1897,7 +1901,7 @@ async function untilPeopleMade(
   /** The clock time the wait ends at (landing review: counted by the clock, not by reads). */
   untilMs = deps.now() + polls * POLL_MS,
 ): Promise<
-  | { done: { sheet: SavedSheet; who: SavedSheetRow | undefined; waited: boolean } | null }
+  | { done: { sheet: SavedSheet; who: SavedSheetRow | undefined; waited: boolean; dashboardUrl: string } | null }
   | { lost: true; last?: SavedSheetRow }
   | { timedOut: true; last?: SavedSheetRow }
 > {
@@ -1907,7 +1911,8 @@ async function untilPeopleMade(
   const ended = await poll(
     () => deps.get(peopleSheetPath(swipeId)),
     (read) => {
-      const sheet = read.ok ? sheetOf(read.data) : null;
+      // COP-375: with the swipe's page on the CLI's dashboard, for the line under the people that names it.
+      const sheet = read.ok ? sheetOf(read.data, deps.dashboardUrl) : null;
       if (!sheet) return { done: null };
       const who = rowOfSheet(sheet.sheet, "who");
       last = who ?? last;
@@ -1916,7 +1921,7 @@ async function untilPeopleMade(
         waited = true;
         return null;
       }
-      return { done: { sheet: sheet.sheet, who, waited } };
+      return { done: { sheet: sheet.sheet, who, waited, dashboardUrl: sheet.dashboardUrl } };
     },
     polls,
     deps,
@@ -1963,7 +1968,8 @@ function castFrom(who: SavedSheetRow): string {
 /**
  * After a write that carried the people's most: waits a few minutes at most while they are made, then shows where they
  * stand in the server's words (the ask's end names the person a check of the faces recommends, and why), each person
- * with their picture's address, and what to run next. A write never fails for its people.
+ * by number and name, the swipe's page where their faces are (COP-375), and what to run next. A write never fails for
+ * its people.
  */
 async function peopleAfterWrite(
   swipeId: string,
@@ -1986,7 +1992,8 @@ async function peopleAfterWrite(
   }
   const status = ended.done.who?.optionsStatus;
   const people = peopleLines(ended.done.sheet);
-  const json = { mostUsd, status: status ?? null, people: ended.done.who?.options ?? [] };
+  // COP-375: each person by number and name, with `hasPicture`, never their picture's address.
+  const json = { mostUsd, status: status ?? null, people: (ended.done.who?.options ?? []).map(optionForJson) };
   if (!status || status.noneYet) {
     return { lines: ["No people were made with this write, and nothing was paid for them.", askLine], json: { ...json, state: "none" } };
   }
@@ -1995,7 +2002,7 @@ async function peopleAfterWrite(
   const films = startFilmsLine(ended.done.who, swipeId);
   const pick = typeof ended.done.who?.value === "number" ? [`Pick another (free): exodus video swipe sheet set ${swipeId} who=<n>`] : [];
   return {
-    lines: [status.sentence, "People to pick from:", ...people, ...(films ? [films] : []), ...pick],
+    lines: [status.sentence, "People to pick from:", ...people, ...sectionPageLines("See their faces:", ended.done.dashboardUrl), ...(films ? [films] : []), ...pick],
     json: { ...json, state: status.failed ? "failed" : "made", ...(startFilmsJson(ended.done.who) ?? {}) },
   };
 }
@@ -2048,6 +2055,46 @@ const FROM_WORDS: Record<SheetFrom, string> = { you: "from you", "their-ad": "fr
 // COP-319: the swipe's page link, on the dashboard this CLI talks to (video-customer.ts onOwnDashboard).
 export { onOwnDashboard };
 
+/** One option of a sheet row, as the server sends it. */
+type SheetOption = NonNullable<SavedSheetRow["options"]>[number];
+/** COP-375: an option as --json carries it: whether it has a picture or a sample, never the address. */
+export type SheetOptionJson = Pick<SheetOption, "id" | "label" | "line" | "price"> & { hasPicture?: true; hasSample?: true };
+
+/**
+ * COP-375: an option as --json carries it. A picture's or a sample's address opens for anyone who holds it, with no
+ * sign-in, and Claude reads --json to decide, so the address stays out of it too: `hasPicture` or `hasSample` says one
+ * is there. The swipe's page shows them (`dashboardUrl`, with `&sheet=person`).
+ */
+export function optionForJson(option: SheetOption): SheetOptionJson {
+  // Review of Nov 16: the fields the server's view sends (video/lib/sheet.ts shownOption), an allow list, so a field this
+  // CLI does not know, an address a newer server adds, never reaches --json. The picture and the sample as whether.
+  const imageUrl = (option as { imageUrl?: unknown }).imageUrl;
+  return {
+    id: option.id,
+    label: option.label,
+    ...(option.pictureUrl || imageUrl ? { hasPicture: true as const } : {}),
+    ...(option.sampleUrl ? { hasSample: true as const } : {}),
+    ...(typeof option.line === "string" ? { line: option.line } : {}),
+    ...(option.price
+      ? { price: { aboutUsd: option.price.aboutUsd, mostUsd: option.price.mostUsd, title: option.price.title, line: option.price.line } }
+      : {}),
+  };
+}
+
+/**
+ * COP-375: the sheet as --json carries it, each row's options without their addresses (optionForJson). The sheet, its
+ * sections and rows pass as sent: names, values and reasons the skill reads, no file today.
+ */
+export function sheetForJson(sheet: SavedSheet): Omit<SavedSheet, "sections"> & { sections: Array<Record<string, unknown>> } {
+  return {
+    ...sheet,
+    sections: sheet.sections.map((section) => ({
+      ...section,
+      rows: section.rows.map((row) => (Array.isArray(row.options) ? { ...row, options: row.options.map(optionForJson) } : row)),
+    })),
+  };
+}
+
 /** The sheet the server answered, with its page link on `own`, the CLI's dashboard, when given. */
 function sheetOf(data: unknown, own = ""): { sheet: SavedSheet; dashboardUrl: string } | null {
   if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections)) return null;
@@ -2055,21 +2102,35 @@ function sheetOf(data: unknown, own = ""): { sheet: SavedSheet; dashboardUrl: st
 }
 
 /**
- * A row's options as the member reads them. A person made for them is shown with their picture's address, a voice
- * with its sample's address, one a line; plain options on one line. COP-265 part 7: and where the ask for them stands.
- * A sheet read prints the rows alone: the offers to make people or list voices are said only when the member asks.
+ * COP-375: the swipe's page opened on its person section (COP-339's `&sheet=<section>`), where the people's faces are
+ * seen and the voices' samples play; nothing when the server sent no page. The CLI prints this page, never a face's or
+ * a sample's own address: those open for anyone who holds them, with no sign-in.
+ */
+export function personSectionPage(dashboardUrl: string): string {
+  if (!dashboardUrl) return "";
+  // Before a fragment, and in place of a section the link already names; the rest kept as written (onOwnDashboard).
+  const hash = dashboardUrl.indexOf("#");
+  const link = hash === -1 ? dashboardUrl : dashboardUrl.slice(0, hash);
+  const fragment = hash === -1 ? "" : dashboardUrl.slice(hash);
+  const query = link.indexOf("?");
+  const params = query === -1 ? [] : link.slice(query + 1).split("&").filter((param) => param !== "" && !/^sheet(=|$)/.test(param));
+  return `${query === -1 ? link : link.slice(0, query)}?${[...params, "sheet=person"].join("&")}${fragment}`;
+}
+
+/**
+ * A row's options as the member reads them. A person made for them, a voice and the animal are one a line, by number
+ * and name; plain options on one line. COP-265 part 7: and where the ask for them stands. COP-375: a picture's or a
+ * sample's address is never printed; the swipe's page, at the sheet's end, shows them. A sheet read prints the rows
+ * alone: the offers to make people or list voices are said only when the member asks.
  */
 function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipeId: string): string[] {
   const lines: string[] = [];
   if (row.options === null) return lines;
   const options = row.options;
-  const addressed = options.some((option) => option.pictureUrl || option.sampleUrl);
-  if (addressed) {
-    // People and voices made on the member's ask (COP-265 part 7): one a line, with the address to look at or hear.
-    for (const option of options) {
-      const address = option.pictureUrl ? `picture: ${option.pictureUrl}` : option.sampleUrl ? `sample: ${option.sampleUrl}` : "";
-      lines.push(`    ${option.id}: ${option.label}${address ? `  ${address}` : ""}`);
-    }
+  const pictured = options.some((option) => option.pictureUrl || option.sampleUrl);
+  if (pictured) {
+    // People, voices and the animal made on the member's ask (COP-265 part 7): one a line, by number and name.
+    for (const option of options) lines.push(`    ${option.id}: ${option.label}`);
   } else if (options.some((option) => option.line)) {
     // U13: options that say what choosing them does: one a line, with what it does (and a price, in the server's words).
     for (const option of options) lines.push(`    ${option.id} (${option.label})${option.line ? `: ${option.line}` : ""}`);
@@ -2159,7 +2220,7 @@ export async function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps:
   if (!res.ok) return swipeError(res, opts.json);
   const read = sheetOf(res.data, deps.dashboardUrl);
   if (!read) return failed("The server's answer about this sheet could not be read.", opts.json);
-  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, sheet: sheetForJson(read.sheet), dashboardUrl: read.dashboardUrl })] };
   return { code: 0, lines: sheetLines(read.sheet, read.dashboardUrl) };
 }
 
@@ -2193,7 +2254,7 @@ export async function swipeSheetSetFlow(
   }
   const read = sheetOf(res.data, deps.dashboardUrl);
   if (!read) return failed("The sheet was saved, but the server's answer could not be read: exodus video swipe sheet " + swipeId, opts.json);
-  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, ...read })] };
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, sheet: sheetForJson(read.sheet), dashboardUrl: read.dashboardUrl })] };
   const set = Object.keys(picks).filter((row) => picks[row] !== null);
   const cleared = Object.keys(picks).filter((row) => picks[row] === null);
   // A cleared row that is back to a default and has a none (U6: the prop) says so, and names the way to none.
@@ -2258,7 +2319,7 @@ function pickedPriceLine(price: PricedSwipe): string {
 
 /** How to change the size and the takes, named from the answer's own options. */
 function changeLine(price: PricedSwipe): string {
-  if (!price.sizeChoices) return "This server offers the kind's own size and every take for now: 480p and the first take only are not switched on.";
+  if (!price.sizeChoices) return "This server offers the kind's own size and every take for now: 480p, 1080p and the first take only are not switched on.";
   const rows = distinctOptions(price);
   const sizes = [...new Set(rows.map((row) => row.size))];
   const takes = [...new Set(rows.map((row) => row.takes))];
@@ -2386,10 +2447,16 @@ function optionsAnswerOf(data: unknown, own = ""): OptionsAnswer | null {
 
 const rowOfSheet = (sheet: SavedSheet, id: string) => sheet.sections.flatMap((section) => section.rows).find((row) => row.id === id);
 
-/** People made, one a line: the number to pick them by, their name and who they are, and their picture's address. */
+/** People made, one a line: the number to pick them by, their name and who they are. COP-375: never their picture's address. */
 function peopleLines(sheet: SavedSheet): string[] {
   const row = rowOfSheet(sheet, "who");
-  return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}${option.pictureUrl ? `  picture: ${option.pictureUrl}` : ""}`);
+  return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}`);
+}
+
+/** COP-375: under the people or the voices, the swipe's page where they are seen and heard; nothing without the page. */
+function sectionPageLines(lead: string, dashboardUrl: string): string[] {
+  const page = personSectionPage(dashboardUrl);
+  return page ? [`${lead} ${page}`] : [];
 }
 
 /** How long --wait waits for people: eight people, each a cast call and a face Kie may take 10 minutes on, twice. */
@@ -2399,7 +2466,7 @@ const PEOPLE_WAIT_POLLS = (45 * 60_000) / POLL_MS;
  * `exodus video swipe sheet people <swipeId> [--count n] [--yes] [--wait]`: new people to pick from for the person
  * row, each one short text call on the member's model key and one face picture on their Kie key. Without --yes it
  * says the price and what it buys, and nothing is made or paid. With it the server makes them in the background;
- * --wait waits until they are made and shows each with their picture's address.
+ * --wait waits until they are made and shows each by number and name, then the swipe's page where their faces are.
  */
 /** The most as the price says it: rounded up to the cent, so no line says less than the price showed. */
 const mostShown = (mostUsd: number) => (Math.ceil(Math.round(mostUsd * 100_000) / 1000) / 100).toFixed(2);
@@ -2451,7 +2518,7 @@ export async function swipeSheetPeopleFlow(
   ];
   if (!opts.wait) {
     const lines = [...head, `See them as they are made: exodus video swipe sheet ${swipeId}`, `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`];
-    return { code: 0, lines: opts.json ? [JSON.stringify({ ok: true, started: true, ids, price: answer.price, sheet: answer.sheet, dashboardUrl: answer.dashboardUrl })] : lines };
+    return { code: 0, lines: opts.json ? [JSON.stringify({ ok: true, started: true, ids, price: answer.price, sheet: sheetForJson(answer.sheet), dashboardUrl: answer.dashboardUrl })] : lines };
   }
   const out = progress(opts);
   for (const line of head) out.say(line);
@@ -2472,7 +2539,7 @@ export async function swipeSheetPeopleFlow(
   if ("refused" in ended.done) return waitRefused(ended.done.refused, stillGoing, opts.json);
   const { sheet, dashboardUrl } = ended.done;
   const status = rowOfSheet(sheet, "who")?.optionsStatus;
-  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, started: true, ids, status: status ?? null, sheet, dashboardUrl })] };
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, started: true, ids, status: status ?? null, sheet: sheetForJson(sheet), dashboardUrl })] };
   const people = peopleLines(sheet);
   return {
     // An ask that made no one or stopped before it finished ends the wait as a failure.
@@ -2480,7 +2547,9 @@ export async function swipeSheetPeopleFlow(
     lines: [
       ...out.kept,
       ...(status?.sentence ? [status.sentence] : []),
-      ...(people.length > 0 ? ["People to pick from:", ...people, `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`] : []),
+      ...(people.length > 0
+        ? ["People to pick from:", ...people, ...sectionPageLines("See their faces:", dashboardUrl), `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`]
+        : []),
     ],
   };
 }
@@ -2527,13 +2596,18 @@ export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, dep
   const answer = optionsAnswerOf(res.data, deps.dashboardUrl);
   if (!answer) return failed(`The server's answer about the voices could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);
   const row = rowOfSheet(answer.sheet, "voice");
-  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, voices: row?.options ?? [], status: row?.optionsStatus ?? null, sheet: answer.sheet, dashboardUrl: answer.dashboardUrl })] };
-  const voices = (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}${option.sampleUrl ? `  sample: ${option.sampleUrl}` : ""}`);
+  if (opts.json) {
+    const voices = (row?.options ?? []).map(optionForJson);
+    return { code: 0, lines: [JSON.stringify({ ok: true, voices, status: row?.optionsStatus ?? null, sheet: sheetForJson(answer.sheet), dashboardUrl: answer.dashboardUrl })] };
+  }
+  // COP-375: by number and name; the samples play on the swipe's page, never at an address printed here.
+  const voices = (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}`);
   return {
     code: 0,
     lines: [
       ...(row?.optionsStatus?.sentence ? [row.optionsStatus.sentence] : []),
       ...voices,
+      ...(voices.length > 0 ? sectionPageLines("Hear them:", answer.dashboardUrl) : []),
       ...(row ? recommendedVoiceLines(row) : []),
       ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
     ],

@@ -6,7 +6,7 @@ description: Spread finished ad copy across structured ad-type formats — testi
 ```operator-guide
 Subcommands:
   exodus template run --input "<text>" [options]   Kick off a run
-  exodus template status --id <runId>              Status + rendered image URLs
+  exodus template status --id <runId>              Status + the rendered images
   exodus template resume --id <runId>              Finalize an orphaned run (#56)
   exodus template ad-types                          Print all 50 AD_TYPES
   exodus template reptile-triggers                  Print the 13 reptile triggers
@@ -30,7 +30,7 @@ run options:
 
 Returns:
   runId + dashboard URL. Kickoff is fire-and-forget; poll with
-  `exodus template status --id <runId>` for status + the rendered image URLs.
+  `exodus template status --id <runId>` for status + the rendered images.
   Live progress also renders in the dashboard at /creative-suite/template/sessions/<runId>.
 ```
 
@@ -79,7 +79,7 @@ With controls:
 
 **Cheap smoke test:** use `--render-mode prompts` to validate the format selection + prompts without burning render compute, then re-run with `--render-mode images` once the mix looks right.
 
-The command returns a `runId` + dashboard URL and exits — kickoff is fire-and-forget. Poll with `exodus template status --id <runId>` to read the status and pull the rendered image URLs once they complete.
+The command returns a `runId` + dashboard URL and exits — kickoff is fire-and-forget. Poll with `exodus template status --id <runId>` to read the status and the rendered images once they complete.
 
 ### 3. Report
 
@@ -98,13 +98,13 @@ If a previous run's renders stalled or were left incomplete, finalize it:
 - **`--mode manual` without `--quantities`** (or `hybrid` without `--pairings`) errors immediately — supply the required flag.
 - **Unknown ad-type slug** in `--quantities`/`--pairings` errors with the bad slug named. Run `exodus template ad-types` and use the exact slug.
 - **whoami failure** ("Check EXODUS_API_KEY…") means auth/base-URL isn't resolving — run `npx @aicopycoders/exodus doctor`.
-- **Checking status** — if the user asks "is it done?", run `exodus template status --id <runId>`: it returns the run status and the rendered image URLs. Don't fabricate a status; read it.
+- **Checking status** — if the user asks "is it done?", run `exodus template status --id <runId>`: it returns the run status and the rendered images. Say how many are done and give the run's dashboard URL. Don't fabricate a status; read it.
 - **`--ref-image` is NOT supported in V1** — the Bearer kickoff route doesn't accept reference image ids. If the user wants reference matching, route to the `exodus-creative` skill's ref-match instead.
 
 ## Admin
 
 - Backend: Convex HTTP `POST /api/creative-suite-template/run` (Bearer-auth); Trigger.dev task `creative-suite-template` (Fernando's 5-stage pipeline).
 - 50 AD_TYPES and 13 reptile triggers are inspectable via `exodus template ad-types` / `exodus template reptile-triggers`.
-- Status hits `GET /api/v2/template?runId=<id>` (status + rendered image URLs).
+- Status hits `GET /api/v2/template?runId=<id>` (status + the rendered images).
 - Resume hits `POST /api/creative-suite-template/runs/<id>/resume`.
 - Don't echo render prompts or bot system prompts in your reply — that's IP.

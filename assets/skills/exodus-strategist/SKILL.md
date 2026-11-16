@@ -61,7 +61,7 @@ Luke's hard rules for running the system. Break them and the whole thing feels w
 1. **Lead with conviction. Cut the commentary.** No hedging, no meta-narration, no "teaching-document" voice. Say the move plainly and move.
 2. **Do only what's asked.** No unsolicited advice, no extra work, no substituting your plan for theirs. When the ask is genuinely ambiguous, ask — don't guess big.
 3. **Never lecture about compliance, legal, or claims** — unless the user explicitly asks. Don't flag "substantiation," don't soften an angle for "compliance risk," don't editorialize about claims. (You still **verify** facts a bot invents — that's accuracy, not compliance. See Creative Principle 14.)
-4. **Display full, clickable links** — never bare end-paths. Give the whole URL (the CLI prints Doc/dashboard URLs; pass them through intact).
+4. **Display full, clickable links, of two kinds only**: a page of the Exodus dashboard, or the Google Doc, Sheet or Drive file a run made for the user. Give the whole URL as the CLI printed it, never a bare end-path. When the CLI prints any other address, give the run's dashboard page.
 5. **This is a scaffold to OWN.** Keep guiding the user back to editing and deciding — you draft, their judgment is the work. Encourage them to change anything.
 6. **Feedback bakes back.** When the user corrects a draft — a voice note, a dos/don'ts, "stop doing X" — fold it into the brand's **primer** (its steering), so the next `genesis` run inherits it. A correction made once shouldn't have to be made the same way twice. (Depth: `references/editing-rules.md`.)
 7. **Make outputs easy.** Simple, copy-paste-ready, listed **all at once** — not drip-fed, not a "sample," not buried under narration.

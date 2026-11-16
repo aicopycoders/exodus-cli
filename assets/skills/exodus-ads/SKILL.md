@@ -112,7 +112,7 @@ npx @aicopycoders/exodus ads show 120210000000000
 
 `show` prints everything the sync holds for that ad: campaign and ad set with their objective/optimization goal, the headline and body copy verbatim, **both** windows side by side, the media links, the comment counts, and the sync date.
 
-**Media links.** The `image` / `video` / `poster` lines are real, fetchable URLs on the Exodus API — each one redirects to a fresh file when you request it. Fetch a file when you need it (to look at the creative, to attach it to something); do **not** save the URL for later or paste it somewhere permanent, because the file it redirects to expires.
+**Media links.** The `image` / `video` / `poster` lines are real, fetchable URLs on the Exodus API — each one redirects to a fresh file when you request it. Fetch a file when you need it (to look at the creative, to attach it to something); do **not** save the URL for later or paste it anywhere, the reply included, because the file it redirects to expires. Fetch the file, look at it, and describe it or save it to disk.
 
 ## Comments — the words, never the person
 

@@ -545,6 +545,16 @@ export declare function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts:
 export declare function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export { onOwnDashboard };
+type SheetOption = NonNullable<SavedSheetRow["options"]>[number];
+export type SheetOptionJson = Pick<SheetOption, "id" | "label" | "line" | "price"> & {
+    hasPicture?: true;
+    hasSample?: true;
+};
+export declare function optionForJson(option: SheetOption): SheetOptionJson;
+export declare function sheetForJson(sheet: SavedSheet): Omit<SavedSheet, "sections"> & {
+    sections: Array<Record<string, unknown>>;
+};
+export declare function personSectionPage(dashboardUrl: string): string;
 export declare function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[];
 export declare function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps, peopleMaxUsd?: number): Promise<FlowResult>;

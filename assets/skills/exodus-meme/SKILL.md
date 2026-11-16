@@ -184,9 +184,9 @@ means "here is your image", not "it is saved". If the user later can't find a
 regenerated meme in the library, that is the failure to suspect — and it is
 recoverable only by regenerating, since the returned URL expires.
 
-Leaving `--id` off is still valid and still returns the image URL, but that image
-is saved nowhere and the URL expires — only do it when the user explicitly wants
-a throwaway look.
+Leaving `--id` off is still valid, but the image is saved nowhere and its URL
+expires. Do it only when the user explicitly wants a throwaway look, and then
+save the image to disk and name the file, never its URL.
 
 ### 5. Report
 
@@ -195,7 +195,8 @@ strategist take ("the classics carry the relatability, the Group Chat one is
 the sleeper — review them in the library"). The dashboard is where the user
 actually evaluates memes visually; your report gets them there with a point of
 view, not a data dump. Don't paste recommend JSON, prompts, or caption
-internals into chat.
+internals into chat. After a `regenerate` with `--id`, give the same page: the
+new meme is on it. A throwaway look (no `--id`) is the file you saved.
 
 ## Failure Handling
 

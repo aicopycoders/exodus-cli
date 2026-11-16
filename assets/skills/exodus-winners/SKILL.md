@@ -148,7 +148,7 @@ The instance-to-creative collapse, the format skew, the count of winners, the sh
 
 ## 5. Visual confirmation — the human gate
 
-This is a HITL gate; treat it like one. For each proposed winner, show the actual creative: on a **connected** brand, `npx @aicopycoders/exodus ads show <adId>` prints fetchable image/video/poster links (fetch them, don't save the URL — they expire); on an **unconnected** one, render it with **`ads_get_ad_preview`** (an actual in-context creative image). The strategist:
+This is a HITL gate; treat it like one. For each proposed winner, show the actual creative: on a **connected** brand, `npx @aicopycoders/exodus ads show <adId>` prints fetchable image/video/poster links (fetch them and show the creative, not its link; don't save the URL — they expire); on an **unconnected** one, render it with **`ads_get_ad_preview`** (an actual in-context creative image). The strategist:
 
 - **strikes** picks that don't belong,
 - **adds** any obvious winner the rule missed,

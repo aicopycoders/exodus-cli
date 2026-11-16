@@ -6,9 +6,9 @@
 
 Pick the voice that fits THIS script and market. Ask: who would the viewer trust telling this story? Match narrator gender to the story's POV when it's first person (a woman's Diary needs a woman's voice). Match age and energy to the avatar (a 60-year-old market wants a warm, grounded voice; a bro ad wants a younger, cockier one).
 
-Voices available on Kie's ElevenLabs model. Use the NAME in `project.json` (`voice.name`); the script converts it to Kie's voice ID. Preview any voice in a browser: `https://static.aiquickdraw.com/elevenlabs/voice/<ID>.mp3`.
+Voices available on Kie's ElevenLabs model. Use the NAME in `project.json` (`voice.name`); the script converts it to Kie's voice ID. To let the user hear a voice, download `https://static.aiquickdraw.com/elevenlabs/voice/<ID>.mp3` to `previews/<name>.mp3` in the project folder and name the file.
 
-| Name | ID (for the preview link) |
+| Name | ID (for the preview file) |
 |---|---|
 | James | EkK5I93UQWFDigLMpZcX |
 | Arabella | Z3R5wn05IrDiVCyEkUrK |

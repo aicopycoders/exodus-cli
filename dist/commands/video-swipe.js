@@ -1287,7 +1287,7 @@ async function untilPeopleMade(swipeId, deps, waitFor, onWait, polls = PEOPLE_MA
     let waited = false;
     let last;
     const ended = await poll(() => deps.get(peopleSheetPath(swipeId)), (read) => {
-        const sheet = read.ok ? sheetOf(read.data) : null;
+        const sheet = read.ok ? sheetOf(read.data, deps.dashboardUrl) : null;
         if (!sheet)
             return { done: null };
         const who = rowOfSheet(sheet.sheet, "who");
@@ -1298,7 +1298,7 @@ async function untilPeopleMade(swipeId, deps, waitFor, onWait, polls = PEOPLE_MA
             waited = true;
             return null;
         }
-        return { done: { sheet: sheet.sheet, who, waited } };
+        return { done: { sheet: sheet.sheet, who, waited, dashboardUrl: sheet.dashboardUrl } };
     }, polls, deps, untilMs);
     return "done" in ended ? ended : { ...ended, ...(last ? { last } : {}) };
 }
@@ -1341,7 +1341,7 @@ async function peopleAfterWrite(swipeId, mostUsd, out, deps) {
     }
     const status = ended.done.who?.optionsStatus;
     const people = peopleLines(ended.done.sheet);
-    const json = { mostUsd, status: status ?? null, people: ended.done.who?.options ?? [] };
+    const json = { mostUsd, status: status ?? null, people: (ended.done.who?.options ?? []).map(optionForJson) };
     if (!status || status.noneYet) {
         return { lines: ["No people were made with this write, and nothing was paid for them.", askLine], json: { ...json, state: "none" } };
     }
@@ -1350,7 +1350,7 @@ async function peopleAfterWrite(swipeId, mostUsd, out, deps) {
     const films = startFilmsLine(ended.done.who, swipeId);
     const pick = typeof ended.done.who?.value === "number" ? [`Pick another (free): exodus video swipe sheet set ${swipeId} who=<n>`] : [];
     return {
-        lines: [status.sentence, "People to pick from:", ...people, ...(films ? [films] : []), ...pick],
+        lines: [status.sentence, "People to pick from:", ...people, ...sectionPageLines("See their faces:", ended.done.dashboardUrl), ...(films ? [films] : []), ...pick],
         json: { ...json, state: status.failed ? "failed" : "made", ...(startFilmsJson(ended.done.who) ?? {}) },
     };
 }
@@ -1397,22 +1397,52 @@ export async function swipeListFlow(opts, deps) {
 }
 const FROM_WORDS = { you: "from you", "their-ad": "from their ad", kind: "from the kind of ad", recommended: "recommended" };
 export { onOwnDashboard };
+export function optionForJson(option) {
+    const imageUrl = option.imageUrl;
+    return {
+        id: option.id,
+        label: option.label,
+        ...(option.pictureUrl || imageUrl ? { hasPicture: true } : {}),
+        ...(option.sampleUrl ? { hasSample: true } : {}),
+        ...(typeof option.line === "string" ? { line: option.line } : {}),
+        ...(option.price
+            ? { price: { aboutUsd: option.price.aboutUsd, mostUsd: option.price.mostUsd, title: option.price.title, line: option.price.line } }
+            : {}),
+    };
+}
+export function sheetForJson(sheet) {
+    return {
+        ...sheet,
+        sections: sheet.sections.map((section) => ({
+            ...section,
+            rows: section.rows.map((row) => (Array.isArray(row.options) ? { ...row, options: row.options.map(optionForJson) } : row)),
+        })),
+    };
+}
 function sheetOf(data, own = "") {
     if (!isRecord(data) || !isRecord(data.sheet) || !Array.isArray(data.sheet.sections))
         return null;
     return { sheet: data.sheet, dashboardUrl: onOwnDashboard(typeof data.dashboardUrl === "string" ? data.dashboardUrl : "", own) };
+}
+export function personSectionPage(dashboardUrl) {
+    if (!dashboardUrl)
+        return "";
+    const hash = dashboardUrl.indexOf("#");
+    const link = hash === -1 ? dashboardUrl : dashboardUrl.slice(0, hash);
+    const fragment = hash === -1 ? "" : dashboardUrl.slice(hash);
+    const query = link.indexOf("?");
+    const params = query === -1 ? [] : link.slice(query + 1).split("&").filter((param) => param !== "" && !/^sheet(=|$)/.test(param));
+    return `${query === -1 ? link : link.slice(0, query)}?${[...params, "sheet=person"].join("&")}${fragment}`;
 }
 function optionLines(row, above, swipeId) {
     const lines = [];
     if (row.options === null)
         return lines;
     const options = row.options;
-    const addressed = options.some((option) => option.pictureUrl || option.sampleUrl);
-    if (addressed) {
-        for (const option of options) {
-            const address = option.pictureUrl ? `picture: ${option.pictureUrl}` : option.sampleUrl ? `sample: ${option.sampleUrl}` : "";
-            lines.push(`    ${option.id}: ${option.label}${address ? `  ${address}` : ""}`);
-        }
+    const pictured = options.some((option) => option.pictureUrl || option.sampleUrl);
+    if (pictured) {
+        for (const option of options)
+            lines.push(`    ${option.id}: ${option.label}`);
     }
     else if (options.some((option) => option.line)) {
         for (const option of options)
@@ -1491,7 +1521,7 @@ export async function swipeSheetReadFlow(swipeId, opts, deps) {
     if (!read)
         return failed("The server's answer about this sheet could not be read.", opts.json);
     if (opts.json)
-        return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
+        return { code: 0, lines: [JSON.stringify({ ok: true, sheet: sheetForJson(read.sheet), dashboardUrl: read.dashboardUrl })] };
     return { code: 0, lines: sheetLines(read.sheet, read.dashboardUrl) };
 }
 export async function swipeSheetSetFlow(swipeId, picks, opts, deps, peopleMaxUsd) {
@@ -1519,7 +1549,7 @@ export async function swipeSheetSetFlow(swipeId, picks, opts, deps, peopleMaxUsd
     if (!read)
         return failed("The sheet was saved, but the server's answer could not be read: exodus video swipe sheet " + swipeId, opts.json);
     if (opts.json)
-        return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, ...read })] };
+        return { code: 0, lines: [JSON.stringify({ ok: true, saved: true, sheet: sheetForJson(read.sheet), dashboardUrl: read.dashboardUrl })] };
     const set = Object.keys(picks).filter((row) => picks[row] !== null);
     const cleared = Object.keys(picks).filter((row) => picks[row] === null);
     const rowsNow = read.sheet.sections.flatMap((section) => section.rows);
@@ -1570,7 +1600,7 @@ function pickedPriceLine(price) {
 }
 function changeLine(price) {
     if (!price.sizeChoices)
-        return "This server offers the kind's own size and every take for now: 480p and the first take only are not switched on.";
+        return "This server offers the kind's own size and every take for now: 480p, 1080p and the first take only are not switched on.";
     const rows = distinctOptions(price);
     const sizes = [...new Set(rows.map((row) => row.size))];
     const takes = [...new Set(rows.map((row) => row.takes))];
@@ -1662,7 +1692,11 @@ function optionsAnswerOf(data, own = "") {
 const rowOfSheet = (sheet, id) => sheet.sections.flatMap((section) => section.rows).find((row) => row.id === id);
 function peopleLines(sheet) {
     const row = rowOfSheet(sheet, "who");
-    return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}${option.pictureUrl ? `  picture: ${option.pictureUrl}` : ""}`);
+    return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}`);
+}
+function sectionPageLines(lead, dashboardUrl) {
+    const page = personSectionPage(dashboardUrl);
+    return page ? [`${lead} ${page}`] : [];
 }
 const PEOPLE_WAIT_POLLS = (45 * 60_000) / POLL_MS;
 const mostShown = (mostUsd) => (Math.ceil(Math.round(mostUsd * 100_000) / 1000) / 100).toFixed(2);
@@ -1709,7 +1743,7 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
     ];
     if (!opts.wait) {
         const lines = [...head, `See them as they are made: exodus video swipe sheet ${swipeId}`, `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`];
-        return { code: 0, lines: opts.json ? [JSON.stringify({ ok: true, started: true, ids, price: answer.price, sheet: answer.sheet, dashboardUrl: answer.dashboardUrl })] : lines };
+        return { code: 0, lines: opts.json ? [JSON.stringify({ ok: true, started: true, ids, price: answer.price, sheet: sheetForJson(answer.sheet), dashboardUrl: answer.dashboardUrl })] : lines };
     }
     const out = progress(opts);
     for (const line of head)
@@ -1732,14 +1766,16 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
     const { sheet, dashboardUrl } = ended.done;
     const status = rowOfSheet(sheet, "who")?.optionsStatus;
     if (opts.json)
-        return { code: 0, lines: [JSON.stringify({ ok: true, started: true, ids, status: status ?? null, sheet, dashboardUrl })] };
+        return { code: 0, lines: [JSON.stringify({ ok: true, started: true, ids, status: status ?? null, sheet: sheetForJson(sheet), dashboardUrl })] };
     const people = peopleLines(sheet);
     return {
         code: status?.failed ? 1 : 0,
         lines: [
             ...out.kept,
             ...(status?.sentence ? [status.sentence] : []),
-            ...(people.length > 0 ? ["People to pick from:", ...people, `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`] : []),
+            ...(people.length > 0
+                ? ["People to pick from:", ...people, ...sectionPageLines("See their faces:", dashboardUrl), `Pick one: exodus video swipe sheet set ${swipeId} who=<n>`]
+                : []),
         ],
     };
 }
@@ -1772,14 +1808,17 @@ export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
     if (!answer)
         return failed(`The server's answer about the voices could not be read. Read the sheet: exodus video swipe sheet ${swipeId}`, opts.json);
     const row = rowOfSheet(answer.sheet, "voice");
-    if (opts.json)
-        return { code: 0, lines: [JSON.stringify({ ok: true, voices: row?.options ?? [], status: row?.optionsStatus ?? null, sheet: answer.sheet, dashboardUrl: answer.dashboardUrl })] };
-    const voices = (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}${option.sampleUrl ? `  sample: ${option.sampleUrl}` : ""}`);
+    if (opts.json) {
+        const voices = (row?.options ?? []).map(optionForJson);
+        return { code: 0, lines: [JSON.stringify({ ok: true, voices, status: row?.optionsStatus ?? null, sheet: sheetForJson(answer.sheet), dashboardUrl: answer.dashboardUrl })] };
+    }
+    const voices = (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}`);
     return {
         code: 0,
         lines: [
             ...(row?.optionsStatus?.sentence ? [row.optionsStatus.sentence] : []),
             ...voices,
+            ...(voices.length > 0 ? sectionPageLines("Hear them:", answer.dashboardUrl) : []),
             ...(row ? recommendedVoiceLines(row) : []),
             ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
         ],

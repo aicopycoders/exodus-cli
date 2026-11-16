@@ -503,7 +503,7 @@ figures or "no printed price" in its label, not only in its description:
 |---|---|---|
 | The sheet | `Make 1 video · no printed price` (above 6: `Make 8 videos · no printed price`) | 1 script, then the video to its storyboard; the voices and clips wait for your yes there (one shot: the whole video, with no final approve). On your own keys. |
 | The sheet, a write that makes people | `Write it · people about $…, at most $…` | 1 script (no printed price), <k> people to pick from, and the animal's picture ($…) if the script has one. The film waits for your yes on its price. |
-| "Film it?" | `Film it · about $…, at most $…` | <k> takes at <size>. The cut plays them a little faster and shortens long pauses, so the video is shorter than its takes and can be shorter than their ad. … Not in the price: text calls on your model key, the word check on your ElevenLabs key, a second listen on your Kie key. |
+| "Film it?" | `Film it · about $…, at most $…` | <k> takes at <size>. The cut plays them a little faster and shortens long pauses (unless the sheet's speed or pauses row says otherwise), so the video is shorter than its takes and can be shorter than their ad. … Not in the price: text calls on your model key, the word check on your ElevenLabs key, a second listen on your Kie key. |
 | Their look | `Their look · about $…, at most $…` | One read of their speaker's look, then <k> new people and a check of their faces. Never their face. |
 | More people | `<n> more people · at most $…` | <n> new people to pick from, on your model and Kie keys. Nothing is filmed. |
 | A hold | `Film every take again · about $…, at most $…` | A new video from the same swipe. One take cannot be filmed alone. |
@@ -880,7 +880,8 @@ The rows:
 - **Finish.** `swipe start` takes `--music` and nothing else for the finish.
   Music is made on the member's own ElevenLabs key. Music is off unless the
   member asked for it; the plan's line says which. Caption style, speed, jump
-  cuts and the end card come with a later update.
+  cuts and the end card come with a later update; One-take UGC's saved sheet
+  already sets all but the end card (step 4).
 - **How many.** Ads × personas, with none counting as one persona and the
   characters counting as one today. Show the multiplication, as in "4 videos
   = 2 ads × 2 personas".
@@ -939,7 +940,33 @@ Its question (`AskUserQuestion`, header "Film it?"), its text:
 
 Its options: 1. Film it (the table), its figures from the price's "Price:"
 line 2. Show me the script and the <k> people 3. Change something: person,
-voice, size, how it is filmed, their look 4. Stop.
+voice, size, how it is filmed, how it is finished, captions and card, their
+look 4. Stop.
+
+Its "Change something" asks which part first, as one question (rule 3) with
+"How it is finished" among its options, then that part's rows as step 3's
+does, four rows a call. "How it is finished" changes only how the app cuts
+the takes once they are filmed, and `cardPlace` (in "Captions and text card")
+where the cut puts the text card: both free to set, the price's figures the
+same. Set one only on the member's word. As `sheet` prints them:
+
+- `speed`: how fast the video plays, from `1.0` (as filmed) to `1.25`.
+- `pauses`: how much silence between words is cut: `trim`, `keep`, or the
+  levels `light`, `medium`, `hard`.
+- `cuts`: the framing changes where `7`, `5` or `3.5` seconds pass with no
+  cut, and no time is cut out; `off` adds none.
+- `voiceSound`: how the voice sounds: `phone` mic, voice `memo`, `clean` and
+  even, or `raw` as recorded.
+- `roomSound`: a faint sound of a place under the voice: `room`, `kitchen`,
+  `car`, `outside`, or `none`.
+- `ultraRealism`: `phone`, a phone's look (30 frames a second, a light lens
+  smudge, phone grain), or `off`.
+- `cardPlace`: over the chest while the first line is said (`chest`), or a
+  headline at the top for the opening (`top`). At the top, with no words on
+  `headline` and no `headline=none` from the member, it shows the words on
+  screen written for take 1's opening once one more text call on the member's
+  model key checks them (with the hook off, none), and the price names that
+  call among what it leaves out.
 
 With several videos, the label says how many and the description each one's
 price as printed, never their sum. Each start's `--max-usd`, and each write's
@@ -947,24 +974,30 @@ price as printed, never their sum. Each start's `--max-usd`, and each write's
 (with each person made, their picture's address, and the one recommended, when
 the sheet shows them) and the swipe's dashboard page each prints, whose
 Pre-production card on Your version shows the same picks: a change made there
-is to this same saved sheet, so read it and its price again. A press of "Film
-it", or a typed yes to it, is the one yes for all their starts: run step 2 for
-each. A reply that only changes a row is not that yes: set it with `exodus
+is to this same saved sheet, so read it and its price again. That link with
+`&sheet=finish` added (or another section's `id` from `--json`, such as
+`captions`) opens the card on that section. A press of "Film it", or a typed
+yes to it, is the one yes for all their starts: run step 2 for each. A reply
+that only changes a row is not that yes: set it with `exodus
 video swipe sheet set <swipeId> notes="<words>"` (free; `<row>=` clears a row),
 read the price again, say the change in one line, and ask again. Say a row
 marked "no step reads it yet" as saved, not used. The start copies the saved
 sheet into the video; a change after it is for the next video.
 
 **Recommended rows.** A row may print `recommended:` and a reason ("why" gives
-it): today `who`, `voice`, `prop` (what the person holds), `hookKind` and
-`headline`. "Let it run" here, said in reply to these saved sheets and their
-prices, is the yes to the starts with the sheets as they stand: set nothing (a
-size a money limit needs is set before the sheets are shown, below), since a
-start with no pick films every recommended value and every other row's default.
-A "let it run" said before them, as in the first message, is not this yes: the
-writes went on the yes to step 3's sheet, and the starts wait for a reply to
-these. A member's pick wins (the row then reads `from you:`); `<row>=` clears
-it, back to the recommended value or default. `prop=none` holds nothing through
+it): a start with no pick films that value. With no pick, the "How it is
+finished" rows and `cardPlace` print `from the kind of ad:`
+(`roomSound`: `not set`) and a start cuts them so. A value one of them
+recommends is used only when picked: `voiceSound` and `roomSound` name it in
+their reason ("pick it to use it"); `pauses`, `cuts` and `cardPlace` mark it
+only as `recommended` in `--json`. "Let it run" here, said in reply to these saved sheets and
+their prices, is the yes to the starts with the sheets as they stand: set
+nothing (a size a money limit needs is set before the sheets are shown,
+below), since a start with no pick films each row's value as the sheet prints
+it. A "let it run" said before them, as in the first message, is not this
+yes: the writes went on the yes to step 3's sheet, and the starts wait for a
+reply to these. A member's pick wins (the row then reads `from you:`); `<row>=`
+clears it, back to the recommended value or default. `prop=none` holds nothing through
 the video (it prints `prop: none (nothing held through the video)`), though a
 take may still pick up a small thing for a moment, such as a mug or a drink;
 `prop=` takes it back to its default.

@@ -44,7 +44,9 @@ wrong one.
 **The kinds of ad.** `--conceit` takes one of the kinds the server offers. The
 server's list is the truth, and nothing prints it on request. Pass a key it
 doesn't offer and the refusal names every key it does: `video start --conceit
-must be one of …`. Nothing is spent on a refused start. Today the server offers
+must be one of …`. A kind retired for the account is refused in the server's
+own words instead, which name the kind to use (`UGC Ultra-Realistic is retired.
+Use One-take UGC.`). Nothing is spent on a refused start. Today the server offers
 these formats and then Custom (One-take UGC to admins only, for now):
 
 | Key | Kind |

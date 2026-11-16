@@ -28,6 +28,9 @@ function joinedAnd(items) {
 export function scriptRunPickProblem(options, conceit, style) {
     const keys = options.conceits.map((row) => row.key);
     if (!keys.includes(conceit)) {
+        const retired = options.retired?.find((row) => row.key === conceit);
+        if (retired)
+            return retired.refusal;
         return keys.length === 0
             ? "This Exodus server offers no kinds of ad yet."
             : `video start --conceit must be one of ${joinedOr(keys)}.`;
@@ -2661,7 +2664,10 @@ function scriptRunOptionsOf(data, door = "script") {
             return null;
         styles.push({ slug: row.slug, label: row.label });
     }
-    return { conceits, styles };
+    const retired = door === "script" && Array.isArray(data.retired)
+        ? data.retired.flatMap((row) => isRecord(row) && typeof row.key === "string" && typeof row.refusal === "string" ? [{ key: row.key, refusal: row.refusal }] : [])
+        : [];
+    return retired.length > 0 ? { conceits, styles, retired } : { conceits, styles };
 }
 const GOLDEN_TEMPLATE_KEYS = [
     "ugc-template", "authority-yapper-template", "microdrama-template",

@@ -225,6 +225,11 @@ export interface SavedSheetRow {
   /** U6: the row's closed value for none and its words (the prop: "none", nothing in the hand); absent from older servers. */
   none?: { value: string; label: string };
   /**
+   * #4863: what the value is in the server's words, where its option's name would say the wrong thing (the card row's
+   * none, when the card at the top shows the words the app writes); absent from older servers.
+   */
+  valueWords?: string;
+  /**
    * The id of the option the row recommends, whatever value it holds: the person's voice (COP-285) or the person a
    * check of the faces picked (COP-289); absent when none, and from older servers.
    */
@@ -2111,7 +2116,18 @@ export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
       const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
       // A row set to its none (U6) is shown with the server's words for it.
       const none = row.none && row.value === row.none.value ? row.none : undefined;
-      const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : none ? `${row.value} (${none.label})` : String(row.value);
+      // #4863: a value the server names in its own words (the card's none at the top) is shown with those words.
+      const named = row.value !== null && typeof row.valueWords === "string" && row.valueWords !== "" ? row.valueWords : undefined;
+      const value =
+        row.value === null
+          ? "not set"
+          : named
+            ? `${row.value} (${named})`
+            : picked
+              ? `${row.value} (${picked.label})`
+              : none
+                ? `${row.value} (${none.label})`
+                : String(row.value);
       lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
       // A source this CLI has no word for is left unsaid: the row prints with its reason alone, never "undefined".
       const fromWords = row.from && Object.prototype.hasOwnProperty.call(FROM_WORDS, row.from) ? FROM_WORDS[row.from] : null;

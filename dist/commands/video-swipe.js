@@ -1451,7 +1451,16 @@ export function sheetLines(sheet, dashboardUrl) {
         for (const row of section.rows) {
             const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
             const none = row.none && row.value === row.none.value ? row.none : undefined;
-            const value = row.value === null ? "not set" : picked ? `${row.value} (${picked.label})` : none ? `${row.value} (${none.label})` : String(row.value);
+            const named = row.value !== null && typeof row.valueWords === "string" && row.valueWords !== "" ? row.valueWords : undefined;
+            const value = row.value === null
+                ? "not set"
+                : named
+                    ? `${row.value} (${named})`
+                    : picked
+                        ? `${row.value} (${picked.label})`
+                        : none
+                            ? `${row.value} (${none.label})`
+                            : String(row.value);
             lines.push(`  ${row.id}${row.readOnly ? ", read only" : ""}: ${value}`);
             const fromWords = row.from && Object.prototype.hasOwnProperty.call(FROM_WORDS, row.from) ? FROM_WORDS[row.from] : null;
             if (fromWords)

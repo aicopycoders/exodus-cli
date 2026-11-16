@@ -256,6 +256,7 @@ export interface SavedSheetRow {
         value: string;
         label: string;
     };
+    valueWords?: string;
     recommended?: string;
 }
 export interface SavedSheet {

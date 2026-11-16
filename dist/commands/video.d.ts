@@ -18,6 +18,10 @@ export type ScriptRunOptions = {
         slug: string;
         label: string;
     }[];
+    retired?: {
+        key: string;
+        refusal: string;
+    }[];
 };
 export declare function scriptRunPickProblem(options: ScriptRunOptions, conceit: string, style: string): string | null;
 export declare const helpText: string;

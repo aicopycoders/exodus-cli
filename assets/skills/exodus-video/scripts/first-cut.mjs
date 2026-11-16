@@ -353,19 +353,23 @@ export const LOOK_FILTERS = {
  * too): the worker's freezedetect compares each frame with the first of the freeze, the cut's motion read each frame with
  * the one before, and the drift steps the picture a whole level at a time. So with either
  * picture pass the joined takes are split before the look, in the same render, and a probe branch reads them as the
- * two checks read a film: freezedetect at the worker's -60 dB (scout media-probe.ts FREEZE_NOISE) from 0.2 s, as the
- * guard reads a film whose framing the cut changed (scout auto-cut.ts FRAMING_FREEZE_MIN_SEC: an added cut halves a
- * held pause into pieces under 2 s), and the cut's motion rows, each into a side file in the folder (read, then taken
+ * two checks read a film: freezedetect at the worker's -60 dB (scout media-probe.ts FREEZE_NOISE) from 0.2 s; on a cut
+ * whose framing changed, from 0.05 s, two identical frames, as the guard reads such a film (scout auto-cut.ts
+ * FRAMING_FREEZE_MIN_SEC: an added cut halves a held pause into pieces, one maybe a few frames long, #4787); and the
+ * cut's motion rows, each into a side file in the folder (read, then taken
  * away). The worker joins the runs that meet at a framing change and drops those under 2 s, as it does the film's own.
  * Its times are the takes' clock, before the speed step.
  */
-export const LOOK_PROBE = { noise: "-60dB", minSec: 0.2, freeze: "edit.lookfreeze.txt", motion: "edit.lookmotion.txt" };
+export const LOOK_PROBE = { noise: "-60dB", minSec: 0.2, framingMinSec: 0.05, freeze: "edit.lookfreeze.txt", motion: "edit.lookmotion.txt" };
 /** The motion read of a picture: each frame's change from the one before, on a 90 px wide copy (motionArgs, LOOK_PROBE). */
 const MOTION_READ = "scale=90:-2,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG";
 
-/** The probe branch's filters, from the takes' split to its sink. */
-export function lookProbeFilter() {
-  return `freezedetect=n=${LOOK_PROBE.noise}:d=${LOOK_PROBE.minSec},metadata=print:file=${LOOK_PROBE.freeze},` +
+/**
+ * The probe branch's filters, from the takes' split to its sink. #4787 (COP-373 review): `minSec` is
+ * LOOK_PROBE.framingMinSec only on a cut whose framing changed, as the worker's guard reads such a film; else today's.
+ */
+export function lookProbeFilter(minSec = LOOK_PROBE.minSec) {
+  return `freezedetect=n=${LOOK_PROBE.noise}:d=${minSec},metadata=print:file=${LOOK_PROBE.freeze},` +
     `${MOTION_READ}:file=${LOOK_PROBE.motion},nullsink`;
 }
 
@@ -563,6 +567,8 @@ export function finishingOf(manifest) {
     ...(f.phonePass === true ? { phonePass: true } : {}),
     // COP-356: the card as a headline at the top (headlineCards), a name only the worker writes from a run's sheet.
     ...(on.cards && f.cardPlace === "top" ? { cardPlace: "top" } : {}),
+    // COP-370: beside it, the take the board filmed with room above the head, by its number (headlineCards' band).
+    ...(on.cards && f.cardPlace === "top" && Number.isInteger(f.headRoom) && f.headRoom > 0 ? { headRoom: f.headRoom } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -2312,16 +2318,27 @@ function lineSpans(seg, scriptLines) {
  * addedCuts: each talking segment's cuts added (addedCutPlan), and `seg.framing`, the frames of its own clock where its
  * framing changes: at every cut it counts, those it held and those added. A line marked whole that its words do not
  * show is taken to run through the whole take, so nothing is added there. Answers the cut's note.
+ * COP-373 review, with COP-370: `headlineSec`, the timeline's first seconds a headline at the top may show
+ * (HEADLINE_MAX_SEC at the cut's speed), holds no framing change: the headline is drawn on the finished frame, so a step
+ * closer would move the head under it, into the room above the head take 1 was asked for. A cut counted there is still a
+ * cut, in its own framing.
  */
-function placeAddedCuts(spine, scriptLines, everySec, wholeLines, readJumps = () => []) {
+function placeAddedCuts(spine, scriptLines, everySec, wholeLines, readJumps = () => [], headlineSec = 0) {
   const whole = new Set(wholeLines);
   const jumpsOf = new Map();
   let count = 0;
   let longest = 0;
+  let segStart = 0;
   for (const seg of spine) {
+    const startSec = segStart;
+    segStart += seg.seconds;
     if (seg.source !== "clip" || seg.audio !== "clip" || !seg.words?.length || seg.reaction || seg.wholeVoice) continue;
     const spans = lineSpans(seg, scriptLines);
-    const held = (seg.lineIds ?? []).filter((id) => whole.has(id)).map((id) => spans.get(id) ?? [0, seg.seconds]);
+    const underHeadline = Math.min(seg.seconds, Math.max(0, headlineSec - startSec));
+    const held = [
+      ...(seg.lineIds ?? []).filter((id) => whole.has(id)).map((id) => spans.get(id) ?? [0, seg.seconds]),
+      ...(underHeadline > 0 ? [[-1, underHeadline + 1 / FPS]] : []),
+    ];
     const breaks = breaksOf(seg);
     const realCuts = breaks.filter((b) => b.counts).map((b) => b.t);
     // #4805: a jump the video service made inside the take is a cut the viewer sees: no stretch runs across it, and no
@@ -2333,7 +2350,11 @@ function placeAddedCuts(spine, scriptLines, everySec, wholeLines, readJumps = ()
     });
     const frames = Math.round(seg.seconds * FPS);
     const jumpFrames = jumps.map((t) => Math.round(t * FPS));
-    const framing = framingFrames([...realCuts, ...plan.added], frames, jumpFrames);
+    // COP-373 review: a pause cut too short to count is still a jump of the picture, so no framing change lands within
+    // FRAMING_MIN_FRAMES of it (a zoom, then a jump a few frames later); an added cut placed on its join stays.
+    const shortJoins = breaks.filter((b) => !b.counts).map((b) => Math.round(b.t * FPS))
+      .filter((j) => !plan.added.some((t) => Math.round(t * FPS) === j));
+    const framing = framingFrames([...realCuts.filter((t) => t >= underHeadline + 1 / FPS), ...plan.added], frames, [...jumpFrames, ...shortJoins]);
     const added = plan.added.filter((t) => framing.includes(Math.round(t * FPS)));
     const edges = [...new Set([0, ...framing, ...jumpFrames, frames])].sort((a, b) => a - b);
     longest = Math.max(longest, ...edges.slice(1).map((f, k) => (f - edges[k]) / FPS));
@@ -2393,6 +2414,22 @@ export function framingChangeTimes(spine, speed = 1, cutaways = []) {
   const covered = cutaways.filter((c) => c.seconds > 0).map((c) => [onFilm(c.startSec) - near, onFilm(c.startSec + c.seconds) + near]);
   return spine.flatMap((seg) => (seg.framing ?? []).map((f) => onFilm(seg.startSec + f / FPS)))
     .filter((t) => !covered.some(([from, to]) => t >= from && t <= to));
+}
+
+/**
+ * COP-373 review, addedCuts: where the cut added a cut, apart from the pause cuts that change the framing with the row
+ * on: each of a take's framing changes that sits at none of its pause cuts (breaksOf, those too short to count among
+ * them: an added cut placed on one sits at a pause join), on the clock framingChangeTimes gives. The worker tells a
+ * flash here (the row's) from one at a pause cut's framing change, which the film made again without the cuts added
+ * shows to be the row's or the pause cut's own (scout cut-additions.ts faultedAdditions).
+ */
+export function addedCutTimes(spine, speed = 1, cutaways = []) {
+  const added = spine.map((seg) => {
+    if (!Array.isArray(seg.framing)) return seg;
+    const joins = new Set((seg.words ? breaksOf(seg) : []).map((b) => Math.round(b.t * FPS)));
+    return { ...seg, framing: seg.framing.filter((f) => !joins.has(f)) };
+  });
+  return framingChangeTimes(added, speed, cutaways);
 }
 
 /**
@@ -4103,7 +4140,8 @@ function assembleTimeline({
       ? "addedCuts: a cut on a template's clock or a measured map keeps its framing, so no cut was added"
       : !finish.wholeLines?.length
         ? "addedCuts: no line of the script is marked whole, so no cut was added"
-        : placeAddedCuts(spine, scriptLines, ADDED_CUTS[finish.addedCuts], finish.wholeLines, readJumps));
+        : placeAddedCuts(spine, scriptLines, ADDED_CUTS[finish.addedCuts], finish.wholeLines, readJumps,
+          finish.cards && finish.cardPlace === "top" ? HEADLINE_MAX_SEC * (finish.pacePass ? finish.paceSpeed ?? PACE_PASS.speed : 1) : 0));
   }
   // A copied shot no voice runs in lasts its shot's length, its clip trimmed or its last frame held.
   const shotOf = (n) => plans.get(n)?.sourceShot ?? null;
@@ -4888,7 +4926,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   // COP-357, the phone look: on the joined takes, before any cutaway, picture, end card or burned word is laid over them.
   // Fix A: with a picture pass, the takes are first split off to the probe, which reads them before the look.
   if (finish?.look?.probe) {
-    filters.push(`[${videoLabel}]split=2[lookin][lookprobe]`, `[lookprobe]${lookProbeFilter()}`);
+    filters.push(`[${videoLabel}]split=2[lookin][lookprobe]`, `[lookprobe]${lookProbeFilter(finish.look.probeMinSec)}`);
     videoLabel = "lookin";
   }
   if (finish?.look?.smudge) {
@@ -5742,6 +5780,7 @@ function cardsOnLines(storyboard, timeline) {
         in: at, out: roundMs(Math.max(lineEnd, at + BROLL_MIN_HOLD_SEC)), on: `line ${o.cueLineId}`,
       },
       lineEnd,
+      sceneIndex: seg.sceneIndex,
     });
   }
   return placed;
@@ -5749,16 +5788,26 @@ function cardsOnLines(storyboard, timeline) {
 
 /**
  * COP-356, cardPlace "top" (a run's sheet, through the worker): the card as a headline at the top for the opening, as
- * Luke's hook test clips carry one. Heavy dark words over a white rounded box, centred left to right with its middle an
- * eighth of the way down the frame, from the first frame to the end of the line the card is cued to, and held
- * HEADLINE_MIN_SEC to HEADLINE_MAX_SEC of the finished film. It keeps its place: captions set high give way to it and
- * sit low (the worker writes them so, video/lib/sheetFinish.ts sheetFinishOf), as Luke's kit moves its captions off a
- * banner's place. The numbers are ours.
+ * Luke's hook test clips carry one. Heavy dark words over a white rounded box, centred left to right near the top of the
+ * frame (HEADLINE_BOX), from the first frame to the end of the line the card is cued to, and held HEADLINE_MIN_SEC to
+ * HEADLINE_MAX_SEC of the finished film. It keeps its place: captions set high give way to it and sit low (the worker
+ * writes them so, video/lib/sheetFinish.ts sheetFinishOf), as Luke's kit moves its captions off a banner's place. The
+ * numbers are ours.
  */
 export const HEADLINE_MIN_SEC = 2.5;
 export const HEADLINE_MAX_SEC = 6;
-/** The band the headline is centred in at the top: its middle at an eighth of the frame's height. */
-export const HEADLINE_BOX = [0.08, 0.1, 0.92, 0.15];
+/**
+ * The bands the headline is centred in at the top, by the take it opens on. COP-370: over a take filmed with clear room
+ * above the head (the manifest's `finishing.headRoom`, that take's number, which only the worker writes from the board's
+ * facts: video/lib/sheetFinish.ts headlineAtTop, video/lib/ugcOneTakeKitPrompt.ts ONE_TAKE_HEAD_ROOM_LINE), the box's
+ * top edge sits just under the top part of a Reel that Meta asks to keep free of text (about 14% of the height, its Reels
+ * ads guide, read Nov 15, 2026), on the place behind the head: on the cut's 1080x1920 frame, with the words' size and the
+ * box's padding below, y 273 to 378, its top edge at or under 14.2% of the height and the first whole pixel row there.
+ * Over any other take (a board made before COP-370, or take 1 left out of the cut) the headline sits where it did, its
+ * middle an eighth of the way down (y 188 to 293), over the hair and not lower on the face.
+ */
+export const HEADLINE_BOX = [0.08, 0.142, 0.92, 0.197];
+export const HEADLINE_BOX_NO_ROOM = [0.08, 0.1, 0.92, 0.15];
 /** The white box around the words, in pixels of a 1920-high frame: its padding and its corners' radius. */
 const HEADLINE_PAD_PX = 18;
 const HEADLINE_RADIUS_PX = 21;
@@ -5794,12 +5843,13 @@ export function headlineWordsPx(text, fontPx) {
 
 /**
  * The cards as storyboardCards places them, the first as the headline (cardPlace "top"): from the first frame to the end
- * of its line, HEADLINE_MIN_SEC to HEADLINE_MAX_SEC of the film at `speed`, in HEADLINE_BOX.
+ * of its line, HEADLINE_MIN_SEC to HEADLINE_MAX_SEC of the film at `speed`, in HEADLINE_BOX when the take its line is
+ * in is `headRoom` (COP-370), else in HEADLINE_BOX_NO_ROOM.
  */
-export function headlineCards(storyboard, timeline, { speed = 1 } = {}) {
-  return cardsOnLines(storyboard, timeline).map(({ card, lineEnd }, k) => (k > 0 ? card : {
+export function headlineCards(storyboard, timeline, { speed = 1, headRoom = null } = {}) {
+  return cardsOnLines(storyboard, timeline).map(({ card, lineEnd, sceneIndex }, k) => (k > 0 ? card : {
     ...card,
-    box: HEADLINE_BOX,
+    box: headRoom !== null && sceneIndex === headRoom ? HEADLINE_BOX : HEADLINE_BOX_NO_ROOM,
     in: 0,
     out: roundMs(Math.min(Math.max(lineEnd, HEADLINE_MIN_SEC * speed), HEADLINE_MAX_SEC * speed)),
     headline: true,
@@ -6123,6 +6173,21 @@ export function paceReport({ ourShots, srcShots = null, ourSec, srcSec = null, o
       longestSec: round2(Math.max(0, ...ourSilences.map((x) => x.e - x.s))),
     },
   };
+}
+
+/**
+ * #4788: the cut's shots as a viewer sees them: each split where its framing changes (`framingChangesSec`: an added cut,
+ * or a pause cut that changes the framing with addedCuts, on the delivered film's clock), so the pace record's cuts a
+ * minute and shots over LONG_SHOT_SEC count them. A change on a shot's own edge splits nothing. With none, the shots as
+ * they came.
+ */
+export function shotsSplitAt(shots, changes) {
+  const times = (Array.isArray(changes) ? changes : []).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  if (times.length === 0) return shots;
+  return shots.flatMap((shot) => {
+    const marks = [shot.start, ...times.filter((t) => t > shot.start + 1e-6 && t < shot.end - 1e-6), shot.end];
+    return marks.slice(1).map((end, k) => ({ start: marks[k], end }));
+  });
 }
 
 /** The pauses in the cut's voice, from its word times: every gap of PACE_PAUSE_SEC or more between two words. */
@@ -8123,6 +8188,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (finish?.cutPace && (template || protectedMotion)) notes.push("template/action/listening/ending clocks remain real time; cutPace does not accelerate the cut");
   // addedCuts (COP-355): the framing changes made, on the delivered film's clock, for the worker's last guard.
   const framingChangesSec = finish?.addedCuts ? framingChangeTimes(timeline.spine, speed, timeline.cutaways) : null;
+  // COP-373 review: the cuts added alone, apart from the pause cuts that change the framing with the row on.
+  const addedCutsSec = finish?.addedCuts ? addedCutTimes(timeline.spine, speed, timeline.cutaways) : null;
   // #4805: the joins a pause level made, on the same clock, so the worker can make the film again without them.
   const pauseJoinsSec = finish?.pauseTrim && !finish.keepPauses ? pauseJoinTimes(timeline.spine, speed) : null;
   if (timeline.sourceMap) {
@@ -8216,7 +8283,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       // COP-356: a run's sheet may put its card at the top, as a headline for the opening.
       const headline = finish.cards && !copied && finish.cardPlace === "top";
       burnedCards = finish.cards
-        ? (copied ? copied.cards : headline ? headlineCards(storyboard, timeline, { speed }) : storyboardCards(storyboard, timeline))
+        ? (copied ? copied.cards : headline ? headlineCards(storyboard, timeline, { speed, headRoom: finish.headRoom ?? null }) : storyboardCards(storyboard, timeline))
         : [];
       const drawn = burnedCards.find((c) => c.headline && c.label);
       if (drawn) notes.push(`cardPlace: the card is a headline at the top, from the first frame to ${roundMs(drawn.out / speed)} s`);
@@ -8290,7 +8357,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       }
     }
     // Fix A: a picture pass laid, so the takes are read before it too.
-    if (look) look = { ...look, probe: true };
+    // #4787 (COP-373 review): from two identical frames only on a cut whose framing changed, as the worker's guard.
+    if (look) look = { ...look, probe: true, ...(framingChangesSec && framingChangesSec.length > 0 ? { probeMinSec: LOOK_PROBE.framingMinSec } : {}) };
     if (finish.fps30) {
       deliverFps = DELIVERY_FPS;
       notes.push(`fps30: the film is delivered at ${DELIVERY_FPS} frames a second, one frame in four shown twice; the cut's clock stays at ${FPS}`);
@@ -8633,7 +8701,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   // a redo of the run matches), its loudness once the pass ran, and its checks.
   const pace = {
     ...paceReport({
-      ourShots: scenes.map((p) => ({ start: p.startSec, end: roundMs(p.startSec + p.seconds) })),
+      // #4788: an added cut is a cut the viewer sees, so the shots are split at the cut's framing changes.
+      ourShots: shotsSplitAt(scenes.map((p) => ({ start: p.startSec, end: roundMs(p.startSec + p.seconds) })), framingChangesSec),
       ...(sourceAd ? { srcShots: sourceAdPaceShots(sourceAd), srcSec: sourceAd.seconds } : {}),
       ourSec: durationSec,
       ourWords: rows.length,
@@ -8657,6 +8726,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   return withSound({
     out, durationSec, manifest, timeline, music, rows, sidecars, pace, ...(sync ? { sync } : {}),
     ...(framingChangesSec ? { framingChangesSec } : {}),
+    ...(addedCutsSec ? { addedCutsSec } : {}),
     ...(pauseJoinsSec ? { pauseJoinsSec } : {}),
     // COP-357, fix A: for the worker's guard, the takes' frozen runs read before the look, on the film's clock.
     ...(lookProbe ? { lookFreeze: lookProbe.freezes } : {}),

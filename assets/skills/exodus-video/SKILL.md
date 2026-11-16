@@ -953,20 +953,27 @@ same. Set one only on the member's word. As `sheet` prints them:
 - `speed`: how fast the video plays, from `1.0` (as filmed) to `1.25`.
 - `pauses`: how much silence between words is cut: `trim`, `keep`, or the
   levels `light`, `medium`, `hard`.
-- `cuts`: the framing changes where `7`, `5` or `3.5` seconds pass with no
-  cut, and no time is cut out; `off` adds none.
+- `cuts`: framing changes added where more than `7`, `5` or `3.5` seconds of
+  filmed time pass with no cut, only at a sentence's end or a comma, so some
+  stretches run longer; with the row on, every pause the cut shortens by 0.3
+  seconds or more changes the framing too, mid-sentence as well; none in the
+  first 6 seconds while a headline at the top may show; no time is cut out;
+  `off` adds none. It is `7` with no pick.
 - `voiceSound`: how the voice sounds: `phone` mic, voice `memo`, `clean` and
   even, or `raw` as recorded.
 - `roomSound`: a faint sound of a place under the voice: `room`, `kitchen`,
-  `car`, `outside`, or `none`.
+  `car`, `outside`, or `none`. It is on with no pick: the one that fits the
+  place the video is filmed in, which a spoken line such as "I'm in my car"
+  can make another than the one the sheet names; `none` turns it off.
 - `ultraRealism`: `phone`, a phone's look (30 frames a second, a light lens
   smudge, phone grain), or `off`.
 - `cardPlace`: over the chest while the first line is said (`chest`), or a
-  headline at the top for the opening (`top`). At the top, with no words on
-  `headline` and no `headline=none` from the member, it shows the words on
-  screen written for take 1's opening once one more text call on the member's
-  model key checks them (with the hook off, none), and the price names that
-  call among what it leaves out.
+  headline at the top for the opening (`top`); when take 1 is asked for room
+  above the head for it, the headline sits just below the platform's top bar.
+  At the top, with no words on `headline` and no `headline=none` from the
+  member, it shows the words on screen written for take 1's opening once one
+  more text call on the member's model key checks them (with the hook off,
+  none), and the price names that call among what it leaves out.
 
 With several videos, the label says how many and the description each one's
 price as printed, never their sum. Each start's `--max-usd`, and each write's
@@ -986,21 +993,21 @@ sheet into the video; a change after it is for the next video.
 
 **Recommended rows.** A row may print `recommended:` and a reason ("why" gives
 it): a start with no pick films that value. With no pick, the "How it is
-finished" rows and `cardPlace` print `from the kind of ad:`
-(`roomSound`: `not set`) and a start cuts them so. A value one of them
-recommends is used only when picked: `voiceSound` and `roomSound` name it in
-their reason ("pick it to use it"); `pauses`, `cuts` and `cardPlace` mark it
-only as `recommended` in `--json`. "Let it run" here, said in reply to these saved sheets and
-their prices, is the yes to the starts with the sheets as they stand: set
-nothing (a size a money limit needs is set before the sheets are shown,
-below), since a start with no pick films each row's value as the sheet prints
-it. A "let it run" said before them, as in the first message, is not this
-yes: the writes went on the yes to step 3's sheet, and the starts wait for a
-reply to these. A member's pick wins (the row then reads `from you:`); `<row>=`
-clears it, back to the recommended value or default. `prop=none` holds nothing through
-the video (it prints `prop: none (nothing held through the video)`), though a
-take may still pick up a small thing for a moment, such as a mug or a drink;
-`prop=` takes it back to its default.
+finished" rows and `cardPlace` print `from the kind of ad:` and a start cuts
+them so. A value one of them recommends is used only when picked: `voiceSound`
+names it in its reason ("pick it to use it"); `pauses` and `cardPlace` mark it
+only as `recommended` in `--json`. "Let it run" here, said in reply to these
+saved sheets and their prices, is the yes to the starts with the sheets as
+they stand: set nothing (a size a money limit needs is set before the sheets
+are shown, below), since a start with no pick films each row's value as the
+sheet prints it. A "let it run" said before them, as in the first message, is
+not this yes: the writes went on the yes to step 3's sheet, and the starts
+wait for a reply to these. A member's pick wins (the row then reads
+`from you:`); `<row>=` clears it, back to the recommended value or default.
+`prop=none` holds nothing through the video (it prints
+`prop: none (nothing held through the video)`), though a take may still pick
+up a small thing for a moment, such as a mug or a drink; `prop=` takes it back
+to its default.
 
 `who` is the person filmed: a person made for the swipe, by number
 (`who=<n>`), or words in the row's own form, as `who="a white woman in her
@@ -1830,6 +1837,17 @@ under it:
   the first start's flags: give it `--one-shot` and `--music` again when the
   first had them, in that dry line too (without `--one-shot` it stops at the
   storyboard).
+  A take held for a brand or product name it says wrong (its sentence names
+  the name, and may say what the take said instead): say what was heard, and
+  propose how the name is said, in plain letters with numbers as words
+  ("smooch", "P Q seven"). Then ask one question (rule 3), each filming option
+  labelled with the CLI's own price (rule 4): add it to the brand's dictionary
+  and film it again (`exodus brand dictionary add "<name>" --say "<how it is said>"`,
+  then the new start above), film it again as it is, or keep it.
+  Add the word only on their yes. The script and captions keep the name
+  as written.
+  When `add` says "Saved, but not used yet", or its "Used where" names leave out
+  the name the take said wrong, say so: filming again would not change how that name is said.
 - paused: a builder checkpoint neither video verb resolves —
   `exodus workflow checkpoint <runId>` is the verb for that one.
 - failed: `status` shows how far it got, and a `--wait` that was running exits

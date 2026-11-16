@@ -34,6 +34,15 @@ Subcommands:
   exodus brand broll list       Show the B-roll kit (your logo and product photos count too)
   exodus brand broll remove <id>
                                 Remove one kit item (ids come from broll list)
+  exodus brand dictionary add "<word>" --say "<how it is said>"
+                                Teach One-take videos how to say a name ("Smooche",
+                                --say "smooch"; numbers as words: "P Q seven").
+                                The script and captions keep the word as written.
+                                A word that is there is changed
+  exodus brand dictionary list [--json]
+                                Show the brand's words and how each is said
+  exodus brand dictionary remove "<word>"
+                                Remove one word
   exodus brand show             Show the active brand's two business-type tags
   exodus brand set --sells <product|service|app|expertise|finance|other>
                    --promise <body|money|neither>
@@ -566,6 +575,77 @@ async function runBroll(args, flags) {
         return runBrollRemove(args[1]);
     fail(`broll: unknown subcommand "${sub}" (use add | list | remove)`);
 }
+export function parseDictionaryAdd(words, flags) {
+    const word = words.join(" ").trim();
+    if (!word) {
+        return { ok: false, error: 'brand dictionary add requires the word: exodus brand dictionary add "<word>" --say "<how it is said>"' };
+    }
+    const saidAs = typeof flags["say"] === "string" ? flags["say"].trim() : "";
+    if (!saidAs) {
+        return { ok: false, error: 'brand dictionary add requires --say "<how it is said>", for example --say "smooch"' };
+    }
+    return { ok: true, word, saidAs };
+}
+function dictionaryUsedLine(usedFor) {
+    return usedFor && usedFor.length > 0
+        ? `Used where the script says ${usedFor.map((name) => `"${name}"`).join(" or ")}.`
+        : "Saved, but not used yet: no brand or product name holds this word.";
+}
+function dictionaryFailure(res, fallback) {
+    const error = res.data.error;
+    if (res.status === 404 && (error === undefined || error.startsWith("Non-JSON"))) {
+        return "This Exodus server has no brand dictionary yet, so nothing was read or changed.";
+    }
+    return error ?? fallback;
+}
+async function runDictionaryAdd(words, flags) {
+    const parsed = parseDictionaryAdd(words, flags);
+    if (!parsed.ok)
+        fail(parsed.error);
+    const res = await apiPostDashboard("/api/brands/dictionary", { word: parsed.word, saidAs: parsed.saidAs });
+    if (!res.ok)
+        fail(dictionaryFailure(res, `HTTP ${res.status} saving the word`));
+    const { brand, row, was, usedFor } = res.data;
+    console.log(was
+        ? `✓ changed "${row.word}" in ${brand}'s dictionary: said as "${row.saidAs}", was "${was.saidAs}".`
+        : `✓ added "${row.word}", said as "${row.saidAs}", to ${brand}'s dictionary.`);
+    console.log(dictionaryUsedLine(usedFor));
+}
+async function runDictionaryList(flags) {
+    const res = await apiGetDashboard("/api/brands/dictionary");
+    if (!res.ok)
+        fail(dictionaryFailure(res, `HTTP ${res.status}`));
+    const { brand, rows } = res.data;
+    if (flags["json"] === true) {
+        console.log(JSON.stringify({ brand, rows }, null, 2));
+        return;
+    }
+    console.log(`brand: ${brand}`);
+    console.log(`Dictionary: ${rows.length} word${rows.length === 1 ? "" : "s"}`);
+    for (const row of rows)
+        console.log(`  "${row.word}"  said as "${row.saidAs}"`);
+    if (rows.length === 0)
+        console.log('Add one: exodus brand dictionary add "<word>" --say "<how it is said>"');
+}
+async function runDictionaryRemove(words) {
+    const word = words.join(" ").trim();
+    if (!word)
+        fail('brand dictionary remove requires the word: exodus brand dictionary remove "<word>"');
+    const res = await apiDeleteDashboard(`/api/brands/dictionary?word=${encodeURIComponent(word)}`);
+    if (!res.ok)
+        fail(dictionaryFailure(res, `HTTP ${res.status}`));
+    console.log(`✓ removed "${res.data.row.word}" (said as "${res.data.row.saidAs}") from ${res.data.brand}'s dictionary.`);
+}
+async function runDictionary(args, flags) {
+    const sub = args[0];
+    if (sub === "add")
+        return runDictionaryAdd(args.slice(1), flags);
+    if (sub === "list" || sub === undefined)
+        return runDictionaryList(flags);
+    if (sub === "remove")
+        return runDictionaryRemove(args.slice(1));
+    fail(`dictionary: unknown subcommand "${sub}" (use add | list | remove)`);
+}
 function imagesPositionals() {
     const rest = process.argv.slice(3);
     const out = [];
@@ -618,6 +698,9 @@ export async function run(flags) {
             return;
         case "broll":
             await runBroll(imagesPositionals().slice(1), flags);
+            return;
+        case "dictionary":
+            await runDictionary(imagesPositionals().slice(1), flags);
             return;
         case "list":
         case undefined:

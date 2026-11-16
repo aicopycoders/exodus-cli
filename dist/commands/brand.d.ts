@@ -33,5 +33,14 @@ export type BrollAddArgs = {
     error: string;
 };
 export declare function parseBrollAdd(files: string[], flags: Record<string, string | boolean>): BrollAddArgs;
+export type DictionaryAddArgs = {
+    ok: true;
+    word: string;
+    saidAs: string;
+} | {
+    ok: false;
+    error: string;
+};
+export declare function parseDictionaryAdd(words: string[], flags: Record<string, string | boolean>): DictionaryAddArgs;
 export declare function run(flags: Record<string, string | boolean>): Promise<void>;
 export {};

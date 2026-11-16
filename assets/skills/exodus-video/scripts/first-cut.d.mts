@@ -561,6 +561,12 @@ export interface FirstCut {
    */
   framingChangesSec?: number[];
   /**
+   * COP-373 review, addedCuts: where the cut added a cut, apart from the pause cuts that change the framing with the row
+   * on (framingChangesSec lists both), on the same clock; present only with the cuts row on. A flash at another framing
+   * change is told apart by the film made again without the cuts added (scout cut-additions.ts faultedAdditions).
+   */
+  addedCutsSec?: number[];
+  /**
    * #4805, pauseTrim: where a pause cut at one of Luke's levels joins a take to itself, in seconds on the delivered
    * film's clock; present only with a pause level picked.
    */
@@ -674,6 +680,6 @@ export interface JumpCut { maxGap: number; keepAfter: number; keepBefore: number
 export const JUMP_CUT: JumpCut;
 
 /** COP-357, fix A: how the cut reads the takes before the phone look (freezedetect's noise and length) and its side files. */
-export const LOOK_PROBE: { readonly noise: string; readonly minSec: number; readonly freeze: string; readonly motion: string };
+export const LOOK_PROBE: { readonly noise: string; readonly minSec: number; readonly framingMinSec: number; readonly freeze: string; readonly motion: string };
 /** jumpCut on one pause: the span it takes out, or null when it keeps the pause whole. */
 export function jumpCutSpan(endSec: number, startSec: number, jump?: JumpCut): { s: number; e: number } | null;

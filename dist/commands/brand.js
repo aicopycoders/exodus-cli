@@ -586,10 +586,14 @@ export function parseDictionaryAdd(words, flags) {
     }
     return { ok: true, word, saidAs };
 }
-function dictionaryUsedLine(usedFor) {
-    return usedFor && usedFor.length > 0
-        ? `Used where the script says ${usedFor.map((name) => `"${name}"`).join(" or ")}.`
-        : "Saved, but not used yet: no brand or product name holds this word.";
+function dictionaryUsedLine(usedFor, hardWord) {
+    if (!usedFor || usedFor.length === 0) {
+        return "Saved, but not used yet. A row is used for a brand or product name or a part of one, or for an uncommon word that your product's text says or that has 9 letters or more.";
+    }
+    const said = usedFor.map((name) => `"${name}"`).join(" or ");
+    if (hardWord === "long")
+        return `Used wherever the script says ${said}.`;
+    return hardWord === "product-text" ? `Used when the product's text and the script say ${said}.` : `Used where the script says ${said}.`;
 }
 function dictionaryFailure(res, fallback) {
     const error = res.data.error;
@@ -605,11 +609,11 @@ async function runDictionaryAdd(words, flags) {
     const res = await apiPostDashboard("/api/brands/dictionary", { word: parsed.word, saidAs: parsed.saidAs });
     if (!res.ok)
         fail(dictionaryFailure(res, `HTTP ${res.status} saving the word`));
-    const { brand, row, was, usedFor } = res.data;
+    const { brand, row, was, usedFor, hardWord } = res.data;
     console.log(was
         ? `✓ changed "${row.word}" in ${brand}'s dictionary: said as "${row.saidAs}", was "${was.saidAs}".`
         : `✓ added "${row.word}", said as "${row.saidAs}", to ${brand}'s dictionary.`);
-    console.log(dictionaryUsedLine(usedFor));
+    console.log(dictionaryUsedLine(usedFor, hardWord));
 }
 async function runDictionaryList(flags) {
     const res = await apiGetDashboard("/api/brands/dictionary");

@@ -105,6 +105,16 @@ function heldSceneChoiceLines(run, scenes, page) {
             : []),
     ];
 }
+function hardWordLines(words) {
+    if (!words?.length)
+        return [];
+    return [
+        "",
+        `Long or product words with no "said as" yet: ${words.join(", ")}`,
+        `Add how one is said, before you approve: exodus brand dictionary add "${words[0]}" --say "<how it is said>"`,
+        "A change to a word already in your dictionary applies from the next video.",
+    ];
+}
 function findingLines(findings) {
     return (findings ?? []).map((f) => {
         const n = f.scenes;
@@ -360,6 +370,7 @@ export function customerStoryboardLines(board, page) {
             "Script",
             ...scriptLines(board.scenes),
             ...found,
+            ...hardWordLines(board.hardWords),
             "",
             "No take gets a picture before you approve.",
             approve,
@@ -371,6 +382,7 @@ export function customerStoryboardLines(board, page) {
             "Storyboard",
             ...scriptLines(board.scenes),
             ...found,
+            ...hardWordLines(board.hardWords),
             "",
             "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
             approve,
@@ -381,6 +393,7 @@ export function customerStoryboardLines(board, page) {
     return [
         "Storyboard",
         ...board.scenes.flatMap(sceneLines),
+        ...hardWordLines(board.hardWords),
         "",
         stillDrawing
             ? "Waiting for every scene to finish drawing before you can approve."

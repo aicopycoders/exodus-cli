@@ -59,6 +59,10 @@ export interface CustomerRunScene {
     redoEstimateMaxUsd?: number;
     /** #4954: the scene's voice change is being tried again on the clip it has; nothing is filmed. */
     voiceRetrying?: true;
+    /** #4755: held only for its voice change, so `exodus video revoice` can try it again. Sent while the video films. */
+    voiceRetry?: true;
+    /** #4963: held for its voice change and another fault, so changing its voice again can't finish it. */
+    voiceHeldToo?: true;
   } | null;
 }
 
@@ -320,6 +324,26 @@ export interface CustomerStoryboard {
   beforePictures?: true;
   /** #4825: what the check before pictures found, which approving accepts. Absent when none, and from older servers. */
   findings?: CustomerPlanFinding[];
+  /**
+   * COP-387: the long or product words of a One-take script the brand's dictionary has no "said as" for yet, as the
+   * script writes them. Absent when none, and from older servers.
+   */
+  hardWords?: string[];
+}
+
+/**
+ * COP-387: the script's long or product words with no "said as" yet, and the command that adds how one is said
+ * (`exodus brand dictionary add`, the Dictionary's own add); a row added before the approve is said in this video's
+ * takes. None with no such word.
+ */
+function hardWordLines(words: readonly string[] | undefined): string[] {
+  if (!words?.length) return [];
+  return [
+    "",
+    `Long or product words with no "said as" yet: ${words.join(", ")}`,
+    `Add how one is said, before you approve: exodus brand dictionary add "${words[0]}" --say "<how it is said>"`,
+    "A change to a word already in your dictionary applies from the next video.",
+  ];
 }
 
 /** #4825: one thing the check before pictures found, in the server's sentence, with the scenes it names. */
@@ -676,6 +700,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string)
       "Script",
       ...scriptLines(board.scenes),
       ...found,
+      ...hardWordLines(board.hardWords),
       "",
       "No take gets a picture before you approve.",
       approve,
@@ -688,6 +713,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string)
       "Storyboard",
       ...scriptLines(board.scenes),
       ...found,
+      ...hardWordLines(board.hardWords),
       "",
       "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
       approve,
@@ -698,6 +724,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string)
   return [
     "Storyboard",
     ...board.scenes.flatMap(sceneLines),
+    ...hardWordLines(board.hardWords),
     "",
     stillDrawing
       ? "Waiting for every scene to finish drawing before you can approve."

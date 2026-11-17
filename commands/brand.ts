@@ -845,14 +845,23 @@ interface DictionarySetResponse {
   was: DictionaryRow | null;
   /** The brand and product names the row is used in, or none (an older server sends no list). */
   usedFor?: string[];
+  /** COP-387: the row is used as a hard word: "long" (9 letters or more) or "product-text". Absent from older servers. */
+  hardWord?: "long" | "product-text";
   error?: string;
 }
 
-/** Where the row is used, in one line: the names the server matched, or that none holds the word. */
-function dictionaryUsedLine(usedFor: string[] | undefined): string {
-  return usedFor && usedFor.length > 0
-    ? `Used where the script says ${usedFor.map((name) => `"${name}"`).join(" or ")}.`
-    : "Saved, but not used yet: no brand or product name holds this word.";
+/**
+ * Where the row is used, in one line: the names the server matched, or that none holds the word. COP-387: a row used as
+ * a hard word is used wherever the script says it ("long", 9 letters or more), or when the product's text and the
+ * script say it ("product-text").
+ */
+function dictionaryUsedLine(usedFor: string[] | undefined, hardWord?: "long" | "product-text"): string {
+  if (!usedFor || usedFor.length === 0) {
+    return "Saved, but not used yet. A row is used for a brand or product name or a part of one, or for an uncommon word that your product's text says or that has 9 letters or more.";
+  }
+  const said = usedFor.map((name) => `"${name}"`).join(" or ");
+  if (hardWord === "long") return `Used wherever the script says ${said}.`;
+  return hardWord === "product-text" ? `Used when the product's text and the script say ${said}.` : `Used where the script says ${said}.`;
 }
 
 /**
@@ -872,13 +881,13 @@ async function runDictionaryAdd(words: string[], flags: Record<string, string | 
   if (!parsed.ok) fail(parsed.error);
   const res = await apiPostDashboard<DictionarySetResponse>("/api/brands/dictionary", { word: parsed.word, saidAs: parsed.saidAs });
   if (!res.ok) fail(dictionaryFailure(res, `HTTP ${res.status} saving the word`));
-  const { brand, row, was, usedFor } = res.data;
+  const { brand, row, was, usedFor, hardWord } = res.data;
   console.log(
     was
       ? `✓ changed "${row.word}" in ${brand}'s dictionary: said as "${row.saidAs}", was "${was.saidAs}".`
       : `✓ added "${row.word}", said as "${row.saidAs}", to ${brand}'s dictionary.`,
   );
-  console.log(dictionaryUsedLine(usedFor));
+  console.log(dictionaryUsedLine(usedFor, hardWord));
 }
 
 async function runDictionaryList(flags: Record<string, string | boolean>): Promise<void> {

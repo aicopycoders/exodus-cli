@@ -7920,24 +7920,30 @@ export async function revoiceFlow(
   if (!runRes.ok) return errorResult(runRes, json);
   if (customerAnswer<CustomerRun>(runRes.data)) {
     // #4755: a member may change the voice again on a scene held because its voice change kept changing its words;
-    // the server finds the scene's clip itself. Nothing is filmed.
+    // the server finds the scene's clip itself. Nothing is filmed. #4963: the scene's own clip says how it is held,
+    // also while the video still films and lists no held scenes; the server answers a press that has to wait.
     const customer = runRes.data as CustomerRun;
-    const scene = "all" in target
-      ? undefined
-      : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find(
-          (s) => s.sceneIndex === target.sceneIndex && (s.voice === true || s.voiceToo === true),
-        );
+    const refuse = (line: string) => adminOnlyResult(line, json);
+    if ("all" in target) return refuse("exodus video revoice --all is for admins. Name one scene: exodus video revoice <video> --scene <n>");
+    const n = target.sceneIndex;
+    const listed = [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find((s) => s.sceneIndex === n);
+    const scene = customer.scenes?.find((s) => s.sceneIndex === n);
+    if (customer.scenes && !scene && !listed) return refuse(`This video has no scene ${n}.`);
     // #4955: a scene that also failed another check can't be finished by its voice change alone.
-    if (scene?.voiceToo) {
-      return adminOnlyResult(
-        `Scene ${scene.sceneIndex} also failed another check, so changing its voice again wouldn't finish it. Try ` +
+    if (listed?.voiceToo || scene?.clip?.voiceHeldToo) {
+      return refuse(
+        `Scene ${n} also failed another check, so changing its voice again wouldn't finish it. Try ` +
           "again on the video's page films a new take and changes its voice too, and shows the price first: " +
           customerRunPage(deps.dashboardUrl, runId),
-        json,
       );
     }
-    const held = scene;
-    if (!held) return adminOnlyResult("exodus video revoice is for admins.", json);
+    if (scene?.clip?.voiceRetrying) {
+      return refuse(`Scene ${n}'s voice is being changed again right now; nothing is filmed. Watch it land: exodus video status ${runId}`);
+    }
+    if (!listed?.voice && !scene?.clip?.voiceRetry) {
+      return refuse(`Scene ${n} isn't held for its voice change, so there is no voice change to try again. Nothing was started.`);
+    }
+    const held = { sceneIndex: n };
     const res = await deps.post(SCENE_REVOICE_PATH, { runId, sceneIndex: held.sceneIndex });
     if (!res.ok) return errorResult(res, json);
     const line =

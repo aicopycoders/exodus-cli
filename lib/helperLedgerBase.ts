@@ -6,6 +6,8 @@
 //   [900000, 910000)  guest establishing renders (#809) + product cards (#808)
 //     909000, 909001  the Reference node's set plate and product sheet (#2627)
 //     909100          the one-take storyboard node's picture of the place, drawn before its stop (COP-351)
+//     909110          the one-take video node's take prompts said again with rows added at its stop (COP-387)
+//     909120 + n      the one-take video node's check of take n's opening, take 1 only (COP-377)
 //   [910000, 920000)  cast identity stills (cast-anchor.ts CAST_LEDGER_BASE)
 //   [920000, 960000)  set gate room options (#2202)
 //   [960000, …)       cast gate option renders (#2202)

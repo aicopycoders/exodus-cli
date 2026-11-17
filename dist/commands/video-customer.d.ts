@@ -34,6 +34,8 @@ export interface CustomerRunScene {
         redoEstimateUsd?: number;
         redoEstimateMaxUsd?: number;
         voiceRetrying?: true;
+        voiceRetry?: true;
+        voiceHeldToo?: true;
     } | null;
 }
 export type CustomerHeldScene = {
@@ -171,6 +173,7 @@ export interface CustomerStoryboard {
     noPictureBeforeApproval?: true;
     beforePictures?: true;
     findings?: CustomerPlanFinding[];
+    hardWords?: string[];
 }
 export interface CustomerPlanFinding {
     text: string;

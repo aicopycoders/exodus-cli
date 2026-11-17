@@ -5683,17 +5683,26 @@ export async function revoiceFlow(runId, target, json, deps) {
         return errorResult(runRes, json);
     if (customerAnswer(runRes.data)) {
         const customer = runRes.data;
-        const scene = "all" in target
-            ? undefined
-            : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find((s) => s.sceneIndex === target.sceneIndex && (s.voice === true || s.voiceToo === true));
-        if (scene?.voiceToo) {
-            return adminOnlyResult(`Scene ${scene.sceneIndex} also failed another check, so changing its voice again wouldn't finish it. Try ` +
+        const refuse = (line) => adminOnlyResult(line, json);
+        if ("all" in target)
+            return refuse("exodus video revoice --all is for admins. Name one scene: exodus video revoice <video> --scene <n>");
+        const n = target.sceneIndex;
+        const listed = [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find((s) => s.sceneIndex === n);
+        const scene = customer.scenes?.find((s) => s.sceneIndex === n);
+        if (customer.scenes && !scene && !listed)
+            return refuse(`This video has no scene ${n}.`);
+        if (listed?.voiceToo || scene?.clip?.voiceHeldToo) {
+            return refuse(`Scene ${n} also failed another check, so changing its voice again wouldn't finish it. Try ` +
                 "again on the video's page films a new take and changes its voice too, and shows the price first: " +
-                customerRunPage(deps.dashboardUrl, runId), json);
+                customerRunPage(deps.dashboardUrl, runId));
         }
-        const held = scene;
-        if (!held)
-            return adminOnlyResult("exodus video revoice is for admins.", json);
+        if (scene?.clip?.voiceRetrying) {
+            return refuse(`Scene ${n}'s voice is being changed again right now; nothing is filmed. Watch it land: exodus video status ${runId}`);
+        }
+        if (!listed?.voice && !scene?.clip?.voiceRetry) {
+            return refuse(`Scene ${n} isn't held for its voice change, so there is no voice change to try again. Nothing was started.`);
+        }
+        const held = { sceneIndex: n };
         const res = await deps.post(SCENE_REVOICE_PATH, { runId, sceneIndex: held.sceneIndex });
         if (!res.ok)
             return errorResult(res, json);

@@ -1021,7 +1021,8 @@ same. Set one only on the member's word. As `sheet` prints them:
   At the top, with no words on `headline` and no `headline=none` from the
   member, it shows the words on screen written for take 1's opening once one
   more text call on the member's model key checks them (with the hook off,
-  none), and the price names that call among what it leaves out.
+  none), and the price names that call among what it leaves out. With no pick
+  it is `top` while `hook` is on, else `chest`.
 
 With several videos, the label says how many and the description each one's
 price as printed, never their sum. Each start's `--max-usd`, and each write's
@@ -1042,7 +1043,8 @@ sheet into the video; a change after it is for the next video.
 **Recommended rows.** A row may print `recommended:` and a reason ("why" gives
 it): a start with no pick films that value. With no pick, the "How it is
 finished" rows and `cardPlace` print `from the kind of ad:` and a start cuts
-them so. A value one of them recommends is used only when picked: `voiceSound`
+them so. A value one of them recommends is used only when picked, unless it is
+the row's value already (`cardPlace`'s `top` while `hook` is on): `voiceSound`
 names it in its reason ("pick it to use it"); `pauses` and `cardPlace` mark it
 only as `recommended` in `--json`. "Let it run" here, said in reply to these
 saved sheets and their prices, is the yes to the starts with the sheets as
@@ -1965,8 +1967,9 @@ under it:
   then the new start above), film it again as it is, or keep it.
   Add the word only on their yes. The script and captions keep the name
   as written.
-  When `add` says "Saved, but not used yet", or its "Used where" names leave out
-  the name the take said wrong, say so: filming again would not change how that name is said.
+  When `add` says "Saved, but not used yet", or its "Used where", "Used when" or
+  "Used wherever" line names another word than the one the take said wrong, say so:
+  filming again would not change how that word is said.
 - paused: a builder checkpoint neither video verb resolves —
   `exodus workflow checkpoint <runId>` is the verb for that one.
 - failed: `status` shows how far it got, and a `--wait` that was running exits

@@ -52,6 +52,10 @@ export interface AuthoredBeat {
   postLineReaction: boolean;
 }
 export function parseAuthoredBeat(direction: string | readonly string[] | null | undefined): AuthoredBeat;
+/** Punctuation-preserving prose clauses shared by timing detection and split routing. */
+export function splitAuthoredClauses(direction: string | readonly string[] | null | undefined): string[];
+/** Global number-and-unit matcher shared by parsing and split safety checks. */
+export const AUTHORED_DURATION_PATTERN: RegExp;
 
 /** True only when both timestamps are finite and the token has no duration. */
 export function isZeroDurationSpeech(word: SpeechEditWord): boolean;

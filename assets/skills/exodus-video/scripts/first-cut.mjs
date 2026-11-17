@@ -48,7 +48,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { planText, READOUT_INSET_BOX } from "./first-cut-text.mjs";
 import { createTextRenderer, measuredTextAss, textFrameWindow } from "./first-cut-text-render.mjs";
-import { isZeroDurationSpeech, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC } from "./first-cut-speech.mjs";
+import { isZeroDurationSpeech, parseAuthoredBeat, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC, DIALOGUE_BREATH_LEAD_SEC, DIALOGUE_BREATH_TAIL_SEC } from "./first-cut-speech.mjs";
 import { captionSync, placementHeard, retimeWords, soundPictureCheck } from "./first-cut-sync.mjs";
 
 const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]";
@@ -580,10 +580,12 @@ export function finishingOf(manifest) {
  * musicOnlyMaster), as the manifest's `sound`: the files the worker made for
  * this run. A sound lands SOUND_LEAD_SEC before the first word of the line it
  * is cued to, SOUND_UNDER_DB under the voice there. A room-tone bed runs from
- * its set's first scene (the first bed from the start) to the next bed, looped,
- * BED_UNDER_DB under the voice, in place of the brown-noise room tone; a bed
- * quieter than BED_FLOOR_LUFS, or with no loudness to measure, is left out and
- * noted. With `duck` the music sits MUSIC_UNDER_DB under the voice and a
+ * its set's first scene (the first bed from the start) to the next heard bed,
+ * looped BED_UNDER_DB under the voice. Rejected beds keep that legacy span
+ * unless a known new place starts without its own usable bed: that interval
+ * uses the existing brown-noise underlay, not the previous place's air.
+ * Beds below BED_FLOOR_LUFS or unmeasurable are omitted with a note. With
+ * `duck` the music sits MUSIC_UNDER_DB under the voice and a
  * sidechain compressor keyed on the voice ducks it (DUCK). With
  * musicOnlyMaster a second file beside the cut carries the cut's picture and
  * the music alone, at FINISH_LUFS. The voice's level is SEGMENT_LUFS where
@@ -799,6 +801,20 @@ export function soundPlan(sound, timeline, storyboard, { levelled, measure, temp
   }
   const bedRef = heardVoice(voiceLufs) ? voiceLufs : FINISH_LUFS;
   const heard = [];
+  // Unknown/same-place bed failures retain the legacy next-HEARD-bed span.
+  // Only a known change of place can replace it with the existing free underlay.
+  const places = new Map((storyboard?.scenes ?? []).map((scene) =>
+    [scene.sceneIndex, String(scene.place ?? "").trim().toLowerCase()]));
+  const placeRuns = [];
+  let previousPlace = "";
+  // #4944: template runs only; a regular cut keeps dev's next-heard-bed span.
+  if (template) for (const seg of spine) {
+    const place = places.get(seg.sceneIndex);
+    if (place && place !== previousPlace) {
+      placeRuns.push({ from: seg.startSec, place });
+      previousPlace = place;
+    }
+  }
   for (const b of sound.beds) {
     const seg = spine.find((x) => x.sceneIndex === b.fromScene);
     const lufs = measure(b.file);
@@ -811,15 +827,31 @@ export function soundPlan(sound, timeline, storyboard, { levelled, measure, temp
     }
   }
   heard.sort((a, b) => a.from - b.from);
+  const failedPlaceStarts = placeRuns.filter((run) => !heard.some((b) => b.from === run.from)).map((run) => run.from);
   const beds = heard.map((b, k) => {
-    const startSec = k === 0 ? 0 : timeline.mapped ? b.from : roundMs(b.from);
-    const end = k + 1 < heard.length ? heard[k + 1].from : pictureSec;
+    const changedPlace = placeRuns.slice(1).some((run) => run.from <= b.from);
+    const startSec = k === 0 && !changedPlace ? 0 : timeline.mapped ? b.from : roundMs(b.from);
+    const end = Math.min(k + 1 < heard.length ? heard[k + 1].from : pictureSec,
+      ...failedPlaceStarts.filter((from) => from > b.from));
     return {
       ...(timeline.mapped ? b : {}), file: b.file, fromScene: b.fromScene, startSec,
       seconds: timeline.mapped ? end - startSec : roundMs(Math.max(0.1, end - startSec)), gainDb: b.gainDb,
     };
   });
-  return { voiceLufs, effects, beds, notes };
+  const fallbackBeds = [];
+  if (beds.length) for (const [index, run] of placeRuns.entries()) {
+    const end = placeRuns[index + 1]?.from ?? pictureSec;
+    let from = run.from;
+    for (const bed of beds.filter((bed) => bed.startSec < end && bed.startSec + bed.seconds > from)) {
+      if (bed.startSec > from) fallbackBeds.push({ startSec: from, seconds: bed.startSec - from });
+      from = Math.max(from, Math.min(end, bed.startSec + bed.seconds));
+    }
+    if (from < end) fallbackBeds.push({ startSec: from, seconds: end - from });
+  }
+  for (const gap of fallbackBeds) notes.push(
+    `place-bed-fallback: at ${gap.startSec.toFixed(3)}s no usable place bed; ${sound.roomTone === false ? "room underlay explicitly disabled" : "existing brown-noise underlay retained"}, no previous-place bed or new purchase`);
+  return { voiceLufs, effects, beds, notes,
+    ...(fallbackBeds.length && sound.roomTone !== false ? { fallbackBeds } : {}) };
 }
 
 /** The music's gain under the voice when it is ducked. */
@@ -1561,6 +1593,114 @@ function clipLevels(file, filter = null) {
 /** Decoded final-mix levels; callers must not attribute an event to these whole-mix windows. */
 export const measureCutAudio = (file) => clipLevels(file);
 
+/**
+ * manifest.scenes[].actionEvidence may carry {file, lead/tail: {
+ * status:"absent", fromSec, toSec, detail}} from an existing source observation.
+ * It must name these bytes and cover the whole reserved edge on the decoded
+ * picture clock. Unknown, missing, partial or other-source evidence keeps time.
+ */
+function absentAction(seg, edge, startSec, endSec) {
+  const evidence = seg.actionEvidence;
+  const observed = evidence?.[edge];
+  const delta = seg.map?.deltaSec ?? 0;
+  return evidence?.file === seg.file && observed?.status === "absent" &&
+    typeof observed.detail === "string" && observed.detail.trim().length > 0 &&
+    Number.isFinite(observed.fromSec) && Number.isFinite(observed.toSec) &&
+    observed.fromSec <= startSec + delta + 1e-6 && observed.toSec >= endSec + delta - 1e-6;
+}
+
+/**
+ * An extra edge utterance must not take the later acting performance with it.
+ * Remove its own picture/audio together, using the same clearance as join
+ * trimming; never cross approved speech or manufacture quiet/held frames.
+ */
+function actingBeatSpeechCuts(seg, lines, clockSec, notes) {
+  const span = scriptedSpan(seg.words, lines.map((line) => line.text));
+  if (!span) return [];
+  const cuts = [];
+  const reserve = (words, edge, seconds, limitStart, limitEnd) => {
+    if (!(seconds > 0) || !words.length ||
+        words.some((word) => !Number.isFinite(word.s) || !Number.isFinite(word.e))) return;
+    const s = Math.max(limitStart, floorFrame(Math.min(...words.map((word) => word.s)) - EXTRA_CLEARANCE_SEC));
+    const e = Math.min(limitEnd, ceilFrame(Math.max(...words.map((word) => word.e)) + EXTRA_CLEARANCE_SEC));
+    // No usable performance beyond the utterance: retain the existing edge trim.
+    if (!(e > s) || (edge === "tail" ? e >= clockSec : s <= 0)) return;
+    cuts.push({ s, e, after: `unapproved ${edge} speech`, gap: e - s, kept: 0 });
+    notes.push(`acting-beat-extra-speech: scene ${seg.sceneIndex} removed ${s.toFixed(3)}–${e.toFixed(3)}s of source picture/audio together to retain authored ${edge} performance; inspect the resulting join, no action or clean audio is certified`);
+  };
+  reserve(seg.words.slice(0, span.first), "lead", seg.actionLeadSec,
+    0, floorFrame(seg.words[span.first].s));
+  reserve(seg.words.slice(span.last + 1), "tail", seg.actionTailSec,
+    ceilFrame(seg.words[span.last].e), clockSec);
+  return cuts;
+}
+
+// Director beats are ordered operations, even when they share a line anchor.
+// Required phases describe the same operation, not another additive quota.
+function authoredActionMinimum(scene) {
+  const positive = (value) => Number.isFinite(value) && value > 0 ? value : 0;
+  return Math.max(
+    positive(scene?.actionLeadSec) + positive(scene?.actionTailSec),
+    (scene?.directorBeats ?? []).reduce((sum, beat) => sum + positive(beat.timing?.minActionSec), 0),
+    ...(scene?.actionPhases ?? []).filter((phase) => phase.required)
+      .map((phase) => positive(phase.window?.minActionSec)),
+  );
+}
+
+function retainActionMinimum(edit, scene, clockSec, speechCuts) {
+  const minimum = authoredActionMinimum(scene);
+  if (!edit || !(minimum > 0)) return;
+  // Scene-boundary anchors remain known even if ASR cannot bind the other
+  // endpoint (tonight's closing brand/model words are untagged and uncertain).
+  if (scene.directorBeats?.some((beat) => beat.timing?.start?.boundary === "scene-start")) edit.headSec = 0;
+  if (scene.directorBeats?.some((beat) => beat.timing?.end?.boundary === "scene-end")) edit.tailSec = floorFrame(clockSec);
+  const excludedSeconds = () => speechCuts.reduce((sum, cut) =>
+    sum + Math.max(0, Math.min(edit.tailSec, cut.e) - Math.max(edit.headSec, cut.s)), 0);
+  const removed = edit.cuts.reduce((sum, cut) => sum + cut.endSec - cut.startSec, 0);
+  if (edit.tailSec - edit.headSec - removed - excludedSeconds() >= minimum) return;
+  // Existing silence is playable source, not a freeze or proof of the action.
+  // Keep it before recovering edges; excluded utterances never count as action.
+  edit.cuts = [];
+  const limit = floorFrame(clockSec);
+  edit.headSec = Math.max(0, floorFrame(edit.headSec));
+  for (let attempt = 0; attempt <= speechCuts.length; attempt++) {
+    const needed = Math.max(0, minimum + excludedSeconds() - (edit.tailSec - edit.headSec));
+    const tail = Math.min(limit, ceilFrame(edit.tailSec + needed));
+    const lead = Math.max(0, floorFrame(edit.headSec - Math.max(0, needed - (tail - edit.tailSec))));
+    if (tail === edit.tailSec && lead === edit.headSec) break;
+    edit.tailSec = tail;
+    edit.headSec = lead;
+  }
+}
+
+/** An approved native line owns its entire measured envelope, not just voiced
+ * tokens. Cutting its interphrase silence creates an avoidable retention hold
+ * when ASR splits or misspells a brand. Keep source first; QC still owns wording. */
+function retainRequiredLineEnvelopes(seg, lines, scriptLines, edit, notes) {
+  if (!edit) return;
+  const measured = lines.flatMap((line) => {
+    const words = lineSourceWords(seg.words, seg.lineIds, line, scriptLines);
+    const window = envelope(heardWindows(words, seg.seconds));
+    return window ? [{ ...window, lineId: line.lineId, unresolved: !equivalentAsrWording(line.text, words.map((word) => word.w)) }] : [];
+  });
+  // Missing edge tokens make ASR's first/last timestamps unsafe trim points.
+  // Keep through the adjacent approved boundary, or the source edge when alone.
+  const windows = measured.map((window) => window.unresolved ? {
+    ...window,
+    start: Math.max(0, ...measured.filter((other) => other !== window && other.end <= window.start).map((other) => other.end)),
+    end: Math.min(seg.seconds, ...measured.filter((other) => other !== window && other.start >= window.end).map((other) => other.start)),
+  } : window);
+  const removed = edit.cuts.filter((cut) => windows.some((window) =>
+    cut.startSec < window.end && cut.endSec > window.start));
+  edit.cuts = edit.cuts.filter((cut) => !removed.includes(cut));
+  for (const window of windows) {
+    edit.headSec = Math.min(edit.headSec, Math.max(0, floorFrame(window.start - TEMPLATE_SPEECH_LEAD_SEC)));
+    edit.tailSec = Math.max(edit.tailSec, Math.min(seg.seconds, ceilFrame(window.end + TEMPLATE_SPEECH_TAIL_SEC)));
+  }
+  if (removed.length) notes.push(`required-line-envelope-retained: scene ${seg.sceneIndex}: kept native interphrase audio for ${windows.map((window) => window.lineId).join(", ")}; wording remains a clip-QC finding`);
+  return Math.max(0, ...windows.map((window) => window.end));
+}
+
 function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineGap = null, jump = null, templateBoard = null, editingTreatment = null, notes = [], gapMax = SENTENCE_GAP_MAX_SEC) {
   for (const seg of spine) {
     if (seg.source !== "clip" || seg.audio !== "clip" || !seg.words?.length || seg.fixedLength) continue;
@@ -1573,14 +1713,46 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
       cuesBeat: reactionCues.has(id),
     }));
     const scene = templateBoard?.scenes?.find((entry) => entry.sceneIndex === seg.sceneIndex);
+    const clockSec = Number.isFinite(scene?.durationSec) && scene.durationSec > 0
+      ? Math.min(seg.seconds, scene.durationSec) : seg.seconds;
+    // #4944: the acting-beat clock and its edge-speech cuts are template work; other runs cut as before.
+    if (templateBoard && (seg.actionLeadSec > 0 || seg.actionTailSec > 0 || authoredActionMinimum(scene) > 0)) seg.actionClockSec = clockSec;
+    const edgeCuts = !templateBoard || seg.wholeVoice ? [] : actingBeatSpeechCuts(seg, lines, clockSec, notes);
+    if (edgeCuts.length) seg.words = seg.words.filter((word) =>
+      !edgeCuts.some((cut) => word.s >= cut.s && word.e <= cut.e));
     const edit = templateBoard && !seg.wholeVoice ? templateSpeechEdit(seg.words, {
-      durationSec: seg.seconds, lines, actionLeadSec: seg.actionLeadSec ?? 0,
+      durationSec: clockSec, lines, actionLeadSec: seg.actionLeadSec ?? 0,
+      span: scriptedSpan(seg.words, lines.map((line) => line.text)),
       actionTailSec: seg.actionTailSec ?? 0, fps: FPS,
       direction: [templateBoard?.stageDirection, scene?.sceneDirection, scene?.shotDirection?.action, scene?.subjectAction],
       actionPhases: scene?.actionPhases, directorBeats: scene?.directorBeats,
       notes, sceneIndex: seg.sceneIndex,
       editingTreatment,
     }) : null;
+    retainActionMinimum(edit, scene, clockSec, edgeCuts);
+    const anchors = templateJoinAnchors(seg.words.filter((word) => !isZeroDurationSpeech(word)));
+    const first = anchors.firstSec;
+    const last = anchors.lastSec;
+    const leadStart = edit?.headSec ?? Math.max(0, first - (seg.actionLeadSec ?? 0));
+    const tailEnd = edit?.tailSec ?? Math.min(seg.seconds, last + (seg.actionTailSec ?? 0));
+    if (first > leadStart && absentAction(seg, "lead", leadStart, first)) {
+      seg.actionLeadSec = 0;
+      if (edit) edit.headSec = Math.max(0, floorFrame(first -
+        (editingTreatment?.dialogueBreath ? DIALOGUE_BREATH_LEAD_SEC : TEMPLATE_SPEECH_LEAD_SEC)));
+      notes.push(`action-reservation-absent: scene ${seg.sceneIndex} opening action absent in source; shrank lead reservation, retained natural breath (${seg.actionEvidence.lead.detail})`);
+    }
+    if (tailEnd > last && absentAction(seg, "tail", last, tailEnd)) {
+      seg.actionTailSec = 0;
+      if (edit) edit.tailSec = Math.min(seg.seconds, ceilFrame(last +
+        (editingTreatment?.dialogueBreath ? DIALOGUE_BREATH_TAIL_SEC : TEMPLATE_SPEECH_TAIL_SEC)));
+      notes.push(`action-reservation-absent: scene ${seg.sceneIndex} closing action absent in source; shrank tail reservation, retained natural breath (${seg.actionEvidence.tail.detail})`);
+    }
+    const requiredLineEndSec = retainRequiredLineEnvelopes(seg, lines, scriptLines, edit, notes);
+    // The board bounds discretionary action recovery, not required source
+    // audio. Do not let the later join cap undo the envelope retained above.
+    if (Number.isFinite(requiredLineEndSec) && Number.isFinite(seg.actionClockSec)) {
+      seg.actionClockSec = Math.max(seg.actionClockSec, requiredLineEndSec);
+    }
     const sentenceCuts = templateBoard
       ? edit && lineGap ? sentenceGapCuts(seg.words, lines, null, lineGap) : []
       : sentenceGapCuts(seg.words, lines, readLevels(seg.file), lineGap, jump, gapMax);
@@ -1588,7 +1760,7 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
       s: gap.startSec, e: gap.endSec, after: "speech", gap: gap.endSec - gap.startSec, kept: 0,
       atLine: sentenceCuts.find((cut) => cut.s < gap.endSec && cut.e > gap.startSec)?.atLine,
     }));
-    const heardCuts = templateBoard ? jumpCuts : sentenceCuts.sort((a, b) => a.s - b.s);
+    const heardCuts = [...edgeCuts, ...(templateBoard ? jumpCuts : sentenceCuts)].sort((a, b) => a.s - b.s);
     if (edit) seg.templateSpeech = edit;
     // The measured map: on whole slots of the clip's own picture, so both lose the same frames.
     const cuts = seg.map?.picture ? cutsOnSlots(heardCuts, seg.map.deltaSec) : heardCuts;
@@ -1599,6 +1771,7 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
     if (cuts.length === 0) continue;
     const removedBefore = (t) => cuts.reduce((sum, c) => sum + (c.e <= t ? c.e - c.s : 0), 0);
     const removed = removedBefore(Infinity);
+    if (Number.isFinite(seg.actionClockSec)) seg.actionClockSec -= removedBefore(seg.actionClockSec);
     seg.cuts = cuts.map(({ s, e, slots }) => (slots ? { s, e, slots } : { s, e }));
     // cutPace: where the take is split, in its time once the gaps are out.
     const splits = cuts.filter((c) => c.atLine !== undefined).map((c) => ({ at: c.s - removedBefore(c.s), line: c.atLine }));
@@ -1682,8 +1855,9 @@ function selectedPictureJobs(manifest, board, budget = manifest?.planningBudget)
   }));
 }
 
-export function scenePlans(storyboard, planningBudget = null, selectedJobs = null) {
+export function scenePlans(storyboard, planningBudget = null, selectedJobs = null, { template = false } = {}) {
   const plans = new Map();
+  const script = new Map((storyboard?.script ?? []).map((line) => [line.lineId, line]));
   const suffixes = new Map();
   for (const beat of planningBudget?.beats ?? []) {
     if (!(beat.picture?.finalWordTailSec > 0)) continue;
@@ -1699,6 +1873,23 @@ export function scenePlans(storyboard, planningBudget = null, selectedJobs = nul
     const speakers = (Array.isArray(scene.dialogue) ? scene.dialogue : [])
       .filter((turn) => hasText(turn?.line) || hasText(turn?.text))
       .map((turn) => (hasText(turn.speaker) ? turn.speaker.trim() : null));
+    const sceneBeat = parseAuthoredBeat([scene.stageDirection, scene.performanceDirection, scene.sceneDirection]);
+    const firstLine = script.get(scene.lineIds?.[0]);
+    const lastLine = script.get(scene.lineIds?.at(-1));
+    const firstBeat = parseAuthoredBeat([firstLine?.stageDirection, firstLine?.performanceDirection]);
+    const lastBeat = parseAuthoredBeat([lastLine?.stageDirection, lastLine?.performanceDirection]);
+    // Structured director timing owns placement; a bare "2 s silent beat"
+    // in prose cannot move an authored post-line beat ahead of the speech.
+    const directed = (scene.directorBeats ?? []).filter((beat) =>
+      beat.timing?.start && beat.timing?.end && beat.timing.minActionSec > 0);
+    const directedLead = directed.filter((beat) =>
+      beat.timing.start.boundary === "scene-start" &&
+      beat.timing.end.lineId === firstLine?.lineId && beat.timing.end.edge === "start")
+      .reduce((sum, beat) => sum + beat.timing.minActionSec, 0);
+    const directedTail = directed.filter((beat) =>
+      beat.timing.start.lineId === lastLine?.lineId && beat.timing.start.edge === "end" &&
+      beat.timing.end.boundary === "scene-end")
+      .reduce((sum, beat) => sum + beat.timing.minActionSec, 0);
     plans.set(scene.sceneIndex, {
       firstSpeaker: speakers[0] ?? null,
       lastSpeaker: speakers.at(-1) ?? null,
@@ -1712,8 +1903,13 @@ export function scenePlans(storyboard, planningBudget = null, selectedJobs = nul
       actionTailSec: Math.max(
         typeof scene.actionTailSec === "number" && scene.actionTailSec > 0 ? scene.actionTailSec : 0,
         suffixes.get(scene.sceneIndex) ?? 0,
+        // #4944: the air kept for a timed pause or a director beat is template work; a regular cut keeps dev's.
+        !template ? 0 : directed.length ? directedTail : Math.max(sceneBeat.timedTailSec, lastBeat.timedTailSec),
       ),
-      actionLeadSec: typeof scene.actionLeadSec === "number" && scene.actionLeadSec > 0 ? scene.actionLeadSec : 0,
+      actionLeadSec: Math.max(
+        typeof scene.actionLeadSec === "number" && scene.actionLeadSec > 0 ? scene.actionLeadSec : 0,
+        !template ? 0 : directed.length ? directedLead : Math.max(sceneBeat.timedLeadSec, firstBeat.timedLeadSec),
+      ),
       ...(planningBudget ? {
         editSeconds: selectedJobs
           ? selectedJobs.find((job) => job.owners.includes(scene)) ? scene.planSeconds : null
@@ -1955,7 +2151,7 @@ export function openingAirFrames(startSec, wasSec) {
  * talkTrim: no talking clip keeps more than TALK_TRIM_SEC of air after its last
  * word, the ad's last one included; a scene's actionTailSec still holds.
  */
-function trimJoins(spine, reactionCues, scriptLines, gapMax = null, talkTrim = false) {
+function trimJoins(spine, reactionCues, scriptLines, gapMax = null, talkTrim = false, readLevels = () => null, notes = []) {
   // cutPace: the beat before someone new answers shrinks so the join holds at most gapMax of air.
   const newSpeakerLead = gapMax === null
     ? JOIN_LEAD_NEW_SPEAKER_SEC
@@ -1992,6 +2188,44 @@ function trimJoins(spine, reactionCues, scriptLines, gapMax = null, talkTrim = f
       outSec = Math.min(outSec, Math.max(clear, ceilFrame(lastWord)));
     }
     outSec = Math.min(seg.seconds, outSec);
+    if (Number.isFinite(seg.actionClockSec)) outSec = Math.min(outSec, Math.max(ceilFrame(lastWord), seg.actionClockSec));
+    // Translate across already-removed interior time before consulting source
+    // PCM. Recovery never crosses a later unapproved utterance.
+    const rawTime = (time) => {
+      let raw = time;
+      for (const cut of seg.cuts ?? []) if (raw >= cut.s - 1e-6) raw += cut.e - cut.s;
+      return raw;
+    };
+    const editedTime = (raw) => raw - (seg.cuts ?? []).reduce(
+      (sum, cut) => sum + Math.max(0, Math.min(raw, cut.e) - cut.s), 0);
+    const levels = readLevels(seg.file);
+    if (activeSpeechEdge(levels, rawTime(outSec), rawTime(lastWord))) {
+      const limit = after.length ? Math.min(seg.seconds, Math.min(...after.map((w) => w.s)) - EXTRA_CLEARANCE_SEC) : seg.seconds;
+      const rawLimit = rawTime(limit);
+      let quietStart = null;
+      let recovered = null;
+      for (let i = Math.ceil(rawTime(outSec) / levels.windowSec); i < levels.db.length && (i + 1) * levels.windowSec <= rawLimit + 1e-6; i++) {
+        if (Number.isFinite(levels.db[i]) && levels.db[i] <= -38) {
+          quietStart ??= i * levels.windowSec;
+          const target = Math.min(limit, ceilFrame(editedTime(quietStart + TEMPLATE_SPEECH_TAIL_SEC)));
+          if ((i + 1) * levels.windowSec - quietStart >= .12 - 1e-6 &&
+              (i + 1) * levels.windowSec >= rawTime(target) - 1e-6) {
+            recovered = target;
+            break;
+          }
+        } else if (quietStart !== null || !Number.isFinite(levels.db[i])) {
+          // A resumed voice after even a short break can be another utterance.
+          // Never scan across that break looking for a more convenient release.
+          break;
+        }
+      }
+      if (recovered !== null && recovered > outSec) {
+        notes.push(`speech-release-recovered: scene ${seg.sceneIndex} restored discarded source tail ${outSec.toFixed(3)}–${recovered.toFixed(3)}s with natural breath; no speech faded or regenerated`);
+        outSec = recovered;
+      } else if (outSec < limit) {
+        notes.push(`speech-release-unresolved: scene ${seg.sceneIndex} kept original trim and approved speech; no measured release inside this utterance before EOF or a possible next utterance`);
+      }
+    }
     // The measured map: a scripted word the clip's own picture ends before is lost media, said, never trimmed away quietly.
     if (seg.map) {
       const lost = line.filter((w) => (!seg.templateSpeech || !isZeroDurationSpeech(w)) && w.e > outSec + 1e-6);
@@ -2993,7 +3227,7 @@ function trimTemplateTerminalSilence(file, timeline, manifest, board, notes) {
   // A selected narration reservation's real picture air was retained on
   // purpose (reservedNarration, fixedLength); quiet after the voice is not
   // trimmable terminal silence there. Only actual source frames count, never a hold.
-  const reservedEnd = timeline.reservedNarration ? Math.max(0, ...timeline.spine
+  const reservedEnd = timeline.reservedNarration || timeline.narrationPictureReservation ? Math.max(0, ...timeline.spine
     .filter((seg) => seg.audio === "narration" && seg.fixedLength)
     .map((seg) => seg.startSec + Math.max(0, seg.seconds - (seg.holdSec ?? 0)))) : 0;
   const resolvedEnd = Math.max(0, ...[...timeline.spine, ...timeline.cutaways].flatMap((seg) =>
@@ -3689,20 +3923,22 @@ export function renderFindings(map, decoded, planningBudget = null) {
   }
   if (!planningBudget) return { findings, render };
   const overrun = planningBudget.overrun ?? { name: "none", seconds: 0 };
-  const ceilingSeconds = planningBudget.targetSeconds + overrun.seconds;
-  // The selected budget is a maximum, never a request to pad or shorten.
-  // Counts certify seconds only on the actual complete decoded 24 fps clock.
+  const scriptClock = planningBudget.scriptClock?.version === 1;
+  const ceilingSeconds = scriptClock ? null : planningBudget.targetSeconds + overrun.seconds;
+  // New script clocks report their measured runtime without a nominal-target veto.
+  // Source coverage, frame/sample integrity and paid authorization remain independent.
   const measured = Number.isSafeInteger(render.frames) && render.frames > 0 &&
     pic?.ptsSec.length === render.frames && pic.ptsSec.every((t, k) => Number.isFinite(t) && Math.abs(t * FPS - k) <= 1e-3) &&
     Number.isFinite(pic.endSec) && Math.abs(pic.endSec * FPS - render.frames) <= 1e-3 &&
-    (!map || render.frameDelta === 0) && Number.isFinite(ceilingSeconds) &&
+    (!map || render.frameDelta === 0) && (scriptClock || Number.isFinite(ceilingSeconds)) &&
     !findings.some((finding) => ["render-unmeasured", "render-picture-clock", "render-picture-grid", "render-frames"].includes(finding.code));
   const planningTiming = {
     basis: "decoded-final-picture-clock",
     finalSha256: null,
-    planned: { targetSeconds: planningBudget.targetSeconds, overrun: { ...overrun }, ceilingSeconds },
+    planned: { targetSeconds: planningBudget.targetSeconds, overrun: { ...overrun }, ceilingSeconds,
+      ...(scriptClock ? { scriptClock: planningBudget.scriptClock } : {}) },
     decoded: measured ? { frames: render.frames, fps: FPS, seconds: render.frames / FPS } : null,
-    status: !measured ? "unknown" : render.frames > ceilingSeconds * FPS + 1e-7 ? "over-budget" : "within-budget",
+    status: !measured ? "unknown" : scriptClock ? "script-derived" : render.frames > ceilingSeconds * FPS + 1e-7 ? "over-budget" : "within-budget",
   };
   if (planningTiming.status === "unknown") refuse("planning-budget-clock-unmeasured", "the selected final total budget cannot be checked without a complete valid decoded final picture clock on the measured 24 fps grid");
   if (planningTiming.status === "over-budget") findings.push({
@@ -3731,6 +3967,78 @@ export function measureCutPlanningTiming(file, planningBudget) {
     });
   }
   return { planningTiming, findings };
+}
+
+/**
+ * Local release risk, not a voice/phoneme verdict: sustained energy beside the
+ * last measured word warrants preserving source, never deleting speech. Unknown
+ * levels do not prove a complete release. Click fades are unrelated to recovery.
+ */
+function activeSpeechEdge(levels, edgeSec, lastWordSec) {
+  const step = levels?.windowSec;
+  if (!(step > 0) || !Number.isFinite(lastWordSec) ||
+      edgeSec < lastWordSec - step || edgeSec - lastWordSec > .35) return false;
+  const end = Math.min(levels.db.length, Math.ceil(edgeSec / step));
+  const tail = levels.db.slice(Math.max(0, end - 3), end);
+  // Constant ambience/music is not speech evidence: require a measured quiet
+  // floor elsewhere, in addition to word proximity and sustained edge energy.
+  return tail.length === 3 && tail.every((db) => Number.isFinite(db) && db > -38) &&
+    levels.db.some((db) => Number.isFinite(db) && db <= -48);
+}
+
+/**
+ * Local repair inputs on manifest.scenes: availableTakes contains approved,
+ * already-paid compatible {clip, words, wordsFrom:"clip",
+ * wordsDescribe:"this-file", approved:true} files, never URLs. A replacement
+ * must retain the selected take's entire word/line sequence and quiet release.
+ * actionEvidence, if supplied, belongs to each take's own source picture clock.
+ */
+function repairSpeechTakes(manifest, plans, { exists, probe, readWords, readLevels, notes }) {
+  if (manifest?.clipAudio === "discard" || manifest?.wholeVoice ||
+      manifest?.clipAudio !== "keep" && manifest?.templateMotion?.enabled !== true) return manifest;
+  const scenes = (manifest.scenes ?? []).map((scene) => {
+    const plan = plans.get(scene.sceneIndex);
+    if (!plan || plan.cutaway || plan.narrated || scene.wordsFrom === "voice" ||
+        !exists(scene.clip) || scene.wordsDescribe === "original-performance") return scene;
+    const clip = probe(scene.clip);
+    const words = readWords(scene.words);
+    if (!clip.hasAudio || !words?.length) return scene;
+    const last = Math.max(...words.filter((w) => !isZeroDurationSpeech(w)).map(wordEnd));
+    if (!activeSpeechEdge(readLevels(scene.clip), clip.seconds, last)) return scene;
+    const transcript = (rows) => rows.map((w) => `${w.lineId ?? ""}:${wordToken(w.w)}`).join("|");
+    for (const take of scene.availableTakes ?? []) {
+      if (take.approved !== true || take.wordsDescribe !== "this-file" ||
+          take.wordsFrom !== "clip" || !exists(take.clip)) continue;
+      let alternate;
+      try { alternate = probe(take.clip); }
+      catch { continue; } // A failed optional source cannot discard the usable winner.
+      const heard = readWords(take.words);
+      if (!alternate.hasAudio || !heard?.length || transcript(heard) !== transcript(words)) continue;
+      const end = Math.max(...heard.map(wordEnd));
+      const levels = readLevels(take.clip);
+      const released = levels?.db.slice(Math.ceil(end / levels.windowSec),
+        Math.ceil((end + TEMPLATE_SPEECH_TAIL_SEC) / levels.windowSec));
+      if (!(alternate.seconds >= end + TEMPLATE_SPEECH_TAIL_SEC) || !released?.length ||
+          !released.every((db) => Number.isFinite(db) && db <= -38)) continue;
+      const handles = plan.actionLeadSec > 0 || plan.actionTailSec > 0;
+      // An unproven handle can hold the cut, so a take with no action evidence
+      // of its own never replaces a winner that has some.
+      if (handles && scene.actionEvidence && !take.actionEvidence) {
+        notes.push(`speech-release-take-skipped: scene ${scene.sceneIndex} kept ${scene.clip}: ${take.clip} has no action evidence of its own to replace the measured action`);
+        continue;
+      }
+      notes.push(`speech-release-take: scene ${scene.sceneIndex} replaced ${scene.clip} with already-paid approved ${take.clip}; identical heard words retained`);
+      // Never transplant another file's event clock. The replacement's own
+      // legacy endpoints and new edge receipts coexist on its evidence object.
+      if (handles) notes.push(
+        `action-proof-unproven: scene ${scene.sceneIndex} uses only the replacement take's own action evidence`);
+      return { ...scene, clip: take.clip, words: take.words, wordsDescribe: "this-file",
+        actionEvidence: take.actionEvidence };
+    }
+    notes.push(`speech-release-unresolved: scene ${scene.sceneIndex} has sustained energy at source EOF beside its last word; clip and approved speech kept, no complete local approved take; a fade is not a repair`);
+    return scene;
+  });
+  return { ...manifest, scenes };
 }
 
 /**
@@ -3785,7 +4093,7 @@ function assembleTimeline({
   if (selectedJobs) {
     const reserved = selectedJobs.reduce((sum, job) => sum + job.reservedSeconds, 0);
     const requested = manifest.planningBudget?.targetSeconds;
-    if (Number.isFinite(requested) && Math.abs(reserved - requested) > .001) {
+    if (!manifest.planningBudget?.scriptClock && Number.isFinite(requested) && Math.abs(reserved - requested) > .001) {
       notes.push(`selected-picture-target: ${reserved}s reserved against ${requested}s requested; the finished cut uses its retained source clocks`);
     }
     for (const scene of selectedJobs.flatMap((job) => job.owners)) {
@@ -3799,7 +4107,7 @@ function assembleTimeline({
   // at its picture start and leaving the remaining picture air to the music bed.
   const reservedNarration = Boolean(wholeVoice && selectedJobs && manifest?.templateMotion?.narratedShotList === true);
   const nativeBudget = !measure && manifest?.templateMotion?.enabled === true ? manifest.planningBudget : null;
-  const plans = scenePlans(storyboard, measure || selectedJobs ? manifest.planningBudget : nativeBudget, selectedJobs);
+  const plans = scenePlans(storyboard, measure || selectedJobs ? manifest.planningBudget : nativeBudget, selectedJobs, { template });
   const counts = lineWordCounts(storyboard);
   const spine = [];
   const cutaways = [];
@@ -3811,6 +4119,21 @@ function assembleTimeline({
   // wordless inserts and reactions; a stray voice file cannot replace native dialogue.
   const discardClipAudio = manifest?.clipAudio === "discard";
   const keepClipAudio = manifest?.clipAudio === "keep";
+  const levelCache = new Map();
+  const loadLevels = readLevels;
+  readLevels = (file) => {
+    if (!levelCache.has(file)) levelCache.set(file, loadLevels(file));
+    return levelCache.get(file);
+  };
+  if (template || keepClipAudio) {
+    const probes = new Map();
+    const loadProbe = probe;
+    probe = (file) => {
+      if (!probes.has(file)) probes.set(file, loadProbe(file));
+      return probes.get(file);
+    };
+  }
+  manifest = repairSpeechTakes(manifest, plans, { exists, probe, readWords, readLevels, notes });
   const filled = new Set();
   // A narrated segment is first fitted as a join; the one that ends the ad is
   // refitted once the spine is known.
@@ -3911,7 +4234,8 @@ function assembleTimeline({
         fitFinding?.code === "template-audio-source-reservation";
       const base = {
         sceneIndex: n, source: "clip", file: scene.clip, clipSeconds: pictureSec, inSec: 0,
-        ...(m ? { map: m, ...(scene.actionEvidence ? { actionEvidence: scene.actionEvidence } : {}) } : {}),
+        ...(m ? { map: m } : {}),
+        ...(scene.actionEvidence ? { actionEvidence: scene.actionEvidence } : {}),
         lineIds: plan.lineIds, firstSpeaker: plan.firstSpeaker, lastSpeaker: plan.lastSpeaker,
         baseShotId: plan.baseShotId ?? null, actionTailSec: plan.actionTailSec ?? 0,
         actionLeadSec: plan.actionLeadSec ?? 0,
@@ -4103,7 +4427,8 @@ function assembleTimeline({
     keepPauses ? Infinity : SENTENCE_GAP_MAX_SEC);
   // pauseTrim: each join inside a take fades its sound (PAUSE_JOIN_FADE_SEC); a level cuts close to the words.
   if (trim && !keepPauses) for (const seg of spine) if (seg.cuts?.length) seg.joinFadeSec = PAUSE_JOIN_FADE_SEC;
-  trimJoins(spine, reactionCues, scriptLines, pace ? PACE_GAP_MAX_SEC : null, finish?.talkTrim === true);
+  trimJoins(spine, reactionCues, scriptLines, pace ? PACE_GAP_MAX_SEC : null, finish?.talkTrim === true,
+    template || keepClipAudio ? readLevels : undefined, notes);
   if (pace) {
     // The pieces of one take alternate between the plain frame and the
     // punch-in, and a jump-cut run's alternation carries on across them.
@@ -4454,6 +4779,8 @@ function assembleTimeline({
     ...(groups ? { sourceGroups: groups } : {}),
     ...(manifest?.templateMotion?.narratedShotList === true ? { narratedShotList: true } : {}),
     ...(reservedNarration ? { reservedNarration: true } : {}),
+    ...(template && selectedJobs && manifest.templateMotion.narrationPictureReservation === true
+      ? { narrationPictureReservation: true } : {}),
     ...(sourceMap ? { mapped: true, sourceMap } : {}),
   };
 }
@@ -4547,6 +4874,29 @@ function protectTemplateMotion(timeline, manifest, board, notes = []) {
     const evidence = protection.get(segment.sceneIndex);
     if (evidence) segment.motionProtection = evidence;
   }
+}
+
+/** Clock readback only: retained seconds never certify a performed operation. */
+export function sceneDurationReadback(timeline, board, speed = 1) {
+  const shots = sceneTimes(timeline, true);
+  const scenes = (board?.scenes ?? []).map((scene) => {
+    const keptSec = r6(shots.filter((shot) => shot.scene === scene.sceneIndex)
+      .reduce((sum, shot) => sum + shot.seconds / speed, 0));
+    const minimum = authoredActionMinimum(scene);
+    return {
+      sceneIndex: scene.sceneIndex,
+      plannedSec: Number.isFinite(scene.durationSec) ? scene.durationSec : null,
+      keptSec, actionMinimumSec: r6(minimum),
+      actionShortfallSec: r6(Math.max(0, minimum - keptSec)),
+      clock: timeline.spine.some((seg) => seg.sceneIndex === scene.sceneIndex && seg.wholeVoice)
+        ? "whole-voice" : "source-and-board",
+    };
+  });
+  return {
+    plannedSec: r6(scenes.reduce((sum, scene) => sum + (scene.plannedSec ?? 0), 0)),
+    keptSec: r6(scenes.reduce((sum, scene) => sum + scene.keptSec, 0)),
+    scenes,
+  };
 }
 
 /** Final-clock locations for the existing probe, with only localized stillness
@@ -5047,6 +5397,12 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       );
       beds.push(`[set${j}]`);
     });
+    for (const [index, gap] of (sound.fallbackBeds ?? []).entries()) {
+      const samples = Math.round(gap.seconds * EDIT_SAMPLE_RATE);
+      const delay = Math.round(gap.startSec * EDIT_SAMPLE_RATE);
+      filters.push(`${ROOM_TONE},atrim=end_sample=${samples},asetpts=PTS-STARTPTS,adelay=delays=${delay}S:all=1[roomgap${index}]`);
+      beds.push(`[roomgap${index}]`);
+    }
   } else if (!finish?.room && sound?.roomTone !== false && (!timeline.mapped || !timeline.wholeVoice) && !timeline.wholeVoice?.songOnly) {
     filters.push(timeline.mapped
       ? `${ROOM_TONE},atrim=end_sample=${Math.round(pictureSec * EDIT_SAMPLE_RATE)}[room]`
@@ -5387,6 +5743,10 @@ export function inTheCut(timeline) {
         `cutaway ${c.sceneIndex}: ${label} at ${c.startSec.toFixed(2)}s for ${c.seconds.toFixed(1)}s, ` +
         `cued to ${c.cueLineId} in scene ${c.spineSceneIndex} (${how})${covers}${held}${cut}`,
     });
+  }
+  for (const note of timeline.notes ?? []) {
+    const speech = note.match(/^speech-release-[^:]+: scene (\d+)/);
+    if (speech) rows.push({ n: Number(speech[1]), line: note });
   }
   return rows.sort((a, b) => a.n - b.n).map((r) => r.line);
 }
@@ -7083,10 +7443,38 @@ export class SourceMapRefusal extends FirstCutError {
   }
 }
 
+const UNPROVEN_HANDLES = ["action-lead-unproven", "action-tail-unproven"];
+const UNOBSERVED_HANDLES = ["action-lead-unobserved", "action-tail-unobserved"];
+
+/** The scenes whose action proves a product operation or a readout: a missing handle observation there holds. */
+function productProofScenes(board) {
+  const scenes = new Set((board?.scenes ?? []).filter((scene) => scene.mechanismCoverage?.length).map((scene) => scene.sceneIndex));
+  for (const overlay of board?.overlays ?? []) {
+    const phaseId = overlay.proof?.actionPhaseId;
+    const scene = phaseId ? board.scenes?.find((entry) => entry.actionPhases?.some((phase) => phase.id === phaseId)) : null;
+    if (scene) scenes.add(scene.sceneIndex);
+  }
+  return scenes;
+}
+
+/**
+ * A template text finish keeps footage whose generic action handle has no
+ * measured picture event and says so in a note instead of holding the cut. A
+ * measured short action, and a handle on a product-operation or readout scene,
+ * still refuse. Without a text stage, only director-derived generic handles can become notes.
+ */
+function noteUnprovenHandles(map, notes, proofScenes, eligible = null) {
+  map.findings = map.findings.filter((f) => {
+    if (!UNPROVEN_HANDLES.includes(f.code) || proofScenes.has(f.scene) || (eligible && !eligible(f))) return true;
+    notes.push(`${f.code}: scene ${f.scene}: ${f.detail}`);
+    return false;
+  });
+}
+
 /** Throws SourceMapRefusal for the map's refusals; its "declared" findings are carried out and recorded. */
 function refuseUnholdable(map, deferredScenes = new Set()) {
   const refused = map.findings.filter((f) => f.severity === "refuse" &&
-    !(deferredScenes.has(f.scene) && ["action-lead-unproven", "action-tail-unproven"].includes(f.code)));
+    !(deferredScenes.has(f.scene) && UNPROVEN_HANDLES.includes(f.code)));
   if (refused.length === 0) return;
   const lines = refused.map((f) => `  ${f.scene === null ? "cut" : `scene ${f.scene}`}: ${f.code}: ${f.detail}`);
   throw new SourceMapRefusal(
@@ -7503,6 +7891,21 @@ function retainedLineAudio(timeline, board, line, scriptLines) {
   return { route, windowRetained: windowRetained && unmeasured ? null : windowRetained, wordsRetained };
 }
 
+/** ASR-only spelling equivalence, never canonical/TTS proof. Keep original
+ * words visible: a phonetic brand match is not a pronunciation certification. */
+function equivalentAsrWording(text, retainedWords) {
+  const normalize = (words) => {
+    const side = spokenTokens(words);
+    return { ...side, tokens: side.tokens.map((token) => soundKey(token).replace(/([b-df-hj-np-tv-z])\1+/g, "$1")) };
+  };
+  const scripted = normalize(scriptWords(text));
+  const retained = normalize(retainedWords);
+  const heard = joinSplitWords(retained, scripted.tokens);
+  const expected = joinSplitWords(scripted, heard.tokens);
+  return expected.tokens.length === heard.tokens.length &&
+    expected.tokens.every((token, i) => token === heard.tokens[i]);
+}
+
 /** Approved-line proof shared by every template finish, captions on or off.
  * Aligned (TTS) words prove a line token for token through the words its own
  * owner kept on the final audible route: an unowned, omitted, extra, borrowed
@@ -7548,6 +7951,10 @@ function spokenLineFulfillment(timeline, board, template = false) {
         ? `no heard word measures its ${source} audio window on the retained take, so the window is unknown, not shown removed`
         : `the edit retains its complete measured ${source} audio window`}; ` +
         `ASR heard "${kept.map((w) => w.text).join(" ")}" for approved "${line.text}"; clip QC owns speech quality`);
+      if (kept.length && !equivalentAsrWording(line.text, kept.map((word) => word.text))) {
+        const scenes = (board.scenes ?? []).filter((scene) => scene.lineIds?.includes(line.lineId)).map((scene) => scene.sceneIndex);
+        notes.push(`source-wording-unresolved: ${line.lineId}: ${scenes.length ? `scene ${scenes.join(", ")}: ` : ""}source words may be missing or different; kept available ${source} audio for review, not a clean approved-word pass`);
+      }
     }
   }
   return { words, lines, holds, notes };
@@ -7784,6 +8191,16 @@ export async function completeFirstCutText(cut, { out, prepareReadoutVerifier, o
   const material = textMaterial(cut, board, policy);
   const template = cut.manifest?.templateMotion?.enabled === true;
   const finishNotes = [];
+  // A template's generic action handle with no exact-source observation keeps
+  // its footage and is a note, not a hold. Product-operation and readout
+  // scenes, and every observed failure, still hold.
+  const proofScenes = template ? productProofScenes(board) : new Set();
+  const blockingHolds = (holds) => holds.filter((hold) => {
+    if (!template || !UNOBSERVED_HANDLES.includes(hold.code) ||
+      [...proofScenes].some((sceneIndex) => hold.id === `scene:${sceneIndex}`)) return true;
+    finishNotes.push(`${hold.code}: ${hold.id}: ${hold.reason}`);
+    return false;
+  });
   let fulfillment = finishFulfillment(cut, board, policy);
   const needsRaster = material.captions.on || material.items.some((item) => !["physical-readout", "authentic-lettering"].includes(item.provenance)) ||
     material.selection.endCard || material.selection.offer;
@@ -7811,7 +8228,8 @@ export async function completeFirstCutText(cut, { out, prepareReadoutVerifier, o
     ...(material.selection.offer ? [{ ...material.selection.offer, id: "offer" }] : []),
   ];
   const observedItems = selectedItems.filter((item) => ["physical-readout", "authentic-lettering"].includes(item.provenance));
-  const verifyObservation = !fulfillment.holds.length && observedItems.length && prepareReadoutVerifier
+  const heldFulfillment = blockingHolds(fulfillment.holds);
+  const verifyObservation = !heldFulfillment.length && observedItems.length && prepareReadoutVerifier
     ? await prepareReadoutVerifier({
         source, sourceBytes, items: observedItems,
         heardWords: material.words.map((w) => ({ word: w.text, start: w.start, end: w.end, cueLineId: w.lineId ?? undefined })),
@@ -7819,7 +8237,7 @@ export async function completeFirstCutText(cut, { out, prepareReadoutVerifier, o
     : undefined;
   let text = planText({
     ...material, libass: renderer.libass, measureText: renderer.measureText,
-    source, verifyObservation, inheritedHolds: [...fulfillment.holds, ...material.pictureHolds],
+    source, verifyObservation, inheritedHolds: [...heldFulfillment, ...material.pictureHolds],
   });
   if (template && text.holds.length) {
     // Reflow local post-owned presentation without altering literal content,
@@ -7844,7 +8262,7 @@ export async function completeFirstCutText(cut, { out, prepareReadoutVerifier, o
           ...(material.selection.offer ? { offer: repair(material.selection.offer) } : {}) },
         captions: material.captions,
         libass: renderer.libass, measureText: renderer.measureText, source, verifyObservation,
-        inheritedHolds: [...fulfillment.holds, ...material.pictureHolds],
+        inheritedHolds: [...heldFulfillment, ...material.pictureHolds],
       });
       finishNotes.push(...text.holds.filter((hold) => layoutCodes.includes(hold.code)).map((hold) => `${hold.code}: ${hold.reason}; local text reflow attempted`));
       text = repaired;
@@ -7938,6 +8356,7 @@ export async function completeFirstCutText(cut, { out, prepareReadoutVerifier, o
     }
     if (planningTiming) planningTiming.finalSha256 = cut.sourceMap.final?.sha256 ?? null;
     const mapSidecar = sourceMapPath(destination);
+    if (template) noteUnprovenHandles(cut.sourceMap, finishNotes, proofScenes);
     refuseUnholdable(cut.sourceMap);
     writeFileSync(mapSidecar, `${JSON.stringify(cut.sourceMap, null, 2)}\n`);
   }
@@ -8186,6 +8605,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ? paceSpeed
     : finish?.cutPace && !template && !timeline.wholeVoice && !protectedMotion ? speedFor(pictureSec, finish.targetSeconds) : 1;
   if (finish?.cutPace && (template || protectedMotion)) notes.push("template/action/listening/ending clocks remain real time; cutPace does not accelerate the cut");
+  // A template's text stage decides every action handle (an unobserved generic
+  // one becomes a note there); other runs defer only planned action phases.
+  const deferredHandles = prepareText ? new Set((storyboard?.scenes ?? []).filter((s) => template || s.actionPhases?.length).map((s) => s.sceneIndex)) : new Set();
   // addedCuts (COP-355): the framing changes made, on the delivered film's clock, for the worker's last guard.
   const framingChangesSec = finish?.addedCuts ? framingChangeTimes(timeline.spine, speed, timeline.cutaways) : null;
   // COP-373 review: the cuts added alone, apart from the pause cuts that change the framing with the row on.
@@ -8220,7 +8642,20 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         detail: `the kind's cutPace would speed the whole cut ${speed}x`,
       });
     }
-    refuseUnholdable(timeline.sourceMap, prepareText ? new Set((storyboard?.scenes ?? []).filter((s) => s.actionPhases?.length).map((s) => s.sceneIndex)) : new Set());
+    if (template && !prepareText) {
+      // Director-derived breathing room retains footage without certifying an
+      // observed action. Explicit handles and authored proof phases stay strict.
+      noteUnprovenHandles(timeline.sourceMap, notes, productProofScenes(storyboard), (finding) => {
+        const scene = storyboard?.scenes?.find((entry) => entry.sceneIndex === finding.scene);
+        const lead = finding.code === "action-lead-unproven";
+        if (!scene || scene.actionPhases?.length || scene[lead ? "actionLeadSec" : "actionTailSec"] > 0) return false;
+        const lineId = lead ? scene.lineIds?.[0] : scene.lineIds?.at(-1);
+        return lineId && scene.directorBeats?.some(({ timing }) => timing?.minActionSec > 0 && (lead
+          ? timing.start?.boundary === "scene-start" && timing.end?.lineId === lineId && timing.end.edge === "start"
+          : timing.start?.lineId === lineId && timing.start.edge === "end" && timing.end?.boundary === "scene-end"));
+      });
+    }
+    refuseUnholdable(timeline.sourceMap, deferredHandles);
   }
   // A mapped cut is laid sample-exact on its measured map, so these finishes, which retime or refilter it, stay off.
   if (timeline.mapped) {
@@ -8392,7 +8827,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (sound) {
     const missing = [...sound.effects, ...sound.beds].filter((x) => !exists(x.file)).map((x) => x.file);
     const plan = soundPlan(
-      { ...sound, effects: sound.effects.filter((x) => exists(x.file)), beds: sound.beds.filter((x) => exists(x.file)) },
+      { ...sound, effects: sound.effects.filter((x) => exists(x.file)), beds: sound.beds },
       timeline, storyboard, { levelled: !finish?.finishLoudness, measure, template },
     );
     const ducked = sound.duck && music ? { gainDb: duckedMusicGain(plan.voiceLufs, measure(music)), duck: DUCK } : null;
@@ -8627,7 +9062,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       effects: mixSound?.effects ?? [], beds: mixSound?.beds ?? [],
       ...(timeline.musicSource ? { music: timeline.musicSource } : {}),
     };
-    refuseUnholdable(timeline.sourceMap, prepareText ? new Set((storyboard?.scenes ?? []).filter((s) => s.actionPhases?.length).map((s) => s.sceneIndex)) : new Set());
+    refuseUnholdable(timeline.sourceMap, deferredHandles);
     writeFileSync(sidecars.sourceMap, `${JSON.stringify(timeline.sourceMap, null, 2)}\n`);
   }
 
@@ -8682,6 +9117,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       notes: [...notes, ...(soundRecord?.notes ?? [])],
       ...(timing ? { planningTiming: timing.planningTiming } : {}),
       ...(evidence ? { finishEvidence: evidence } : {}),
+      ...(manifest.templateMotion?.enabled === true ? { durationReadback: sceneDurationReadback(timeline, storyboard, speed) } : {}),
       ...(manifest.templateMotion?.enabled === true ? { motion: templateMotionReport(timeline, storyboard, speed) } : {}),
       ...(stagedText ? { textStage: { dir: path.resolve(dir), board: storyboard, speed, policy: { ...manifest.textFinish, ...(manifest.templateMotion?.enabled === true ? { captionsByLine: manifest.textFinish?.captionsByLine ?? finish?.captionsByLine === true } : {}), outputPermission: manifest.outputPermission, planningBudget: manifest.planningBudget } } } : {}),
     };
@@ -8790,6 +9226,12 @@ function main() {
   const here = (file) => path.join(opts.dir, file);
 
   console.log(`Wrote ${out} (${durationSec.toFixed(1)}s, ${WIDTH}x${HEIGHT})`);
+  if (cut.durationReadback) {
+    console.log(`Duration: board ${cut.durationReadback.plannedSec.toFixed(3)}s, kept ${cut.durationReadback.keptSec.toFixed(3)}s (retention is not action proof)`);
+    for (const scene of cut.durationReadback.scenes) console.log(
+      `  scene ${scene.sceneIndex}: planned ${scene.plannedSec ?? "unknown"}s, kept ${scene.keptSec}s` +
+      (scene.actionMinimumSec > 0 ? `, action minimum ${scene.actionMinimumSec}s, shortfall ${scene.actionShortfallSec}s (${scene.clock}${scene.clock === "whole-voice" ? " clock unchanged" : " bound"})` : ""));
+  }
   console.log("In the cut:");
   for (const line of inTheCut(timeline)) console.log("  " + line);
   if (timeline.left.length > 0) {

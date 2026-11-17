@@ -48,6 +48,8 @@ import {
   onOwnDashboard,
 } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
+import { runTemplateCommand } from "./video-template.js";
+import { runTemplateReviewCommand } from "./video-template-review.js";
 
 const VOICE_MODES = ["native", "voice-first"] as const;
 type VoiceMode = (typeof VOICE_MODES)[number];
@@ -289,6 +291,36 @@ Usage:
   exodus video swipe sheet price <swipeId> [--json]
   exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
   exodus video swipe sheet voices <swipeId> [--json]
+
+Door 2 template sheets (not the separate top-level exodus template pipeline):
+  exodus video template list [--json]
+  exodus video template sheet list [--json]
+  exodus video template sheet create <templateId> [--draft-id UUID] [--json]
+  exodus video template sheet get <sheetId> [--json]
+  exodus video template sheet set <sheetId> row=value ... [--revision N] [--values file.json] [--json]
+  exodus video template sheet clear <sheetId> <row>... [--revision N] [--json]
+  exodus video template price <sheetId> [--phase script|production] [--operation write|rewrite|reapprove] [--json]
+  exodus video template script <sheetId> --operation write|rewrite|reapprove [--yes --max-usd N] [--json]
+  exodus video template start <sheetId> [--yes --max-usd N --attempt-id UUID --request-id UUID] [--wait] [--json]
+  exodus video template review <runId> [--json]
+  exodus video template select-person <runId> <personId> [--json]
+  exodus video template approve <runId> --checkpoint ID [--json]
+  exodus video template approve-song <runId> --checkpoint ID --master-sha SHA --lyric-sha SHA --track N --storage-id ID [--json]
+  exodus video template redo-picture <runId> <pictureId> [--note text] [--yes --max-usd N] [--json]
+  Script/start/redo without --yes only read the sheet/review and pure price.
+  --dry-run overrides --yes: no prepare, script, start or provider calls.
+  Sheet create/set/clear --dry-run previews locally without saving.
+  String lists use commas; pronunciations use word=say,word=say. Structured
+  people, voice and location arrays use inline JSON or --values file.json
+  (an object keyed by row ID). place.location accepts at most one saved location;
+  finish.cards is true or false, not a string list.
+  Revision conflicts are never retried. A lost response requires readback.
+  --attempt-id identifies a video: reuse it to recover, use a new UUID for a new video.
+  --request-id is a separate transport identity, retained through prepare and start.
+  --max-usd is the exact accepted cap for script/start, never above the prepared quote.
+  A smaller cap may hold before completion and is never topped up. Read sheet get for
+  acceptedCap (null means not accepted), reservedUsd (already includes settled actual),
+  settledActualUsd and unresolvedCount; never add settledActualUsd to reservedUsd.
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull), the
@@ -755,6 +787,30 @@ export interface ClipWord {
   lineId?: string;
 }
 
+/** An already-paid alternate take kept on the scene's clip artifact. MIRROR of
+ *  the server's availableTakes entry; exodus compiles standalone. */
+export interface StoredTake {
+  storageId: string;
+  videoUrl?: string;
+  durationSec?: number;
+  words?: ClipWord[];
+  wordsStatus: "available" | "unavailable";
+  wordsDescribe: "this-file" | "original-performance";
+  approved: boolean;
+}
+
+/** A stored take as the pulled folder holds it: local files, never URLs. A
+ *  take whose clip or words did not land has them null, so no cut picks it. */
+export interface ManifestTake {
+  clip: string | null;
+  words: string | null;
+  wordsFrom: "clip" | null;
+  wordsDescribe: "this-file" | "original-performance" | null;
+  approved: boolean;
+  durationSec: number | null;
+  wordsStatus: "available" | "unavailable";
+}
+
 /** #1716: what happened about neighbours on ONE take. MIRROR of
  *  QcTakeNeighbours in convex/lib/workflow/qcTakes.ts — exodus compiles
  *  standalone (tsconfig rootDir ".") and cannot import the canonical type. */
@@ -939,6 +995,8 @@ export type ArtifactSubset =
       /** Kind setting voiceLock: whether each speaker's turn was re-voiced into their pinned voice
        *  (video/lib/voiceLock.ts VoiceLockRecord). Absent unless the kind turns voiceLock on. */
       voiceLock?: unknown;
+      /** Already-paid alternate takes of this scene the run kept on file. Absent on older runs. */
+      availableTakes?: StoredTake[];
     }
   | {
       type: "audio";
@@ -2413,6 +2471,8 @@ export interface ManifestScene {
   voicePitchMethod: string | null;
   /** Kind setting voiceLock: the clip's lock record, which the worker's cut checks. Absent when the clip has none. */
   voiceLock?: unknown;
+  /** Already-paid alternate takes pulled beside the clip. Absent when the run stored none. */
+  availableTakes?: ManifestTake[];
   /** The clip ledger row's status (pending/running/done/failed), or "missing"
    *  when the run never wrote one. */
   clipStatus: string;
@@ -2626,6 +2686,7 @@ type SceneClipPull = {
   voicePitchMethod: string | null;
   replannedIdea: ReplannedIdea | null;
   voiceLock?: unknown;
+  availableTakes?: StoredTake[];
 };
 
 function clipFromArtifact(
@@ -2652,7 +2713,42 @@ function clipFromArtifact(
     voicePitchMethod: artifact.voicePitchMethod ?? null,
     replannedIdea: artifact.replannedIdea ?? null,
     ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
+    ...(artifact.availableTakes ? { availableTakes: artifact.availableTakes } : {}),
   };
+}
+
+/** The scene's stored alternate takes as local files: scene-NN-take-M.ext plus
+ *  its own words file, M being the take's place in the stored list. A take with
+ *  no fetchable file is left out. Pushes what to fetch and write. */
+function pullStoredTakes(
+  sceneIndex: number,
+  takes: StoredTake[],
+  downloads: PullDownload[],
+  texts: PullTextFile[],
+): ManifestTake[] {
+  const pulled: ManifestTake[] = [];
+  takes.forEach((take, i) => {
+    if (!take.videoUrl) return;
+    const stem = `${scenePrefix(sceneIndex)}-take-${i + 1}`;
+    const clip = `${stem}.${extFor(take.videoUrl, "video")}`;
+    downloads.push({ file: clip, url: take.videoUrl });
+    const heard = take.wordsStatus === "available" && take.words && take.words.length > 0;
+    let words: string | null = null;
+    if (heard) {
+      words = `${stem}.words.json`;
+      texts.push({ file: words, body: `${JSON.stringify(take.words, null, 2)}\n` });
+    }
+    pulled.push({
+      clip,
+      words,
+      wordsFrom: words ? "clip" : null,
+      wordsDescribe: words ? take.wordsDescribe : null,
+      approved: take.approved,
+      durationSec: take.durationSec ?? null,
+      wordsStatus: words ? "available" : "unavailable",
+    });
+  });
+  return pulled;
 }
 
 function keyframeDownload(sceneIndex: number, imageUrl: string): PullDownload {
@@ -3071,11 +3167,14 @@ export function planPull(
   ]
     .filter((sceneIndex) => isPullSceneIndex(sceneIndex))
     .sort((a, b) => a - b);
+  const takeDownloads: PullDownload[] = [];
 
   const scenes: ManifestScene[] = sceneIndexes.map((sceneIndex) => {
     const clip = clipByScene.get(sceneIndex);
     const voice = voiceByScene.get(sceneIndex);
     const item = clipItemByScene.get(sceneIndex);
+    const availableTakes = clip?.availableTakes
+      ? pullStoredTakes(sceneIndex, clip.availableTakes, takeDownloads, texts) : undefined;
     const frameItem = frameItemByScene.get(sceneIndex);
     const reservation = run.videoChoice?.videoModel === "template-video" &&
       run.videoChoice.voiceMode === "voice-first" && !run.songAsVoice && !run.heldSong
@@ -3127,6 +3226,7 @@ export function planPull(
       voicePitchHz: clip ? clip.voicePitchHz : null,
       voicePitchMethod: clip ? clip.voicePitchMethod : null,
       ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
+      ...(availableTakes ? { availableTakes } : {}),
       clipStatus: item?.status ?? "missing",
       error: item?.error ?? null,
       flagged: item?.flagged === true,
@@ -3157,6 +3257,7 @@ export function planPull(
     ...[...voiceByScene.values()].map((v) => v.download),
     ...(narrationDownload ? [narrationDownload] : []),
     ...[...clipByScene.values()].map((c) => c.download),
+    ...takeDownloads,
     ...(music ? [music] : []),
     ...castDownloads,
     ...(finished ? [finished] : []),
@@ -3300,6 +3401,18 @@ export function markPullFailure(manifest: VideoManifest, failure: PullFailure): 
       scene.words = null;
       scene.wordsFrom = null;
       scene.wordsDescribe = null;
+    }
+    // A stored take's words describe its own file: they leave with it, and a
+    // take whose clip or words never landed can no longer stand in for the scene.
+    for (const take of scene.availableTakes ?? []) {
+      const lostClip = take.clip === failure.file;
+      if (lostClip) take.clip = null;
+      if (lostClip || take.words === failure.file) {
+        take.words = null;
+        take.wordsFrom = null;
+        take.wordsDescribe = null;
+        take.wordsStatus = "unavailable";
+      }
     }
   }
 }
@@ -9473,6 +9586,13 @@ export async function run(
   if (!sub) {
     console.log(helpText);
     return;
+  }
+
+  if (sub === "template") {
+    const args = process.argv.slice(4);
+    return ["review", "select-person", "approve", "approve-song", "redo-picture"].includes(args[0])
+      ? runTemplateReviewCommand(args)
+      : runTemplateCommand(args);
   }
 
   if (sub === "shows") return printResult(await showsFlow(json, defaultDeps));

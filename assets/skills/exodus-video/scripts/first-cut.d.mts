@@ -26,9 +26,9 @@ export interface FinalPlanningTiming {
   basis: "decoded-final-picture-clock";
   /** Actual final file bytes; null can never support a known exported timing proof. */
   finalSha256: string | null;
-  planned: { targetSeconds: number; overrun: { name: string; seconds: number }; ceilingSeconds: number };
+  planned: { targetSeconds: number; overrun: { name: string; seconds: number }; ceilingSeconds: number | null; scriptClock?: PlanningBudget["scriptClock"] };
   decoded: { frames: number; fps: 24; seconds: number } | null;
-  status: "within-budget" | "over-budget" | "unknown";
+  status: "within-budget" | "over-budget" | "script-derived" | "unknown";
 }
 export interface FinishFulfillment {
   ok: boolean;

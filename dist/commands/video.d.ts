@@ -41,6 +41,24 @@ export interface ClipWord {
     e: number;
     lineId?: string;
 }
+export interface StoredTake {
+    storageId: string;
+    videoUrl?: string;
+    durationSec?: number;
+    words?: ClipWord[];
+    wordsStatus: "available" | "unavailable";
+    wordsDescribe: "this-file" | "original-performance";
+    approved: boolean;
+}
+export interface ManifestTake {
+    clip: string | null;
+    words: string | null;
+    wordsFrom: "clip" | null;
+    wordsDescribe: "this-file" | "original-performance" | null;
+    approved: boolean;
+    durationSec: number | null;
+    wordsStatus: "available" | "unavailable";
+}
 export type ClipQcTakeNeighbours = {
     state: "not-applicable";
 } | {
@@ -123,6 +141,7 @@ export type ArtifactSubset = {
     voicePitchMethod?: string;
     replannedIdea?: ReplannedIdea;
     voiceLock?: unknown;
+    availableTakes?: StoredTake[];
 } | {
     type: "audio";
     sceneIndex?: number;
@@ -462,6 +481,7 @@ export interface ManifestScene {
     voicePitchHz: number | null;
     voicePitchMethod: string | null;
     voiceLock?: unknown;
+    availableTakes?: ManifestTake[];
     clipStatus: string;
     error: string | null;
     flagged: boolean;

@@ -124,11 +124,28 @@ export const AUTHORED_REACTION_TAIL_SEC = 1.0;
 
 const PRE_LINE_ACTION = /\b(?:cross(?:es)?|grabs?|sits?|taps?|installs?|leans?\s+in|hid(?:e|es|ing))\b|\bsets?\b(?:\s+\S+){0,6}\s+down\b|\btak(?:e|es|ing)\b(?:\s+\S+){0,6}\s+out\b/i;
 const POST_LINE_REACTION = /\b(?:laugh(?:s|ing)?|nods?|smiles?|smiling|grins?|sighs?)\b/i;
-const TIMED_BEAT = /(?:about\s+)?(\d+(?:\.\d+)?)\s*-?\s*(?:s|sec|secs|second|seconds)\b[^.;]{0,60}\b(?:silent\s+)?(?:beat|pause)\b|\b(?:silent\s+)?(?:beat|pause)\b[^.;]{0,60}(?:about\s+)?(\d+(?:\.\d+)?)\s*-?\s*(?:s|sec|secs|second|seconds)\b/i;
+/** Number and unit shared by beat parsing and mixed-clause duration safety checks. */
+export const AUTHORED_DURATION_PATTERN = /(\d+(?:\.\d+)?)\s*-?\s*(?:s|sec|secs|second|seconds)\b/giu;
+const TIMED_BEAT = new RegExp(`(?:about\\s+)?${AUTHORED_DURATION_PATTERN.source}[^.;]{0,60}\\b(?:silent\\s+)?(?:beat|pause)\\b|\\b(?:silent\\s+)?(?:beat|pause)\\b[^.;]{0,60}(?:about\\s+)?${AUTHORED_DURATION_PATTERN.source}`, "i");
 
 function directionText(value) {
   if (Array.isArray(value)) return value.map(directionText).filter(Boolean).join(" ");
   return typeof value === "string" ? value : "";
+}
+
+/** Shared prose boundaries, retaining decimals, ellipses, abbreviations and punctuation. */
+export function splitAuthoredClauses(direction) {
+  const clauses = [];
+  let pending = "";
+  for (const fragment of directionText(direction).split(/(?<=;)|(?<=(?<!\d)\.)(?![\d.])/u)) {
+    pending += fragment;
+    if (!/\w/u.test(fragment) || /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Rev|Hon|Capt|Lt|Col|Gen|etc)\.\s*$/iu.test(pending)) continue;
+    clauses.push(pending.trim());
+    pending = "";
+  }
+  if (/\w/u.test(pending)) clauses.push(pending.trim());
+  else if (pending.trim() && clauses.length) clauses[clauses.length - 1] += pending.trimEnd();
+  return clauses;
 }
 
 /**
@@ -140,8 +157,7 @@ export function parseAuthoredBeat(direction) {
   const text = directionText(direction);
   let timedLeadSec = 0;
   let timedTailSec = 0;
-  // A period inside 1.25 is not a clause break.
-  for (const clause of text.split(/;|(?<!\d)\.(?!\d)/)) {
+  for (const clause of splitAuthoredClauses(text)) {
     const match = clause.match(TIMED_BEAT);
     const seconds = Number(match?.[1] ?? match?.[2]);
     if (!(seconds > 0)) continue;

@@ -1697,6 +1697,62 @@ exodus video director <runId> on|off|follow               the trial director for
                                                           what it is doing and its last three notes
 ```
 
+**Door 2: the saved template sheet.** `video template` reads and edits the same
+server-saved draft as the dashboard's template door. It is separate from
+`video swipe` and from the top-level `exodus template` creative-suite command.
+List the templates, create or recover a sheet, fill its rows, then read the price.
+All lines below accept `--json`; reads and saved-row changes cost nothing.
+
+```operator-guide
+exodus video template list                                the templates this account can use
+exodus video template sheet list                          this member's saved drafts in the active brand
+exodus video template sheet create <templateId> [--draft-id <UUID>] [--dry-run]
+                                                          make a draft; the same draft id recovers the same sheet
+exodus video template sheet get <sheetId>                  rows, values, sources, reasons, options and revision
+exodus video template sheet set <sheetId> <row>=<value> ... [--values <file.json>] [--revision <n>] [--dry-run]
+                                                          save rows together; --values is a JSON object keyed by row id
+exodus video template sheet clear <sheetId> <row> ... [--revision <n>] [--dry-run]
+                                                          remove explicit picks and resolve their defaults again
+exodus video template price <sheetId> [--phase <script|production>] [--operation <write|rewrite|reapprove>]
+                                                          free price for these saved rows; production is the default;
+                                                          the script phase needs its operation
+exodus video template script <sheetId> --operation <write|rewrite|reapprove> [--yes --max-usd <n>] [--dry-run]
+                                                          quote first; only --yes with a cap authorizes the operation
+exodus video template start <sheetId> [--yes --max-usd <n>] [--attempt-id <UUID>] [--request-id <UUID>] [--wait] [--dry-run]
+                                                          quote first; start freezes the choices for this video;
+                                                          later sheet edits apply to the next video
+exodus video template review <runId>                       current checkpoint, cast, board, media and exports
+exodus video template select-person <runId> <personId> [--dry-run]
+                                                          pick a person at the current held checkpoint
+exodus video template approve <runId> --checkpoint <ID> [--dry-run]
+                                                          approve the exact checkpoint returned by review
+exodus video template redo-picture <runId> <pictureId> [--note "<text>"] [--yes --max-usd <n>] [--dry-run]
+                                                          read the current held picture's redo price before buying it
+```
+
+Use row ids and options from `sheet get`. Numbers stay numbers (UGC `hook=4`
+sets action strength, not the number of hook drafts); arrays and objects can be
+passed as JSON in `--values`, including pronunciation maps and song controls.
+Set and clear read the current revision when `--revision` is omitted. A revision
+conflict is a hold, not permission to overwrite someone else's newer choice.
+
+Without `--yes`, script, start and redo-picture only read the current sheet or
+review and its price, then print the proposed operation and next command.
+`--dry-run` wins even alongside `--yes`: no preparation, paid action, run or
+provider request is made. For create, set and clear it is a local preview only,
+not a save or full server validation. For select-person and approve it previews
+the decision without submitting it.
+
+Show the member the phase, estimate, maximum, exclusions and holds before asking
+for a yes. An unknown estimate is not free; an unpriced or held operation cannot
+start. After their yes, use `--yes --max-usd <n>` on script, start or redo-picture.
+`--max-usd` is the exact cap the member accepts, at most the quote's maximum: a
+cap above the maximum is refused and nothing starts. A cap below the maximum is
+accepted, but the run may stop before the script or storyboard is finished, and
+it is never topped up; say so to the member before they pick a lower cap.
+If a write response is lost, read the sheet or review back before submitting
+anything again. Keep the returned dashboard link and give it to the member.
+
 **Starting from a template.** The Golden Six start here; "From one sentence to
 a film" walks them. Each paid template phase, the script and then the
 storyboard, is quoted first: run the line with `--quote-preparation --json`,

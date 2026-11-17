@@ -14,6 +14,8 @@ import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGE
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
+import { runTemplateCommand } from "./video-template.js";
+import { runTemplateReviewCommand } from "./video-template-review.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
     if (items.length <= 1)
@@ -234,6 +236,36 @@ Usage:
   exodus video swipe sheet price <swipeId> [--json]
   exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
   exodus video swipe sheet voices <swipeId> [--json]
+
+Door 2 template sheets (not the separate top-level exodus template pipeline):
+  exodus video template list [--json]
+  exodus video template sheet list [--json]
+  exodus video template sheet create <templateId> [--draft-id UUID] [--json]
+  exodus video template sheet get <sheetId> [--json]
+  exodus video template sheet set <sheetId> row=value ... [--revision N] [--values file.json] [--json]
+  exodus video template sheet clear <sheetId> <row>... [--revision N] [--json]
+  exodus video template price <sheetId> [--phase script|production] [--operation write|rewrite|reapprove] [--json]
+  exodus video template script <sheetId> --operation write|rewrite|reapprove [--yes --max-usd N] [--json]
+  exodus video template start <sheetId> [--yes --max-usd N --attempt-id UUID --request-id UUID] [--wait] [--json]
+  exodus video template review <runId> [--json]
+  exodus video template select-person <runId> <personId> [--json]
+  exodus video template approve <runId> --checkpoint ID [--json]
+  exodus video template approve-song <runId> --checkpoint ID --master-sha SHA --lyric-sha SHA --track N --storage-id ID [--json]
+  exodus video template redo-picture <runId> <pictureId> [--note text] [--yes --max-usd N] [--json]
+  Script/start/redo without --yes only read the sheet/review and pure price.
+  --dry-run overrides --yes: no prepare, script, start or provider calls.
+  Sheet create/set/clear --dry-run previews locally without saving.
+  String lists use commas; pronunciations use word=say,word=say. Structured
+  people, voice and location arrays use inline JSON or --values file.json
+  (an object keyed by row ID). place.location accepts at most one saved location;
+  finish.cards is true or false, not a string list.
+  Revision conflicts are never retried. A lost response requires readback.
+  --attempt-id identifies a video: reuse it to recover, use a new UUID for a new video.
+  --request-id is a separate transport identity, retained through prepare and start.
+  --max-usd is the exact accepted cap for script/start, never above the prepared quote.
+  A smaller cap may hold before completion and is never topped up. Read sheet get for
+  acceptedCap (null means not accepted), reservedUsd (already includes settled actual),
+  settledActualUsd and unresolvedCount; never add settledActualUsd to reservedUsd.
 
 Options:
   --out <dir>          Folder to write the pulled pieces into (pull), the
@@ -1506,7 +1538,34 @@ function clipFromArtifact(sceneIndex, artifact) {
         voicePitchMethod: artifact.voicePitchMethod ?? null,
         replannedIdea: artifact.replannedIdea ?? null,
         ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
+        ...(artifact.availableTakes ? { availableTakes: artifact.availableTakes } : {}),
     };
+}
+function pullStoredTakes(sceneIndex, takes, downloads, texts) {
+    const pulled = [];
+    takes.forEach((take, i) => {
+        if (!take.videoUrl)
+            return;
+        const stem = `${scenePrefix(sceneIndex)}-take-${i + 1}`;
+        const clip = `${stem}.${extFor(take.videoUrl, "video")}`;
+        downloads.push({ file: clip, url: take.videoUrl });
+        const heard = take.wordsStatus === "available" && take.words && take.words.length > 0;
+        let words = null;
+        if (heard) {
+            words = `${stem}.words.json`;
+            texts.push({ file: words, body: `${JSON.stringify(take.words, null, 2)}\n` });
+        }
+        pulled.push({
+            clip,
+            words,
+            wordsFrom: words ? "clip" : null,
+            wordsDescribe: words ? take.wordsDescribe : null,
+            approved: take.approved,
+            durationSec: take.durationSec ?? null,
+            wordsStatus: words ? "available" : "unavailable",
+        });
+    });
+    return pulled;
 }
 function keyframeDownload(sceneIndex, imageUrl) {
     return {
@@ -1859,10 +1918,13 @@ export function planPull(run, items, opts) {
     ]
         .filter((sceneIndex) => isPullSceneIndex(sceneIndex))
         .sort((a, b) => a - b);
+    const takeDownloads = [];
     const scenes = sceneIndexes.map((sceneIndex) => {
         const clip = clipByScene.get(sceneIndex);
         const voice = voiceByScene.get(sceneIndex);
         const item = clipItemByScene.get(sceneIndex);
+        const availableTakes = clip?.availableTakes
+            ? pullStoredTakes(sceneIndex, clip.availableTakes, takeDownloads, texts) : undefined;
         const frameItem = frameItemByScene.get(sceneIndex);
         const reservation = run.videoChoice?.videoModel === "template-video" &&
             run.videoChoice.voiceMode === "voice-first" && !run.songAsVoice && !run.heldSong
@@ -1905,6 +1967,7 @@ export function planPull(run, items, opts) {
             voicePitchHz: clip ? clip.voicePitchHz : null,
             voicePitchMethod: clip ? clip.voicePitchMethod : null,
             ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
+            ...(availableTakes ? { availableTakes } : {}),
             clipStatus: item?.status ?? "missing",
             error: item?.error ?? null,
             flagged: item?.flagged === true,
@@ -1926,6 +1989,7 @@ export function planPull(run, items, opts) {
         ...[...voiceByScene.values()].map((v) => v.download),
         ...(narrationDownload ? [narrationDownload] : []),
         ...[...clipByScene.values()].map((c) => c.download),
+        ...takeDownloads,
         ...(music ? [music] : []),
         ...castDownloads,
         ...(finished ? [finished] : []),
@@ -2054,6 +2118,17 @@ export function markPullFailure(manifest, failure) {
             scene.words = null;
             scene.wordsFrom = null;
             scene.wordsDescribe = null;
+        }
+        for (const take of scene.availableTakes ?? []) {
+            const lostClip = take.clip === failure.file;
+            if (lostClip)
+                take.clip = null;
+            if (lostClip || take.words === failure.file) {
+                take.words = null;
+                take.wordsFrom = null;
+                take.wordsDescribe = null;
+                take.wordsStatus = "unavailable";
+            }
         }
     }
 }
@@ -6882,6 +6957,12 @@ export async function run(flags, occurrences) {
     if (!sub) {
         console.log(helpText);
         return;
+    }
+    if (sub === "template") {
+        const args = process.argv.slice(4);
+        return ["review", "select-person", "approve", "approve-song", "redo-picture"].includes(args[0])
+            ? runTemplateReviewCommand(args)
+            : runTemplateCommand(args);
     }
     if (sub === "shows")
         return printResult(await showsFlow(json, defaultDeps));

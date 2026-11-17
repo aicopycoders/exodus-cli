@@ -5511,7 +5511,7 @@ function clipIsStillRaw(item) {
         a.speechTrimmed !== true &&
         a.tailTrimmed !== true);
 }
-const VOICE_NOT_CHANGED_CODES = new Set(["voice-unpinned", "voice-not-applied"]);
+const VOICE_NOT_CHANGED_CODES = new Set(["voice-unpinned", "voice-not-applied", "voice-kept-for-words"]);
 export const VOICE_PATHS_NEVER_HEARD = new Set(["native-prompt", "omni-audio-ids", "gemini-direct"]);
 async function neverHeardRunLine(runId, deps) {
     const res = await deps
@@ -5607,7 +5607,23 @@ export async function revoiceFlow(runId, target, json, deps) {
     if (!runRes.ok)
         return errorResult(runRes, json);
     if (customerAnswer(runRes.data)) {
-        return adminOnlyResult("exodus video revoice is for admins.", json);
+        const customer = runRes.data;
+        const held = "all" in target
+            ? undefined
+            : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find((s) => s.sceneIndex === target.sceneIndex && s.voice === true);
+        if (!held)
+            return adminOnlyResult("exodus video revoice is for admins.", json);
+        const res = await deps.post(SCENE_REVOICE_PATH, { runId, sceneIndex: held.sceneIndex });
+        if (!res.ok)
+            return errorResult(res, json);
+        const line = `Scene ${held.sceneIndex}: changing its voice again. Nothing is filmed; ElevenLabs bills the voice change and its ` +
+            "listens to your own key.";
+        return {
+            code: 0,
+            lines: json
+                ? [JSON.stringify({ ok: true, runId, scenes: [{ sceneIndex: held.sceneIndex, ok: true }] })]
+                : [line, `Watch it land: exodus video status ${runId}`],
+        };
     }
     const run = asVideoRun(runRes.data);
     const itemsRes = await deps.get(`${ITEMS_PATH}?runId=${encodeURIComponent(runId)}`);

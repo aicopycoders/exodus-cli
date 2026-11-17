@@ -56,7 +56,7 @@ export function approveWaitingLines(run, page) {
         ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
         price ? `On the video's page, Try again costs ${price}: ${page}` : `The video's page: ${page}`,
         ...scenes
-            .filter((s) => !s.unfilmed)
+            .filter((s) => !s.unfilmed && !s.voiceLocked)
             .map((s) => `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
     ];
 }
@@ -74,7 +74,8 @@ function tryAgainPrice(run, sceneIndexes) {
 function heldSceneChoiceLines(run, scenes, page) {
     const takes = scenes.filter((s) => s.take);
     const unfilmed = scenes.filter((s) => s.unfilmed);
-    const faults = scenes.filter((s) => !s.take && !s.unfilmed);
+    const voices = scenes.filter((s) => s.voice && !s.take && !s.unfilmed);
+    const faults = scenes.filter((s) => !s.take && !s.unfilmed && !s.voice);
     const inParens = (price) => (price ? ` (${price})` : "");
     const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
     const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
@@ -86,6 +87,12 @@ function heldSceneChoiceLines(run, scenes, page) {
         ...takes.map((s) => takes.length === 1
             ? `Keep it as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`
             : `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+        ...voices.flatMap((s) => [
+            `Try scene ${s.sceneIndex}'s voice change again (nothing is filmed): exodus video revoice ${run.runId} --scene ${s.sceneIndex}`,
+            ...(s.voiceLocked
+                ? []
+                : [`Or keep scene ${s.sceneIndex} in the voice it was filmed in: exodus video keep ${run.runId} --scene ${s.sceneIndex}`]),
+        ]),
         ...(faults.length > 0
             ? [
                 `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again, or keep it as it is, on the video's page. Try again shows the price first${faultPrice}: ${page}`,

@@ -7655,7 +7655,8 @@ function clipIsStillRaw(item: NodeItem): boolean {
  * audio the render or a later step owns, where there is no voice change to redo
  * and a pass would bill a transcription to change nothing.
  */
-const VOICE_NOT_CHANGED_CODES = new Set(["voice-unpinned", "voice-not-applied"]);
+// #4755: "voice-kept-for-words" (video/lib/redubWords.ts REDUB_KEPT_VOICE_CODE): every voice change changed the words.
+const VOICE_NOT_CHANGED_CODES = new Set(["voice-unpinned", "voice-not-applied", "voice-kept-for-words"]);
 
 /**
  * #1888: the voice paths the server refuses a redo on, mirroring its
@@ -7804,7 +7805,26 @@ export async function revoiceFlow(
   const runRes = await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`);
   if (!runRes.ok) return errorResult(runRes, json);
   if (customerAnswer<CustomerRun>(runRes.data)) {
-    return adminOnlyResult("exodus video revoice is for admins.", json);
+    // #4755: a member may change the voice again on a scene held because its voice change kept changing its words;
+    // the server finds the scene's clip itself. Nothing is filmed.
+    const customer = runRes.data as CustomerRun;
+    const held = "all" in target
+      ? undefined
+      : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find(
+          (s) => s.sceneIndex === target.sceneIndex && s.voice === true,
+        );
+    if (!held) return adminOnlyResult("exodus video revoice is for admins.", json);
+    const res = await deps.post(SCENE_REVOICE_PATH, { runId, sceneIndex: held.sceneIndex });
+    if (!res.ok) return errorResult(res, json);
+    const line =
+      `Scene ${held.sceneIndex}: changing its voice again. Nothing is filmed; ElevenLabs bills the voice change and its ` +
+      "listens to your own key.";
+    return {
+      code: 0,
+      lines: json
+        ? [JSON.stringify({ ok: true, runId, scenes: [{ sceneIndex: held.sceneIndex, ok: true }] })]
+        : [line, `Watch it land: exodus video status ${runId}`],
+    };
   }
   const run = asVideoRun(runRes.data);
 

@@ -39,6 +39,8 @@ export type CustomerHeldScene = {
     sentence: string;
     take: boolean;
     unfilmed?: true;
+    voice?: true;
+    voiceLocked?: true;
 };
 export type CustomerStopReason = {
     kind: "out-of-credits";

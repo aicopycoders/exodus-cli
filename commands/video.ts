@@ -46,6 +46,7 @@ import {
   type ScriptTidied,
   spendAskLines,
   onOwnDashboard,
+  VOICE_RETRY_COST,
 } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
@@ -7921,17 +7922,27 @@ export async function revoiceFlow(
     // #4755: a member may change the voice again on a scene held because its voice change kept changing its words;
     // the server finds the scene's clip itself. Nothing is filmed.
     const customer = runRes.data as CustomerRun;
-    const held = "all" in target
+    const scene = "all" in target
       ? undefined
       : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find(
-          (s) => s.sceneIndex === target.sceneIndex && s.voice === true,
+          (s) => s.sceneIndex === target.sceneIndex && (s.voice === true || s.voiceToo === true),
         );
+    // #4955: a scene that also failed another check can't be finished by its voice change alone.
+    if (scene?.voiceToo) {
+      return adminOnlyResult(
+        `Scene ${scene.sceneIndex} also failed another check, so changing its voice again wouldn't finish it. Try ` +
+          "again on the video's page films a new take and changes its voice too, and shows the price first: " +
+          customerRunPage(deps.dashboardUrl, runId),
+        json,
+      );
+    }
+    const held = scene;
     if (!held) return adminOnlyResult("exodus video revoice is for admins.", json);
     const res = await deps.post(SCENE_REVOICE_PATH, { runId, sceneIndex: held.sceneIndex });
     if (!res.ok) return errorResult(res, json);
     const line =
-      `Scene ${held.sceneIndex}: changing its voice again. Nothing is filmed; ElevenLabs bills the voice change and its ` +
-      "listens to your own key.";
+      `Scene ${held.sceneIndex}: changing its voice again. Nothing is filmed; ${VOICE_RETRY_COST} (ElevenLabs bills ` +
+      "the voice change and its listens to your own key).";
     return {
       code: 0,
       lines: json

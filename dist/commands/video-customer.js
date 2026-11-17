@@ -51,7 +51,7 @@ export function approveWaitingLines(run, page) {
     const scenes = run.cutHeldScenes?.length ? run.cutHeldScenes : run.waitingScenes;
     if (!scenes?.length)
         return [];
-    const price = tryAgainPrice(run, scenes.filter((s) => !s.take).map((s) => s.sceneIndex));
+    const price = tryAgainPrice(run, scenes.filter((s) => !s.take && !s.voice).map((s) => s.sceneIndex));
     return [
         ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
         price ? `On the video's page, Try again costs ${price}: ${page}` : `The video's page: ${page}`,
@@ -76,6 +76,7 @@ function heldSceneChoiceLines(run, scenes, page) {
     const unfilmed = scenes.filter((s) => s.unfilmed);
     const voices = scenes.filter((s) => s.voice && !s.take && !s.unfilmed);
     const faults = scenes.filter((s) => !s.take && !s.unfilmed && !s.voice);
+    const keepable = faults.filter((s) => !s.voiceLocked);
     const inParens = (price) => (price ? ` (${price})` : "");
     const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
     const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
@@ -88,15 +89,15 @@ function heldSceneChoiceLines(run, scenes, page) {
             ? `Keep it as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`
             : `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
         ...voices.flatMap((s) => [
-            `Try scene ${s.sceneIndex}'s voice change again (nothing is filmed): exodus video revoice ${run.runId} --scene ${s.sceneIndex}`,
+            `Try scene ${s.sceneIndex}'s voice change again (nothing is filmed; ${VOICE_RETRY_COST}): exodus video revoice ${run.runId} --scene ${s.sceneIndex}`,
             ...(s.voiceLocked
                 ? []
                 : [`Or keep scene ${s.sceneIndex} in the voice it was filmed in: exodus video keep ${run.runId} --scene ${s.sceneIndex}`]),
         ]),
         ...(faults.length > 0
             ? [
-                `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again, or keep it as it is, on the video's page. Try again shows the price first${faultPrice}: ${page}`,
-                ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+                `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again${keepable.length > 0 ? ", or keep it as it is," : ""} on the video's page. Try again shows the price first${faultPrice}: ${page}`,
+                ...keepable.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
             ]
             : []),
         ...(takes.length > 0 && faults.length === 0 && unfilmed.length === 0
@@ -142,6 +143,18 @@ export function customerStageIsWorking(stage) {
         stage === "drawing" ||
         stage === "filming" ||
         stage === "editing");
+}
+export const VOICE_RETRY_COST = "it costs only cents";
+function filmingSentence(run) {
+    const scenes = run.scenes ?? [];
+    const voice = scenes.filter((s) => s.clip?.voiceRetrying).map((s) => s.sceneIndex);
+    if (voice.length === 0)
+        return WORKING_SENTENCE.filming;
+    const names = voice.length === 1 ? `scene ${voice[0]}'s voice` : `the voices of scenes ${voice.slice(0, -1).join(", ")} and ${voice.at(-1)}`;
+    const filming = scenes.some((s) => (s.clip?.status === "generating" || s.clip?.status === "queued") && !s.clip.voiceRetrying);
+    return filming
+        ? `${WORKING_SENTENCE.filming} We're also changing ${names} again on the clip${voice.length === 1 ? " it has" : "s they have"}; nothing is filmed for ${voice.length === 1 ? "it" : "them"}.`
+        : `Changing ${names} again on the clip${voice.length === 1 ? " it already has" : "s they already have"}. Nothing is filmed.`;
 }
 const WORKING_SENTENCE = {
     planning: "Planning your video: reading your script and planning each scene.",
@@ -232,9 +245,10 @@ export function customerStageLines(run, page) {
     switch (run.stage) {
         case "waiting":
             return [waitingSentence(run.waiting), ...waitingSceneLines(run, page)];
+        case "filming":
+            return [filmingSentence(run), ...waitingSceneLines(run, page)];
         case "planning":
         case "drawing":
-        case "filming":
         case "editing":
             return [WORKING_SENTENCE[run.stage], ...waitingSceneLines(run, page)];
         case "picking":

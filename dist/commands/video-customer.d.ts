@@ -29,9 +29,11 @@ export interface CustomerRunScene {
     frameStatus: "pending" | "drawing" | "ready" | "failed";
     productNote?: string;
     clip?: {
+        status?: string;
         speech?: SpeechSummary;
         redoEstimateUsd?: number;
         redoEstimateMaxUsd?: number;
+        voiceRetrying?: true;
     } | null;
 }
 export type CustomerHeldScene = {
@@ -40,6 +42,7 @@ export type CustomerHeldScene = {
     take: boolean;
     unfilmed?: true;
     voice?: true;
+    voiceToo?: true;
     voiceLocked?: true;
 };
 export type CustomerStopReason = {
@@ -218,6 +221,7 @@ export declare function customerAnswer<T extends {
 export declare function customerRunPage(dashboardUrl: string, runId: string): string;
 export declare function onOwnDashboard(serverUrl: string, dashboardUrl: string): string;
 export declare function customerStageIsWorking(stage: CustomerRunStage): boolean;
+export declare const VOICE_RETRY_COST = "it costs only cents";
 export declare function finalApproveLines(template: boolean): string[];
 export declare function finalApprovedLines(template: boolean): string[];
 export declare function customerStageLines(run: CustomerRun, page: string): string[];

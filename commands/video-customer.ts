@@ -52,13 +52,29 @@ export interface CustomerRunScene {
   frameStatus: "pending" | "drawing" | "ready" | "failed";
   productNote?: string;
   /** #4761: `redoEstimateUsd` to `redoEstimateMaxUsd` is the price the video's page shows on its Try again. */
-  clip?: { speech?: SpeechSummary; redoEstimateUsd?: number; redoEstimateMaxUsd?: number } | null;
+  clip?: {
+    status?: string;
+    speech?: SpeechSummary;
+    redoEstimateUsd?: number;
+    redoEstimateMaxUsd?: number;
+    /** #4954: the scene's voice change is being tried again on the clip it has; nothing is filmed. */
+    voiceRetrying?: true;
+  } | null;
 }
 
 /** COP-277, #4733: one scene the cut waits on, in the server's sentence. */
 /** #4755: `voice`, held only for its voice change, which `exodus video revoice` tries again without filming. */
-/** `voiceLocked`, and on a kind that locks every voice, so it can't be kept as it is. */
-export type CustomerHeldScene = { sceneIndex: number; sentence: string; take: boolean; unfilmed?: true; voice?: true; voiceLocked?: true };
+/** `voiceLocked`, and on a kind that locks every voice, so it can't be kept as it is. `voiceToo` (#4955): held for its
+ * voice change and another fault, so its Try again films a new take, which changes its voice too. */
+export type CustomerHeldScene = {
+  sceneIndex: number;
+  sentence: string;
+  take: boolean;
+  unfilmed?: true;
+  voice?: true;
+  voiceToo?: true;
+  voiceLocked?: true;
+};
 
 export type CustomerStopReason =
   | { kind: "out-of-credits" }
@@ -201,8 +217,9 @@ export function waitingSceneLines(run: CustomerRun, page: string): string[] {
 export function approveWaitingLines(run: CustomerRun, page: string): string[] {
   const scenes = run.cutHeldScenes?.length ? run.cutHeldScenes : run.waitingScenes;
   if (!scenes?.length) return [];
-  // A One-take take is never made again on its own; a scene with no clip has nothing to keep.
-  const price = tryAgainPrice(run, scenes.filter((s) => !s.take).map((s) => s.sceneIndex));
+  // A One-take take is never made again on its own; a scene with no clip has nothing to keep; (#4954) a scene held only
+  // for its voice change tries the voice change again, which films nothing and has no filming price.
+  const price = tryAgainPrice(run, scenes.filter((s) => !s.take && !s.voice).map((s) => s.sceneIndex));
   return [
     ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
     price ? `On the video's page, Try again costs ${price}: ${page}` : `The video's page: ${page}`,
@@ -236,6 +253,7 @@ function heldSceneChoiceLines(run: CustomerRun, scenes: readonly CustomerHeldSce
   // #4755: a scene held for its voice change is answered from here either way; nothing is filmed for it.
   const voices = scenes.filter((s) => s.voice && !s.take && !s.unfilmed);
   const faults = scenes.filter((s) => !s.take && !s.unfilmed && !s.voice);
+  const keepable = faults.filter((s) => !s.voiceLocked);
   const inParens = (price: string) => (price ? ` (${price})` : "");
   const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
   const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
@@ -250,15 +268,16 @@ function heldSceneChoiceLines(run: CustomerRun, scenes: readonly CustomerHeldSce
         : `Keep scene ${s.sceneIndex} as it is: exodus video keep ${run.runId} --scene ${s.sceneIndex}`,
     ),
     ...voices.flatMap((s) => [
-      `Try scene ${s.sceneIndex}'s voice change again (nothing is filmed): exodus video revoice ${run.runId} --scene ${s.sceneIndex}`,
+      `Try scene ${s.sceneIndex}'s voice change again (nothing is filmed; ${VOICE_RETRY_COST}): exodus video revoice ${run.runId} --scene ${s.sceneIndex}`,
       ...(s.voiceLocked
         ? []
         : [`Or keep scene ${s.sceneIndex} in the voice it was filmed in: exodus video keep ${run.runId} --scene ${s.sceneIndex}`]),
     ]),
     ...(faults.length > 0
       ? [
-          `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again, or keep it as it is, on the video's page. Try again shows the price first${faultPrice}: ${page}`,
-          ...faults.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
+          // #4955: a scene that can't be kept in its filmed voice (voiceLocked) is only made again.
+          `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again${keepable.length > 0 ? ", or keep it as it is," : ""} on the video's page. Try again shows the price first${faultPrice}: ${page}`,
+          ...keepable.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
         ]
       : []),
     ...(takes.length > 0 && faults.length === 0 && unfilmed.length === 0
@@ -402,6 +421,27 @@ export function customerStageIsWorking(stage: CustomerRunStage): boolean {
   );
 }
 
+/**
+ * #4954: what a voice-only Try again costs: the voice change and its listens on the member's ElevenLabs key, and the
+ * accent listen on the run's spend (about $0.20 at most, when the listen needs a reference voice). No check runs again.
+ */
+export const VOICE_RETRY_COST = "it costs only cents";
+
+/**
+ * #4954: the filming sentence, unless a scene's voice change is being tried again: that films nothing, so it is said
+ * as what it is, alone when nothing else is being made.
+ */
+function filmingSentence(run: CustomerRun): string {
+  const scenes = run.scenes ?? [];
+  const voice = scenes.filter((s) => s.clip?.voiceRetrying).map((s) => s.sceneIndex);
+  if (voice.length === 0) return WORKING_SENTENCE.filming;
+  const names = voice.length === 1 ? `scene ${voice[0]}'s voice` : `the voices of scenes ${voice.slice(0, -1).join(", ")} and ${voice.at(-1)}`;
+  const filming = scenes.some((s) => (s.clip?.status === "generating" || s.clip?.status === "queued") && !s.clip.voiceRetrying);
+  return filming
+    ? `${WORKING_SENTENCE.filming} We're also changing ${names} again on the clip${voice.length === 1 ? " it has" : "s they have"}; nothing is filmed for ${voice.length === 1 ? "it" : "them"}.`
+    : `Changing ${names} again on the clip${voice.length === 1 ? " it already has" : "s they already have"}. Nothing is filmed.`;
+}
+
 const WORKING_SENTENCE: Record<"planning" | "drawing" | "filming" | "editing", string> = {
   planning: "Planning your video: reading your script and planning each scene.",
   drawing: "Drawing your scenes. Each one is drawn before filming starts.",
@@ -510,9 +550,10 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
     // #4761: a scene already waiting on the member is said whatever else the run is doing.
     case "waiting":
       return [waitingSentence(run.waiting), ...waitingSceneLines(run, page)];
+    case "filming":
+      return [filmingSentence(run), ...waitingSceneLines(run, page)];
     case "planning":
     case "drawing":
-    case "filming":
     case "editing":
       return [WORKING_SENTENCE[run.stage], ...waitingSceneLines(run, page)];
     case "picking":

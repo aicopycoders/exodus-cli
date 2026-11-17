@@ -12,7 +12,7 @@ import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/scrip
 import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
@@ -5683,16 +5683,22 @@ export async function revoiceFlow(runId, target, json, deps) {
         return errorResult(runRes, json);
     if (customerAnswer(runRes.data)) {
         const customer = runRes.data;
-        const held = "all" in target
+        const scene = "all" in target
             ? undefined
-            : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find((s) => s.sceneIndex === target.sceneIndex && s.voice === true);
+            : [...(customer.cutHeldScenes ?? []), ...(customer.waitingScenes ?? [])].find((s) => s.sceneIndex === target.sceneIndex && (s.voice === true || s.voiceToo === true));
+        if (scene?.voiceToo) {
+            return adminOnlyResult(`Scene ${scene.sceneIndex} also failed another check, so changing its voice again wouldn't finish it. Try ` +
+                "again on the video's page films a new take and changes its voice too, and shows the price first: " +
+                customerRunPage(deps.dashboardUrl, runId), json);
+        }
+        const held = scene;
         if (!held)
             return adminOnlyResult("exodus video revoice is for admins.", json);
         const res = await deps.post(SCENE_REVOICE_PATH, { runId, sceneIndex: held.sceneIndex });
         if (!res.ok)
             return errorResult(res, json);
-        const line = `Scene ${held.sceneIndex}: changing its voice again. Nothing is filmed; ElevenLabs bills the voice change and its ` +
-            "listens to your own key.";
+        const line = `Scene ${held.sceneIndex}: changing its voice again. Nothing is filmed; ${VOICE_RETRY_COST} (ElevenLabs bills ` +
+            "the voice change and its listens to your own key).";
         return {
             code: 0,
             lines: json

@@ -37,6 +37,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   scrapecreators: "ScrapeCreators",
   apify: "Apify",
   browserbase: "Browserbase",
+  fal: "fal.ai",
 };
 
 async function status(): Promise<void> {

@@ -28,6 +28,7 @@ const PROVIDER_LABEL = {
     scrapecreators: "ScrapeCreators",
     apify: "Apify",
     browserbase: "Browserbase",
+    fal: "fal.ai",
 };
 async function status() {
     let remote;

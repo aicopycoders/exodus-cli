@@ -1051,7 +1051,9 @@ ends: all free to set, the price's figures the same, but `music`,
   smudge, phone grain), `ultra`, each take sharpened by Topaz on fal.ai at its
   own size (a line of the price, by the second) and then the phone look with
   the room sound 6 dB quieter, or `off`. A take Topaz cannot sharpen goes on
-  as filmed and says so. `ultra` is offered only when `sheet` lists it.
+  as filmed and says so. `ultra` is offered only when `sheet` lists it, and
+  runs on the member's own fal.ai key, added in Settings → API Keys; without
+  one, a set of `ultra` is refused.
 - `music`: instrumental music made for this video under the voice, `on`, or
   `off`. It is `off` with no pick and never on unless the member picks it;
   when their ad has music, `on` is marked recommended. With `on`, the

@@ -13,6 +13,7 @@ export const SERVER_RESOLVED_PROVIDERS = new Set([
     "scrapecreators",
     "apify",
     "browserbase",
+    "fal",
 ]);
 export async function fetchRemoteKeys() {
     const res = await apiGetDashboard("/api/settings/keys");

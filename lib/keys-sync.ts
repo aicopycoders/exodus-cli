@@ -44,11 +44,14 @@ export const PROVIDER_ENV_MAP: Record<string, string> = {
 // Door 2 run starts. The local host never reads it from .env — our own env-level
 // BROWSERBASE_* vars are the internal pilot's, never the member's — so
 // `keys pull` must not write it, and must not flag it as an unknown-mapping skip.
+// `fal` (COP-440): the member's optional fal.ai key for One-take's ultra filter,
+// snapshotted onto the run and decrypted in the Trigger worker only.
 export const SERVER_RESOLVED_PROVIDERS = new Set<string>([
   "imgflip",
   "scrapecreators",
   "apify",
   "browserbase",
+  "fal",
 ]);
 
 export interface RemoteKeys {

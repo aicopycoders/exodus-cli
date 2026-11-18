@@ -320,7 +320,8 @@ export function extraShotLines(run: Pick<CustomerRun, "extraShots">, id: string)
   if (shots.length === 0) return [];
   const layout = { full: "full screen", split: "split screen" } as const;
   return [
-    `Extra shots:  ${shots.length} planned, cut in while the voice carries on.`,
+    // #5099: in development and untested (Brad's rule), as the sheet's row says.
+    `Extra shots:  ${shots.length} planned, cut in while the voice carries on (in development, untested).`,
     ...shots.map((shot) => `  ${shot.n}. ${shot.label}, on "${shot.word}", ${layout[shot.layout]}${shot.usd !== null ? `, $${shot.usd.toFixed(2)}` : ""}`),
     `Drop one:     exodus video drop-shot ${id} --shot <n>`,
   ];

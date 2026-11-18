@@ -84,7 +84,7 @@ export function extraShotLines(run, id) {
         return [];
     const layout = { full: "full screen", split: "split screen" };
     return [
-        `Extra shots:  ${shots.length} planned, cut in while the voice carries on.`,
+        `Extra shots:  ${shots.length} planned, cut in while the voice carries on (in development, untested).`,
         ...shots.map((shot) => `  ${shot.n}. ${shot.label}, on "${shot.word}", ${layout[shot.layout]}${shot.usd !== null ? `, $${shot.usd.toFixed(2)}` : ""}`),
         `Drop one:     exodus video drop-shot ${id} --shot <n>`,
     ];

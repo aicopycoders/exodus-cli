@@ -210,6 +210,7 @@ export interface SwipeView {
     runHoldsStart?: boolean;
     scriptNote?: string;
     ownWords?: boolean;
+    takenNote?: string;
 }
 export interface SwipeListRow {
     _id: string;

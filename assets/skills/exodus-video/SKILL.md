@@ -1025,8 +1025,8 @@ Its "Change something" asks which part first, as one question (rule 3) with
 does, four rows a call. "How it is finished" changes only how the app cuts
 the takes once they are filmed, `cardPlace` (in "Captions and text card")
 where the cut puts the text card, and `ending` (in "Ending") how the video
-ends: all free to set, the price's figures the same, but `music`, which the
-price names. Set one only on the member's word. As `sheet` prints them:
+ends: all free to set, the price's figures the same, but `music`,
+`extraShots` and `ultraRealism`'s `ultra`, which the price names. Set one only on the member's word. As `sheet` prints them:
 
 - `speed`: how fast the video plays, from `1.0` (as filmed) to `1.25`.
 - `pauses`: how much silence between words is cut: `trim`, `keep`, or the
@@ -1048,7 +1048,10 @@ price names. Set one only on the member's word. As `sheet` prints them:
   place the video is filmed in, which a spoken line such as "I'm in my car"
   can make another than the one the sheet names; `none` turns it off.
 - `ultraRealism`: `phone`, a phone's look (30 frames a second, a light lens
-  smudge, phone grain), or `off`.
+  smudge, phone grain), `ultra`, each take sharpened by Topaz on fal.ai at its
+  own size (a line of the price, by the second) and then the phone look with
+  the room sound 6 dB quieter, or `off`. A take Topaz cannot sharpen goes on
+  as filmed and says so. `ultra` is offered only when `sheet` lists it.
 - `music`: instrumental music made for this video under the voice, `on`, or
   `off`. It is `off` with no pick and never on unless the member picks it;
   when their ad has music, `on` is marked recommended. With `on`, the
@@ -1058,6 +1061,15 @@ price names. Set one only on the member's word. As `sheet` prints them:
   the price, by the minute), quiet under the voice and a little quieter while
   it speaks. If it cannot be made, the video is finished with no music and
   says so.
+- `extraShots`: short shots of hands and the product cut in while the voice
+  carries on: `full` (the whole frame), `split` (the top part, the person
+  below), `both` (taking turns), or `off`. It is `off` with no pick and never
+  on unless the member picks it; when their ad cuts to b-roll, its layout is
+  marked recommended. The storyboard plans about one shot a 9 seconds of talk
+  (one more text call), the stop lists them with their price, and the member
+  can drop one there (`exodus video drop-shot <runId> --shot <n>`); after the
+  takes, each is drawn and filmed on the member's Kie key (a line of the
+  price). A shot that cannot be made is left out and the video still finishes.
 - `cardPlace`: over the chest while the first line is said (`chest`), a
   headline at the top for the opening (`top`), or one for the whole video
   (`top-film`), for which every take is asked for room above the head; when
@@ -1105,9 +1117,9 @@ it): a start with no pick films that value. With no pick, the "How it is
 finished" rows and `cardPlace` print `from the kind of ad:` and a start cuts
 them so. A value one of them recommends is used only when picked, unless it is
 the row's value already (`cardPlace`'s `top` while `hook` is on): `voiceSound`
-names it in its reason ("pick it to use it"); `cardPlace` and `music` mark it
-only as `recommended` in `--json` (`music` when their ad has music, which its
-reason says). "Let it run" here, said in reply to these
+names it in its reason ("pick it to use it"); `cardPlace`, `music` and
+`extraShots` mark it only as `recommended` in `--json` (`music` when their ad
+has music, `extraShots` when it cuts to b-roll, which their reasons say). "Let it run" here, said in reply to these
 saved sheets and their prices, is the yes to the starts with the sheets as
 they stand: set nothing (a size a money limit needs is set before the sheets
 are shown, below), since a start with no pick films each row's value as the
@@ -1644,7 +1656,10 @@ When it is done, one line: the lyric's opening and what it cost, as printed
 what it left out). A refusal is a stop that needs the member (step 4), with
 the ways on its sentence names. Each write is a swipe of its own: the sheet,
 the price and the start below are those of the swipe id the latest write
-printed.
+printed. A new write of the same ad takes the samples, the characters'
+pictures and the picks of the one before that still fit the new lines, at no
+cost, so a fix of a few lines usually costs only the write; say the line it
+printed about what it took and what it left.
 
 **The saved sheet, read once.** Free: `exodus video swipe sheet <swipeId>`.
 Its rows: under Song, `family` (the kind of music), `sound` (that kind's
@@ -2507,6 +2522,8 @@ exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "…"] [--
 exodus video revoice <runId> --all | --scene <n>          redo only the voice; no new video
 exodus video keep <runId> --scene <n>                     keep a held scene as it is; orders nothing;
                                                           only after the member's yes
+exodus video drop-shot <runId> --shot <n>                 drop one planned extra shot at the storyboard
+                                                          stop; orders nothing; only on the member's word
 exodus video keep-going <runId>                           a video waiting at its estimate films on;
                                                           only after the member's own yes
 exodus video stop-here <runId>                            a video waiting at its estimate orders nothing

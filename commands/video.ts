@@ -255,6 +255,11 @@ The whole loop, in order:
        video's page does. It orders nothing. Once no scene is held, the app's
        own cut goes on and makes the final video.
 
+     exodus video drop-shot <runId> --shot <n>
+       Drop one of the extra shots a One-take storyboard planned, while it
+       waits for the yes (status lists them), as "Drop" on the video's page
+       does. It orders nothing; the shot is neither made nor cut in.
+
      exodus video keep-going <runId>
      exodus video stop-here <runId>
        A video that reached the estimate it showed before the start stops
@@ -295,6 +300,7 @@ Usage:
   exodus video retry-clip <runId> --scene <n> [--node <nodeId>] [--note "..."] [--voice-first] [--json]
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video keep <runId> --scene <n> [--json]
+  exodus video drop-shot <runId> --shot <n> [--json]
   exodus video keep-going <runId> [--json]
   exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
@@ -849,6 +855,8 @@ const REVOICE_NOT_ON_THIS_SERVER =
 export const FINAL_PATH = "/api/v2/video/final";
 // COP-277: the run page's "Use scene N as-is", from the command line. An older server answers 404 here.
 export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
+/** COP-384: drop one of the extra shots a One-take board planned, at its stop. */
+export const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
 /** #4582: the member's answer to a video that reached its estimate. */
 export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
@@ -8376,6 +8384,28 @@ export async function keepFlow(runId: string, sceneIndex: number, json: boolean,
   };
 }
 
+/** COP-384: what an older server, with no drop route, leaves the member: the page's own button. */
+const DROP_SHOT_NOT_ON_THIS_SERVER = "This Exodus server cannot drop an extra shot from the command line yet, so nothing changed. Drop it on the video's page:";
+
+/**
+ * COP-384: `exodus video drop-shot <runId> --shot <n>`, the run page's "Drop" beside one of the extra shots a One-take
+ * board planned, while the video waits at its storyboard: the shot is neither drawn nor filmed, and the cut lays none in
+ * its place. It orders nothing.
+ */
+export async function dropShotFlow(runId: string, shot: number, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(EXTRA_SHOT_PATH, { runId, shot });
+  if (missingRouteLine(res, "exodus video drop-shot")) {
+    const line = `${DROP_SHOT_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+    return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+  }
+  if (!res.ok) return errorResult(res, json);
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, shot })] };
+  return {
+    code: 0,
+    lines: [`Extra shot ${shot} dropped. It won't be made, and nothing was ordered.`, `See the rest: exodus video status ${runId}`],
+  };
+}
+
 /** #4582: what an older server, with no answer route, leaves the member: the page's own buttons. */
 const SPEND_ANSWER_NOT_ON_THIS_SERVER = "This Exodus server cannot take this answer from the command line, so nothing changed. Answer on the video's page:";
 
@@ -10209,6 +10239,7 @@ export async function run(
     "retry-clip",
     "revoice",
     "keep",
+    "drop-shot",
     "keep-going",
     "stop-here",
     "voices",
@@ -10394,6 +10425,14 @@ export async function run(
 
   if (sub === "keep-going" || sub === "stop-here") {
     return printResult(await spendAnswerFlow(runId, sub === "keep-going" ? "go" : "stop", json, defaultDeps));
+  }
+
+  if (sub === "drop-shot") {
+    const shotRaw = flagString(flags, "shot");
+    if (shotRaw === undefined) usage("video drop-shot needs --shot <n>, the extra shot to drop.");
+    const shot = Number(shotRaw);
+    if (!Number.isInteger(shot) || shot < 1) usage(`video drop-shot --shot must be a whole shot number, not "${shotRaw}".`);
+    return printResult(await dropShotFlow(runId, shot, json, defaultDeps));
   }
 
   if (sub === "keep") {

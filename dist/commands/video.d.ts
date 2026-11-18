@@ -30,6 +30,7 @@ export declare const RUN_PATH = "/api/v2/workflow";
 export declare const ITEMS_PATH = "/api/v2/workflow/items";
 export declare const FINAL_PATH = "/api/v2/video/final";
 export declare const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
+export declare const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
 export declare const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export declare const VOICES_PATH = "/api/v2/video/voices";
 export declare const PICKS_PATH = "/api/v2/video/picks";
@@ -1036,6 +1037,7 @@ export type RevoiceTarget = ClipRedoTarget | {
     all: true;
 };
 export declare function keepFlow(runId: string, sceneIndex: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function dropShotFlow(runId: string, shot: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function spendAnswerFlow(runId: string, answer: "go" | "stop", json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function revoiceFlow(runId: string, target: RevoiceTarget, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export interface CastVoiceRow {

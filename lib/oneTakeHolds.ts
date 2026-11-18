@@ -12,6 +12,7 @@
  * after it was filmed again.
  * COP-359: "one-take-said-twice" is a hold for its words: the take says part of its script twice.
  * COP-388: "one-take-pack-held" is a hold for its pack: the label check read another pack than the product's photo.
+ * COP-438: "one-take-no-pack" is a hold for its pack too: the label check read no pack where the take says its name.
  */
 export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-words-missing",
@@ -23,4 +24,5 @@ export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-sideways",
   "one-take-said-twice",
   "one-take-pack-held",
+  "one-take-no-pack",
 ];

@@ -352,6 +352,11 @@ function wholeLinesOf(raw) {
  * of the phone pass kept its numbers. A pass whose filters this ffmpeg lacks is left out, with a note.
  * With either picture pass the takes are also read before the look, in the same render (LOOK_PROBE); a 30 fps film's
  * motion is read back on FPS, and its caption check reads each caption on the frame the delivered file shows it on.
+ *
+ * COP-385, the sheet's ultra: the same three names, once (never a pass of their own on top of the phone look's), and
+ * quietRoom (QUIET_ROOM_DB). The takes it cuts are the files Topaz sharpened at their own size, which the worker hands it
+ * as the takes, at the takes' own 24 fps (no frames made up in between); the cut reads them as any take, scaled to
+ * WIDTH x HEIGHT on its own FPS clock (`norm`), and the film is delivered at 30 by repeated frames as above.
  */
 export const DELIVERY_FPS = 30;
 
@@ -613,6 +618,8 @@ export function finishingOf(manifest) {
     ...(f.fps30 === true ? { fps30: true } : {}),
     ...(f.lensSmudge === true ? { lensSmudge: true } : {}),
     ...(f.phonePass === true ? { phonePass: true } : {}),
+    // COP-385: the room bed QUIET_ROOM_DB quieter, only beside a room sound to lay.
+    ...(f.quietRoom === true && typeof f.roomSound === "string" && Object.hasOwn(ROOM_BEDS, f.roomSound) ? { quietRoom: true } : {}),
     // COP-356: the card as a headline at the top (headlineCards), a name only the worker writes from a run's sheet;
     // COP-382: "top-film", the headline for the whole film.
     ...(on.cards && (f.cardPlace === "top" || f.cardPlace === "top-film") ? { cardPlace: f.cardPlace } : {}),
@@ -627,6 +634,8 @@ export function finishingOf(manifest) {
     ...(nameIn(SONG_EDITING_LEVELS, f.songEditing) ? { songEditing: f.songEditing } : {}),
     // COP-383: a run's sheet's music, laid at Luke's level (LIGHT_MUSIC), a name only the worker writes.
     ...(f.musicMix === "light" ? { musicMix: "light" } : {}),
+    // COP-384: a run's sheet's extra shots, the clips the worker laid in the manifest's `extraShots` (EXTRA_SHOTS).
+    ...(f.extraShots === true ? { extraShots: true } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -705,6 +714,12 @@ const UNDER_FILTERS = ["highpass", "lowpass", "sidechaincompress"];
  */
 export const ROOM_UNDER_DB = 27;
 export const ROOM_FADE_SEC = 0.08;
+/**
+ * COP-385, quietRoom: the saved sheet's ultra lays the room sound this much quieter, as Luke's Ultra B does ("room tone
+ * 6 dB quieter than the first test", lab/post_lock.json; realism_ultra.py locked it at -44 against the test's -38). A
+ * name the worker writes only beside the phone look's three, so the room bed sits ROOM_UNDER_DB + this under the voice.
+ */
+export const QUIET_ROOM_DB = 6;
 const ROOM_RATE = 48000;
 /**
  * COP-383, musicMix "light": a run's sheet's music at Luke's lock (lab/post_v2.py final3, post3.py final): its loudness
@@ -5872,6 +5887,61 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     filters.push(`[${videoLabel}]${speedStep(speed)}[faster]`);
     videoLabel = "faster";
   }
+  // COP-384: a run's sheet's extra shots (EXTRA_SHOTS), on the finished cut's own frames, after the speed step and
+  // under the burned words: each from its clip's `clipFromSec`, at `playSpeed`, settling from `zoomFrom`; a split one on
+  // the top with the person's strip below, made from these same frames.
+  const xs = finish?.extraShots?.shots?.length ? finish.extraShots : null;
+  if (xs) {
+    const E = EXTRA_SHOTS;
+    // Each shot on the film's own frames, its first and its count: the overlays' windows run from half a frame before
+    // its first frame to half a frame before the frame after its last, so no rounding of a time moves it by a frame.
+    const windowOf = (s) => {
+      const { first, frames } = shotFrames(s);
+      return { first, frames, shown: `between(t,${sec((first - 0.5) / FPS)},${sec((first + frames - 0.5) / FPS)})` };
+    };
+    const splits = xs.shots.filter((s) => s.layout === "split");
+    /** The person's strip of each split shot, by the shot's place in `xs.shots`. */
+    const strips = new Map();
+    if (splits.length > 0) {
+      // The strip is made from the film's frames as they pass, every frame, next to the film: a strip cut out of the
+      // film for its window alone (a trim of a split) makes the film wait in memory for every frame before the window.
+      // The film widened with a blurred copy of itself is shared by the split shots (their margin is the same); the
+      // blur and the overlay work in the windows alone, and each shot's crop is cut from it.
+      const anyWindow = splits.map((s) => windowOf(s).shown).join("+");
+      // A shot showing the person smaller (splitCaptionPlace) widens the canvas; each crop keeps its place on the frame.
+      const margin = Math.max(...splits.map((s) => s.split.margin));
+      filters.push(`[${videoLabel}]split=2[xsbase][xsrc]`);
+      filters.push(`[xsrc]split=2[xsa][xsb]`);
+      filters.push(`[xsa]scale=${WIDTH + 2 * margin}:${HEIGHT},boxblur=${E.blur}:enable='${anyWindow}'[xsbg]`);
+      filters.push(`[xsbg][xsb]overlay=${margin}:0:enable='${anyWindow}'[xscv]`);
+      const canvases = splits.length > 1 ? splits.map((_, j) => `xscv${j}`) : ["xscv"];
+      if (splits.length > 1) filters.push(`[xscv]split=${splits.length}${canvases.map((c) => `[${c}]`).join("")}`);
+      splits.forEach((s, j) => {
+        const k = xs.shots.indexOf(s);
+        const { stripH, crop: [wc, hc, x0, y0] } = s.split;
+        filters.push(`[${canvases[j]}]crop=${wc}:${hc}:${x0 + margin - s.split.margin}:${y0},scale=${WIDTH}:${stripH},setsar=1[xst${k}]`);
+        strips.set(k, `xst${k}`);
+      });
+      videoLabel = "xsbase";
+    }
+    xs.shots.forEach((s, k) => {
+      const { first, frames, shown } = windowOf(s);
+      const hh = s.layout === "split" ? s.split.splitH : HEIGHT;
+      // The clip runs one frame past its window: an overlay whose second stream has ended passes the film through on the
+      // frame it ends at. Its first frame is put on the film's frame `first` exactly, in whole ticks of its clock.
+      const i = addInput("-ss", sec(E.clipFromSec), "-t", sec((frames / FPS) * E.playSpeed + E.clipFromSec + 0.5), "-i", resolve(s.file));
+      filters.push(
+        `[${i}:v]setpts=PTS/${E.playSpeed},fps=${FPS},scale=${2 * WIDTH}:${2 * hh}:force_original_aspect_ratio=increase,crop=${2 * WIDTH}:${2 * hh},` +
+          `zoompan=z='max(1,${E.zoomFrom}-${round2(E.zoomFrom - 1)}*on/${E.zoomFrames})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${WIDTH}x${hh}:fps=${FPS},` +
+          `setsar=1,trim=end_frame=${frames + 1},setpts=PTS-STARTPTS+round(${first}/(${FPS}*TB))[xs${k}]`,
+      );
+      filters.push(`[${videoLabel}][xs${k}]overlay=0:0:eof_action=pass:enable='${shown}'[xo${k}]`);
+      videoLabel = `xo${k}`;
+      if (!strips.has(k)) return;
+      filters.push(`[${videoLabel}][${strips.get(k)}]overlay=0:${s.split.splitH}:enable='${shown}'[xp${k}]`);
+      videoLabel = `xp${k}`;
+    });
+  }
   // COP-300: burned after the speed step, on the finished cut's own frames, so no speed step can move the captions
   // off the voice. The ASS file is timed on that clock (editAss `speed`).
   if (finish?.ass) {
@@ -6027,6 +6097,17 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     filters.push(`[lmraw][lmkey]sidechaincompress=threshold=${m.threshold}:ratio=${d.ratio}:attack=${d.attack}:release=${d.release}:knee=${d.knee}[lmbed]`);
     filters.push(`[${audioLabel}][lmbed]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[withmusic]`);
     audioLabel = "withmusic";
+  }
+  // COP-384: the whoosh before each extra shot, on the finished film's clock, at the gain the cut set (whooshGain).
+  if (xs?.whoosh) {
+    const parts = xs.shots.map((s, k) => {
+      const i = addInput("-i", resolve(xs.whoosh.file));
+      const at = Math.max(0, shotFrames(s).first / FPS - EXTRA_SHOTS.whoosh.leadSec);
+      filters.push(`[${i}:a]${stereo},volume=${xs.whoosh.gainDb}dB,adelay=delays=${Math.round(at * 1000)}:all=1[xw${k}]`);
+      return `[xw${k}]`;
+    });
+    filters.push(`[${audioLabel}]${parts.join("")}amix=inputs=${parts.length + 1}:duration=first:dropout_transition=0:normalize=0[withwhoosh]`);
+    audioLabel = "withwhoosh";
   }
 
   return [
@@ -6643,8 +6724,13 @@ export function songLitScreens(screens, look) {
  * order (alignScript), each is timed by the heard words that say it;
  * elsewhere by the heard words in its place (scriptTimes), and a script word
  * with nothing heard in its place is left out.
+ *
+ * COP-384: with `everyWord`, no script word of a heard segment is left out: one
+ * with nothing heard in its place takes the time between the words around it
+ * (`guessed`), so an extra shot on a word the script has is placed, never left
+ * out as unheard. The words that start alike are not spread (sharedHeardWords).
  */
-export function lineWords(timeline, storyboard) {
+export function lineWords(timeline, storyboard, { everyWord = false } = {}) {
   const texts = new Map((storyboard?.script ?? []).map((line) => [line?.lineId, line?.text]));
   const rows = [];
   for (const seg of timeline.spine) {
@@ -6652,31 +6738,47 @@ export function lineWords(timeline, storyboard) {
     if (heard.length === 0) continue;
     const at = (t) => roundMs(seg.startSec + t);
     const lines = seg.lineIds.map((id) => scriptWords(texts.get(id)));
-    const aligned = lines.some((l) => l.length > 0) ? alignScript(heard, lines.flat()) : null;
-    if (aligned) {
-      const lineOf = lines.flatMap((ws, j) => ws.map(() => seg.lineIds[j]));
-      const { expected, heard: tokens, heardTokenOf } = aligned;
-      lines.flat().forEach((text, i) => {
-        const said = heardTokenOf.filter((_, e) => expected.sourceIndex[e] <= i && i <= expected.lastSourceIndex[e]);
-        if (said.length === 0) return;
-        const start = at(heard[tokens.sourceIndex[said[0]]].s);
-        const end = at(heard[tokens.lastSourceIndex[said.at(-1)]].e);
-        if (end > start) rows.push({ text, start, end, line: lineOf[i] });
-      });
-      continue;
-    }
-    // COP-311: the script's words still, each on the time of what was heard in its place (scriptTimes).
     const lineOf = lines.flatMap((ws, j) => ws.map(() => seg.lineIds[j]));
-    const { expected, times } = scriptTimes(heard, lines.flat());
+    const aligned = lines.some((l) => l.length > 0) ? alignScript(heard, lines.flat()) : null;
+    // Each script word's heard span, or null: aligned in order (alignScript), else by what was heard in its place
+    // (COP-311 scriptTimes).
+    let spanOf;
+    if (aligned) {
+      const { expected, heard: tokens, heardTokenOf } = aligned;
+      spanOf = (i) => {
+        const said = heardTokenOf.filter((_, e) => expected.sourceIndex[e] <= i && i <= expected.lastSourceIndex[e]);
+        return said.length === 0 ? null : [at(heard[tokens.sourceIndex[said[0]]].s), at(heard[tokens.lastSourceIndex[said.at(-1)]].e)];
+      };
+    } else {
+      const { expected, times } = scriptTimes(heard, lines.flat());
+      spanOf = (i) => {
+        const said = times.filter((time, e) => time && expected.sourceIndex[e] <= i && i <= expected.lastSourceIndex[e]);
+        return said.length === 0 ? null : [at(said[0][0]), at(said.at(-1)[1])];
+      };
+    }
+    const segRows = [];
     lines.flat().forEach((text, i) => {
-      const said = times.filter((time, e) => time && expected.sourceIndex[e] <= i && i <= expected.lastSourceIndex[e]);
-      if (said.length === 0) return;
-      const start = at(said[0][0]);
-      const end = at(said.at(-1)[1]);
-      if (end > start) rows.push({ text, start, end, line: lineOf[i] });
+      const span = spanOf(i);
+      if (span && span[1] > span[0]) segRows.push({ text, start: span[0], end: span[1], line: lineOf[i] });
+      else if (everyWord) segRows.push({ text, start: null, end: null, line: lineOf[i], guessed: true });
     });
+    if (everyWord) {
+      // Between the timed words around it; before the first, from the first heard word; after the last, to the last.
+      const first = at(heard[0].s);
+      const last = at(heard.at(-1).e);
+      segRows.forEach((r, i) => {
+        if (r.start !== null) return;
+        const before = segRows.slice(0, i).reverse().find((x) => x.start !== null && !x.guessed);
+        const after = segRows.slice(i + 1).find((x) => x.start !== null && !x.guessed);
+        const from = before ? before.end : first;
+        const to = Math.max(after ? after.start : last, from + 0.01);
+        r.start = roundMs(from);
+        r.end = roundMs(to);
+      });
+    }
+    rows.push(...segRows);
   }
-  return sharedHeardWords(rows);
+  return everyWord ? rows : sharedHeardWords(rows);
 }
 
 /**
@@ -8779,11 +8881,11 @@ function rmsDbOf(file) {
 
 /**
  * COP-354: a room bed for this cut: the voice measured alone after its chain (one pass of its sound, no picture), the
- * bed made by its preset for the film's whole length and measured, and the gain that puts its RMS ROOM_UNDER_DB under
- * the voice's integrated loudness (gainUnder). Or, when one cannot be had, the note that says why; the cut then keeps
- * its own faint bed.
+ * bed made by its preset for the film's whole length and measured, and the gain that puts its RMS `underDb` (ROOM_UNDER_DB;
+ * COP-385, quietRoom: QUIET_ROOM_DB more) under the voice's integrated loudness (gainUnder). Or, when one cannot be had,
+ * the note that says why; the cut then keeps its own faint bed.
  */
-function roomBed(name, timeline, { resolve, out, clean, levelSegments, pictureSec }) {
+function roomBed(name, timeline, { resolve, out, clean, levelSegments, pictureSec, underDb = ROOM_UNDER_DB }) {
   const files = roomPaths(out);
   const voiceArgs = buildFfmpegArgs(timeline, { resolve, music: null, out: files.voice, finish: { levelSegments, ...(clean ? { clean } : {}) }, voiceOnly: true });
   if (spawnSync("ffmpeg", voiceArgs, { stdio: ["ignore", "ignore", "pipe"] }).status !== 0) {
@@ -8797,12 +8899,12 @@ function roomBed(name, timeline, { resolve, out, clean, levelSegments, pictureSe
   }
   const made = spawnSync("ffmpeg", roomBedArgs(name, pictureSec, files.bed), { stdio: ["ignore", "ignore", "pipe"] });
   const bedRmsDb = made.status === 0 ? rmsDbOf(files.bed) : null;
-  const gainDb = gainUnder(voiceLufs, ROOM_UNDER_DB, bedRmsDb, null);
+  const gainDb = gainUnder(voiceLufs, underDb, bedRmsDb, null);
   if (gainDb === null) {
     rmSync(files.bed, { force: true });
     return { note: `roomSound ${name}: ffmpeg could not make the room, so the cut's own faint room tone stayed` };
   }
-  return { room: { file: files.bed, gainDb }, record: { sound: name, voiceLufs, bedRmsDb, gainDb, underDb: ROOM_UNDER_DB } };
+  return { room: { file: files.bed, gainDb }, record: { sound: name, voiceLufs, bedRmsDb, gainDb, underDb } };
 }
 
 /**
@@ -8847,6 +8949,259 @@ function lightMusicBed(file, timeline, { resolve, out, clean, levelSegments }) {
   if (levels.note) return levels;
   const { gainDb, threshold } = levels;
   return { music: { file, gainDb, threshold }, record: { voiceLufs, musicLufs, gainDb, underDb: LIGHT_MUSIC.underDb, duck: { ...LIGHT_MUSIC.duck, threshold } } };
+}
+
+/**
+ * COP-384, extraShots: a run's sheet's extra shots (b-roll), the clips the worker laid in the manifest's `extraShots`
+ * (scout auto-cut.ts writeOneTakeShots), cut in at Luke's lock (lab/post_v2.py ins_times, prep_insert, final3, render2),
+ * on the finished film's clock, after the speed step, under the burned words:
+ * - when: on the word that brings each in (its `nth` time, as the finished film's words say it), from its start less
+ *   `leadSec`, never before `notBeforeSec`, at least `gapSec` after the last shot ends, `seconds` long, ending
+ *   `lastLineClearSec` before the last line's first word (and `endClearSec` before the film's end); one under `minSec`
+ *   is left out, as is one on the first or the last line or whose word is not heard; at most `most`;
+ * - how: from `clipFromSec` into its clip, at `playSpeed`, settling from `zoomFrom` to 1 over `zoomFrames` frames, the
+ *   voice and everything under it carrying on; over the whole frame (`full`), or on its top `splitShare` with the person
+ *   below (`split`): a crop around the take's face (its box, on the film; with none, `faceAt`) from the frame widened
+ *   with a blurred copy of itself (`blur`), the face's top `crop.faceTop` and its bottom at most `crop.faceBottom` down
+ *   the crop, so the head is never cut and the captions, at `captionsAt` of the height while a split shot is on, sit
+ *   under the chin;
+ * - a whoosh `whoosh.leadSec` before each, `whoosh.underDb` under the voice, the one sound the worker made for them.
+ */
+export const EXTRA_SHOTS = {
+  most: 6, seconds: 1.7, leadSec: 0.1, notBeforeSec: 0.6, gapSec: 0.7, minSec: 1.0, lastLineClearSec: 0.05, endClearSec: 0.3,
+  clipFromSec: 0.3, playSpeed: 1.5, zoomFrom: 1.16, zoomFrames: 6,
+  splitShare: 0.46, captionsAt: 0.76, captionsHalf: 0.04, captionsLowest: 0.86, faceAt: [0.5, 0.4],
+  crop: { widthShare: 0.72, marginShare: 0.3, faceTop: 0.12, faceBottom: 0.46 },
+  blur: "24:2",
+  whoosh: { leadSec: 0.08, underDb: 14 },
+};
+
+/** COP-384: a word as the shots match it (video/lib/oneTakeBroll.ts oneTakeShotWord): lower case, its ends' punctuation off. */
+export const shotWord = (word) => String(word ?? "").toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+
+/** COP-384: the manifest's extra shots that read: each a number, a clip, a word and which time it is said, a layout. */
+export function extraShotsOf(manifest) {
+  const list = Array.isArray(manifest?.extraShots) ? manifest.extraShots : [];
+  return list.flatMap((s) => (isObject(s) && Number.isInteger(s.n) && hasText(s.file) && hasText(s.word) && Number.isInteger(s.nth) && s.nth >= 1 &&
+    (s.layout === "full" || s.layout === "split")
+    ? [{ n: s.n, file: s.file, word: s.word, nth: s.nth, label: hasText(s.label) ? s.label : `shot ${s.n}`, layout: s.layout }]
+    : []));
+}
+
+/**
+ * COP-384: whether a shot's clip is a video ffmpeg can read: ffprobe finds a picture stream and decodes a frame of it
+ * where the cut starts reading (EXTRA_SHOTS.clipFromSec).
+ */
+export function shotClipReadable(file) {
+  const res = spawnSync("ffprobe", [
+    "-v", "error", "-select_streams", "v:0", "-read_intervals", `${EXTRA_SHOTS.clipFromSec}%+#1`,
+    "-show_entries", "stream=codec_type:frame=pts_time", "-of", "json", file,
+  ], { encoding: "utf8", maxBuffer: 1 << 24 });
+  if (res.status !== 0) return false;
+  try {
+    const info = JSON.parse(res.stdout);
+    return info?.streams?.[0]?.codec_type === "video" && Array.isArray(info.frames) && info.frames.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** COP-384: the line each finished word belongs to, as indexes 0 up, by its script line (every word has one). */
+function lineIndexes(rows) {
+  let k = -1;
+  return rows.map((r, i) => (i === 0 || r.lineId !== rows[i - 1].lineId ? ++k : k));
+}
+
+/**
+ * COP-384: where each shot comes in on the finished film (EXTRA_SHOTS): `rows` are its words on its own clock (the
+ * script's words as the captions place them, each with its `lineId`, or, with no script, the heard words), `filmSec`
+ * its length, `stopAt` where words over the last shot begin (none: null), `notBefore` where an opening headline ends
+ * (none: 0). Returns the placed shots, each with its `start`, `end` and `at` (its word's start), and a note for each
+ * left out.
+ */
+export function placeExtraShots(shots, rows, { filmSec, stopAt = null, notBefore = 0, joins = [] } = {}) {
+  const E = EXTRA_SHOTS;
+  const notes = [];
+  const placed = [];
+  if (rows.length === 0) return { placed, notes: shots.map((s) => `extraShots: shot ${s.n} (${s.label}) was left out: the film has no words to place it on`) };
+  // The lines are known when every word carries its script line; else the board's plan, which kept no shot on the
+  // script's first or last line, is followed, and only the film's end and the words over the last shot bound a shot.
+  const linesKnown = rows.every((r) => hasText(r.lineId));
+  const lines = linesKnown ? lineIndexes(rows) : rows.map(() => 1);
+  const lastLine = linesKnown ? lines.at(-1) : Infinity;
+  const lastStart = linesKnown ? rows[lines.indexOf(lastLine)].start : Infinity;
+  let limit = lastLine > 0 ? Math.min(filmSec - E.endClearSec, lastStart - E.lastLineClearSec) : filmSec - E.endClearSec;
+  if (Number.isFinite(stopAt)) limit = Math.min(limit, stopAt - E.lastLineClearSec);
+  let last = 0;
+  for (const shot of shots.slice(0, E.most)) {
+    const left = (why) => notes.push(`extraShots: shot ${shot.n} (${shot.label}) was left out: ${why}`);
+    const hits = rows.flatMap((r, i) => (shotWord(r.text) === shotWord(shot.word) ? [i] : []));
+    const i = hits[shot.nth - 1];
+    if (i === undefined) {
+      left(hits.length === 0 ? `"${shot.word}" is not heard in the film` : `"${shot.word}" is heard ${hits.length} time${hits.length === 1 ? "" : "s"}, not ${shot.nth}`);
+      continue;
+    }
+    if (lines[i] === 0 || lines[i] === lastLine) {
+      left(`"${shot.word}" is said on the ${lines[i] === 0 ? "first" : "last"} line`);
+      continue;
+    }
+    const floor = Math.max(E.notBeforeSec, last + E.gapSec, notBefore);
+    let start = Math.max(rows[i].start - E.leadSec, floor);
+    // COP-384 landing review: a cut in the person's footage just before the shot, or just after it, would show a sliver
+    // of the person under FLASH_BARS.maxSec, a flash: the shot comes in on that cut instead (or, below its floor, lets
+    // the person run that long first), and ends on the cut after it (or that long before it, past the limit).
+    const snap = FLASH_BARS.maxSec;
+    const cutBefore = joins.filter((j) => j < start - 1e-6 && start - j < snap).at(-1);
+    if (cutBefore !== undefined) start = cutBefore >= floor - 1e-6 ? cutBefore : cutBefore + snap;
+    let end = Math.min(start + E.seconds, limit);
+    const cutAfter = joins.find((j) => j > end + 1e-6 && j - end < snap);
+    if (cutAfter !== undefined) end = cutAfter <= limit + 1e-6 ? cutAfter : cutAfter - snap;
+    if (end - start < E.minSec) {
+      left("there is no room for it before the last line");
+      continue;
+    }
+    placed.push({ ...shot, start: roundMs(start), end: roundMs(end), at: rows[i].start });
+    last = end;
+  }
+  return { placed, notes };
+}
+
+/**
+ * COP-384: the split layout's frame: the shot's height on top, the person's strip below, the blurred canvas's margin
+ * each side, and the crop of the canvas around the face: `face` is the take's face box on the film (top, bottom, left,
+ * right as parts of the frame) or null. Luke's crop is 0.72 of the width, as tall as the strip's shape; with a box it
+ * grows (to the canvas at most) until the face fits between EXTRA_SHOTS.crop.faceTop and faceBottom of its height, and
+ * sits with the face's top at faceTop; with none it centres (0.5, 0.40) as his does. `minHc`: a crop at least this tall
+ * (the person shown smaller, splitCaptionPlace), with the canvas widened as far as it needs.
+ */
+export function splitLayout(face, W = WIDTH, H = HEIGHT, { minHc = 0 } = {}) {
+  const E = EXTRA_SHOTS;
+  const splitH = Math.floor(Math.floor(H * E.splitShare) / 2) * 2;
+  const stripH = H - splitH;
+  let margin = Math.floor(Math.floor(W * E.crop.marginShare) / 2) * 2;
+  let canvasW = W + 2 * margin;
+  let wc = Math.floor(Math.floor(W * E.crop.widthShare) / 2) * 2;
+  let hc = Math.floor(Math.floor((wc * stripH) / W) / 2) * 2;
+  let cx;
+  let y0;
+  if (face) {
+    const need = ((face.bottom - face.top) * H) / (E.crop.faceBottom - E.crop.faceTop);
+    if (need > hc) {
+      hc = Math.min(H, Math.ceil(need / 2) * 2);
+      wc = Math.ceil((hc * W) / stripH / 2) * 2;
+      if (wc > canvasW) {
+        wc = canvasW;
+        hc = Math.floor((wc * stripH) / W / 2) * 2;
+      }
+    }
+    if (minHc > hc) {
+      hc = Math.min(H, Math.ceil(minHc / 2) * 2);
+      wc = Math.ceil((hc * W) / stripH / 2) * 2;
+      margin = Math.max(margin, Math.ceil((wc - W) / 4) * 2);
+      canvasW = W + 2 * margin;
+    }
+    cx = (face.left + face.right) / 2;
+    y0 = face.top * H - E.crop.faceTop * hc;
+  } else {
+    cx = E.faceAt[0];
+    y0 = E.faceAt[1] * H - E.faceAt[1] * hc;
+  }
+  const x0 = Math.round(Math.min(Math.max(cx * W + margin - wc / 2, 0), canvasW - wc));
+  y0 = Math.round(Math.min(Math.max(y0, 0), H - hc));
+  return { splitH, stripH, margin, crop: [wc, hc, x0, y0] };
+}
+
+/** COP-384: where the face sits on the film while a split shot is on: its top and bottom in the person's strip, as parts of the height. */
+export function faceInStrip(face, split, H = HEIGHT) {
+  const [, hc, , y0] = split.crop;
+  const at = (v) => Math.round(((split.splitH + ((v * H - y0) * split.stripH) / hc) / H) * 10_000) / 10_000;
+  return { top: at(face.top), bottom: at(face.bottom) };
+}
+
+/**
+ * COP-384: where a split shot's captions sit, clear of the face in the person's strip (`face` the take's box on the
+ * film, `split` its layout, `share` the tallest caption screen over the shot as a part of the height), each choice told
+ * by `how`:
+ * - "at": at EXTRA_SHOTS.captionsAt (0.76, Luke's), when the screens there keep FACE_CLEAR_SHARE from the face;
+ * - "below": else just under the chin, FACE_CLEAR_SHARE from it, when the screens then end by captionsLowest (0.86);
+ * - "smaller": else the person shown smaller (a taller crop of a wider canvas) until they do, the captions under the
+ *   chin; the crop as tall as the frame at most, the captions under the chin then wherever it is, `fits` false when that
+ *   is past captionsLowest.
+ * With no face, Luke's place. The band is the captions' centre less and plus captionsHalf.
+ */
+export function splitCaptionPlace({ face, split, share }, W = WIDTH, H = HEIGHT) {
+  const E = EXTRA_SHOTS;
+  const bandAt = (centre) => [Math.round((centre - E.captionsHalf) * 10_000) / 10_000, Math.round((centre + E.captionsHalf) * 10_000) / 10_000];
+  const at = bandAt(E.captionsAt);
+  if (!face) return { band: at, how: "at", split };
+  if (bandClear(at, share, faceInStrip(face, split, H))) return { band: at, how: "at", split };
+  const under = (layout) => faceInStrip(face, layout, H).bottom + FACE_CLEAR_SHARE + share / 2;
+  const fits = (centre) => centre + share / 2 <= E.captionsLowest + 1e-9;
+  if (fits(under(split))) return { band: bandAt(under(split)), how: "below", split };
+  let smaller = split;
+  for (let hc = split.crop[1] + 2; hc <= H; hc += 2) {
+    smaller = splitLayout(face, W, H, { minHc: hc });
+    if (fits(under(smaller))) break;
+  }
+  // Even with the whole frame's height in the strip they may not fit: then they sit under the chin all the same, past
+  // captionsLowest, and `fits` says so.
+  return { band: bandAt(under(smaller)), how: "smaller", split: smaller, fits: fits(under(smaller)) };
+}
+
+/** COP-384: a placed shot on the film's 24 fps frames: its first frame and how many it covers (at least one). */
+export function shotFrames(shot) {
+  const first = Math.round(shot.start * FPS);
+  return { first, frames: Math.max(1, Math.round(shot.end * FPS) - first) };
+}
+
+/** COP-384: the cut's note of where a split shot's captions sit, and why (splitCaptionPlace's `how`). */
+export function splitCaptionsNote(shot) {
+  const at = ((shot.captionBand[0] + shot.captionBand[1]) / 2).toFixed(2);
+  const E = EXTRA_SHOTS;
+  if (shot.captionsHow === "below") {
+    return `extraShots: while shot ${shot.n} is on, the captions sit just under the chin, at ${at} of the height: at ${E.captionsAt} they would touch the face`;
+  }
+  if (shot.captionsHow === "smaller" && shot.captionsFit === false) {
+    return `extraShots: shot ${shot.n} shows the person as small as the frame allows, and the captions under the chin still pass ${E.captionsLowest}: they are centred at ${at} of the height, since at ${E.captionsAt} they would touch the face`;
+  }
+  if (shot.captionsHow === "smaller") {
+    return `extraShots: shot ${shot.n} shows the person smaller, so the face sits higher and the captions fit under the chin, at ${at} of the height: at ${E.captionsAt} they would touch the face, and under it they would pass ${E.captionsLowest}`;
+  }
+  return `extraShots: while shot ${shot.n} is on, the captions sit at ${E.captionsAt} of the height, over the person's half`;
+}
+
+/**
+ * COP-384: caption screens shown while a split shot is on sit over the person: in the shot's own band (`captionBand`,
+ * splitCaptionPlace), else at EXTRA_SHOTS.captionsAt of the height.
+ */
+export function captionsOverSplits(screens, placed, speed = 1) {
+  const splits = placed.filter((s) => s.layout === "split");
+  if (splits.length === 0) return screens;
+  const at = [EXTRA_SHOTS.captionsAt - EXTRA_SHOTS.captionsHalf, EXTRA_SHOTS.captionsAt + EXTRA_SHOTS.captionsHalf];
+  return screens.map((c) => {
+    const shot = splits.find((s) => c.s / speed < s.end && c.e / speed > s.start);
+    return shot ? { ...c, band: shot.captionBand ?? at } : c;
+  });
+}
+
+/**
+ * COP-384: the whoosh's gain for this cut: the voice measured alone after its chain (as lightMusicBed measures it; the
+ * music's own measure when it ran), the whoosh's RMS (Luke's mean_volume), and the gain that puts it
+ * EXTRA_SHOTS.whoosh.underDb under the voice. Or the note that says why it cannot be laid.
+ */
+function whooshGain(file, timeline, { resolve, out, clean, levelSegments, voiceLufs = null }) {
+  let voice = voiceLufs;
+  if (!Number.isFinite(voice)) {
+    const alone = `${path.resolve(path.dirname(out), path.basename(out, path.extname(out)))}.whoosh-voice-level.wav`;
+    const args = buildFfmpegArgs(timeline, { resolve, music: null, out: alone, finish: { levelSegments, ...(clean ? { clean } : {}) }, voiceOnly: true });
+    const made = spawnSync("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] }).status === 0;
+    voice = made ? measureLufs(alone) : null;
+    rmSync(alone, { force: true });
+  }
+  if (!heardVoice(voice)) return { note: "extraShots: the voice had no loudness to set the whoosh against, so the shots come in with no whoosh" };
+  const gainDb = gainUnder(voice, EXTRA_SHOTS.whoosh.underDb, rmsDbOf(file), null);
+  if (gainDb === null) return { note: "extraShots: the whoosh could not be measured, so the shots come in with no whoosh" };
+  return { gainDb, record: { voiceLufs: voice, gainDb, underDb: EXTRA_SHOTS.whoosh.underDb } };
 }
 
 /**
@@ -10201,6 +10556,57 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       if (ending) pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
     }
   }
+  // COP-384: a run's sheet's extra shots (EXTRA_SHOTS), placed on the finished film's clock once an opening headline's end
+  // is known (in the burn below, or after it), and laid after the speed step.
+  const shotsAsked = finish?.extraShots ? extraShotsOf(manifest) : [];
+  const shotsWhy = stagedText ? "the text stage draws this cut's words" : timeline.mapped ? "this cut is laid on its measured map" : template ? "a template launch's clock is its own" : null;
+  if (finish?.extraShots && shotsAsked.length === 0) notes.push("extraShots: the folder holds no extra shot, so the film has none");
+  for (const s of shotsAsked.filter((shot) => !exists(shot.file))) notes.push(`extraShots: shot ${s.n} (${s.label}) was left out: ${s.file} is not in the folder`);
+  // A clip ffmpeg cannot read is left out with a note before anything is placed, so it never fails the cut.
+  const shotsUsable = shotsWhy ? [] : shotsAsked.filter((shot) => exists(shot.file)).filter((shot) => {
+    if (shotClipReadable(here(shot.file))) return true;
+    notes.push(`extraShots: shot ${shot.n} (${shot.label}) was left out: ${shot.file} could not be read as a video`);
+    return false;
+  });
+  if (shotsWhy && shotsAsked.length > 0) notes.push(`extraShots: the shots were not laid: ${shotsWhy}`);
+  let shotsPlaced = null;
+  const placeShots = (notBefore = 0) => {
+    // The script's words as the captions place them (lineWords), every one of them, each with its line, timed again by
+    // the finished film's heard words as the captions are; a cut with no script reads its heard words.
+    const scripted = lineWords(timeline, storyboard, { everyWord: true }).map(({ line, guessed: _g, ...r }) => ({ ...r, lineId: line }));
+    const base = scripted.length > 0 ? scripted : wordRows(timeline);
+    const rows = (heardWords?.length ? retimeWords(base, heardWords, speed) : base).map((r) => ({ ...r, start: r.start / speed, end: r.end / speed }));
+    const stopAt = ending ? ending.in / speed : endLayers ? endLayers.in / speed : null;
+    // Landing review: the film's own cuts (its pieces' joins and the cuts added), on the finished film's clock.
+    const joins = [...sceneTimes(timeline).slice(1).map((p) => p.startSec / speed), ...(framingChangesSec ?? [])].sort((a, b) => a - b);
+    const { placed, notes: left } = placeExtraShots(shotsUsable, rows, { filmSec: pictureSec / speed, stopAt, notBefore, joins });
+    notes.push(...left);
+    return placed;
+  };
+  // Each split shot with the take on screen at its middle, its layout around that take's face on the film, and, given
+  // the tallest caption screen over it (`shareOver`, a part of the height, null with none), its captions' place.
+  const layShots = (placed, shareOver = () => null) => {
+    const faces = filmFaces(timeline, new Map(manifest.scenes.flatMap((scene) => (faceBoxOf(scene.faceBox) ? [[scene.sceneIndex, faceBoxOf(scene.faceBox)]] : []))));
+    return placed.map((shot) => {
+      if (shot.layout !== "split" || shot.split) return shot;
+      const take = takeAt(timeline, ((shot.start + shot.end) / 2) * speed);
+      const face = faces.get(take) ?? null;
+      // COP-384 landing review: with no face box for its take (none found, or the look failed), a crop could cut the
+      // head off, so the shot covers the whole frame instead, and the note says so.
+      if (!face) {
+        notes.push(`extraShots: shot ${shot.n} (${shot.label}) is laid full screen, not split: take ${take}'s face was not found, so the person's half could not be cropped around it`);
+        return { ...shot, layout: "full", take, asked: "split" };
+      }
+      const split = splitLayout(face);
+      const share = shareOver(shot);
+      if (share === null) return { ...shot, take, split, faced: Boolean(face) };
+      const place = splitCaptionPlace({ face, split, share });
+      return {
+        ...shot, take, split: place.split, faced: Boolean(face), captionBand: place.band, captionsHow: place.how,
+        ...(place.fits === false ? { captionsFit: false } : {}),
+      };
+    });
+  };
   if (finish && (finish.captions || finish.cards || endLayers || ending) && !stagedText) {
     if (hasFilter("subtitles")) {
       ass = "edit.ass";
@@ -10261,6 +10667,21 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         screens = captionsBeforeEndCard(offFace.screens, stop);
         burned = screens;
         notes.push(...offFace.notes);
+      }
+      // COP-384: the shots come in after an opening headline, and captions over a split shot sit over the person's half.
+      if (shotsUsable.length > 0) {
+        const capShare = finish.captionsByLine ? CAPTION_MAX_SHARE : null;
+        const shareOver = (shot) => {
+          const over = screens.filter((c) => c.s / speed < shot.end && c.e / speed > shot.start);
+          return over.length > 0 ? Math.max(...over.map((c) => captionBlockShare(c, cap, WIDTH, HEIGHT, capShare))) : null;
+        };
+        shotsPlaced = layShots(placeShots(drawn && finish.cardPlace === "top" ? drawn.out / speed : 0), finish.captions ? shareOver : undefined);
+        if (drawn && finish.cardPlace === "top-film" && shotsPlaced.length > 0) notes.push("extraShots: the headline at the top for the whole video stays over the shots");
+        if (finish.captions && shotsPlaced.some((shot) => shot.layout === "split")) {
+          screens = captionsOverSplits(screens, shotsPlaced, speed);
+          burned = screens;
+          for (const shot of shotsPlaced.filter((s) => s.captionsHow)) notes.push(splitCaptionsNote(shot));
+        }
       }
       if (drawn) {
         notes.push(finish.cardPlace === "top-film"
@@ -10486,11 +10907,15 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       const made = partlyUnder
         ? { note: partlyUnderNote(`roomSound ${finish.roomSound}`, "the cut's own faint room tone stayed") }
         : musicUnder || voiceSilencesHeard
-          ? roomBed(finish.roomSound, timeline, { resolve: at, out, clean, levelSegments: !finish.finishLoudness, pictureSec })
+          ? roomBed(finish.roomSound, timeline, {
+            resolve: at, out, clean, levelSegments: !finish.finishLoudness, pictureSec,
+            underDb: ROOM_UNDER_DB + (finish.quietRoom ? QUIET_ROOM_DB : 0),
+          })
           : { note: `roomSound ${finish.roomSound}: the voice's silences could not be read, so the cut's own faint room tone stayed` };
       if (made.note) notes.push(made.note);
       else {
         ({ room, record: roomRecord } = made);
+        if (finish.quietRoom) notes.push(`quietRoom: the room sound ${roomRecord.underDb} dB under the voice, ${QUIET_ROOM_DB} dB quieter, as the sheet's ultra lays it`);
         if (musicUnder && !notes.includes(SOUNDS_UNDER_NOTE)) notes.push(SOUNDS_UNDER_NOTE);
       }
     }
@@ -10522,6 +10947,36 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   }
   // With neither a picked chain nor a bed in the film after all, the film is today's: the worker reads its own silences.
   if (!handsSilences()) voiceSilencesHeard = null;
+  // COP-384: the shots placed (with no burn to place them in, here), each split one with the frame of its take's face on
+  // the film at its middle, and the whoosh at its gain.
+  if (shotsUsable.length > 0 && shotsPlaced === null) shotsPlaced = placeShots(0);
+  let extraShots = null;
+  let shotsRecord = null;
+  if (shotsPlaced?.length) {
+    const shots = layShots(shotsPlaced);
+    let whoosh = null;
+    let whooshRecord = null;
+    if (hasText(manifest.extraShotsWhoosh) && exists(manifest.extraShotsWhoosh)) {
+      const made = whooshGain(at(manifest.extraShotsWhoosh), timeline, { resolve: at, out, clean, levelSegments: !finish.finishLoudness, voiceLufs: musicRecord?.voiceLufs ?? null });
+      if (made.note) notes.push(made.note);
+      else {
+        whoosh = { file: manifest.extraShotsWhoosh, gainDb: made.gainDb };
+        whooshRecord = made.record;
+      }
+    } else notes.push("extraShots: the folder holds no whoosh, so the shots come in with none");
+    extraShots = { shots, ...(whoosh ? { whoosh } : {}) };
+    for (const shot of shots) {
+      notes.push(`extraShots: shot ${shot.n} (${shot.label}) on "${shot.word}", ${shot.start.toFixed(2)} to ${shot.end.toFixed(2)} s, ${shot.layout === "split" ? `split screen, the person's crop around ${shot.faced ? `take ${shot.take}'s face` : "the frame's centre"}` : "full screen"}`);
+    }
+    shotsRecord = {
+      shots: shots.map((shot) => ({
+        n: shot.n, word: shot.word, start: shot.start, end: shot.end, layout: shot.layout,
+        ...(shot.split ? { crop: shot.split.crop } : {}),
+        ...(shot.captionsHow ? { captions: { how: shot.captionsHow, band: shot.captionBand, ...(shot.captionsFit === false ? { fits: false } : {}) } } : {}),
+      })),
+      ...(whooshRecord ? { whoosh: whooshRecord } : {}),
+    };
+  }
   const argsWith = (withMusic) => buildFfmpegArgs(timeline, {
     resolve: at,
     music: music && !sheetMusic ? at(music) : null,
@@ -10536,6 +10991,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ...(endLayers ? { endCard: endLayers } : {}),
           ...(look ? { look } : {}), ...(deliverFps ? { deliverFps } : {}),
           ...(withMusic && lightMusic ? { lightMusic } : {}),
+          ...(extraShots ? { extraShots } : {}),
         },
       }
       : {}),
@@ -10748,6 +11204,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     // COP-354: the room sound the cut laid, and its level against the voice.
     ...(roomRecord ? { room: roomRecord } : {}),
     ...(musicRecord ? { music: musicRecord } : {}),
+    // COP-384: the extra shots the cut laid, where and how, and the whoosh's level against the voice.
+    ...(shotsRecord ? { extraShots: shotsRecord } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
   writeFileSync(paths.pace, `${JSON.stringify(pace, null, 2)}\n`);
@@ -10851,7 +11309,7 @@ function main() {
   }
   // COP-354: a room sound of the run's saved sheet is named, with its level; with none, there is none.
   const room = cut.pace?.room;
-  const roomWords = room ? (room.sound === "none" ? "none" : `${room.sound}, ${ROOM_UNDER_DB} dB under the voice`) : null;
+  const roomWords = room ? (room.sound === "none" ? "none" : `${room.sound}, ${room.underDb ?? ROOM_UNDER_DB} dB under the voice`) : null;
   console.log(`Room tone: ${roomWords ?? (manifest.roomTone === false ? "off" : "under the whole ad")}. Music bed: ${music ?? "none"}`);
   if (cut.pace) {
     const { pace } = cut;

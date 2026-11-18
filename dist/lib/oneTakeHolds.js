@@ -8,4 +8,5 @@ export const ONE_TAKE_HOLD_CODES = [
     "one-take-sideways",
     "one-take-said-twice",
     "one-take-pack-held",
+    "one-take-no-pack",
 ];

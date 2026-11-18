@@ -147,6 +147,15 @@ export interface CustomerRun {
         name: string;
         line: string;
     };
+    extraShots?: {
+        shots: Array<{
+            n: number;
+            label: string;
+            word: string;
+            layout: "full" | "split";
+            usd: number | null;
+        }>;
+    };
 }
 export declare const SONG_CALL_NEW_VIDEO = "A new video makes the whole ad again, at its own price, shown before you start.";
 export declare const SONG_CALL_NO_SCENE_PICTURES = "This video is filmed from the pictures of its people and places, one clip for every one to three sung lines, so no picture of a scene was drawn.";
@@ -185,6 +194,7 @@ export declare function noPhotoLines(run: {
     };
 }): string[];
 export declare function listedWords(words: readonly string[]): string;
+export declare function extraShotLines(run: Pick<CustomerRun, "extraShots">, id: string): string[];
 export declare function spendAskLines(run: {
     spendAsk?: {
         sentence: string;

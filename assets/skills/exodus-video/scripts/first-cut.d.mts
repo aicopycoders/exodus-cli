@@ -352,6 +352,18 @@ export interface CutPace {
   /** COP-300: present when a sped-up cut burned its captions: the caption file is on the finished cut's clock. */
   captionClock?: "final";
   /**
+   * COP-384: the sheet's extra shots the cut laid, each on the finished film's clock (`start` to `end`), and the
+   * whoosh's record; absent when it laid none.
+   */
+  extraShots?: {
+    shots: Array<{
+      n: number; word: string; start: number; end: number; layout: "full" | "split"; crop?: [number, number, number, number];
+      /** Where a split shot's captions sat (splitCaptionPlace), when the cut drew captions over it. */
+      captions?: { how: "at" | "below" | "smaller"; band: [number, number]; fits?: false };
+    }>;
+    whoosh?: Record<string, unknown>;
+  };
+  /**
    * COP-300, captionCheck: the checks' verdicts (CutSync without its lists, and Check B without its rows). The worker
    * replaces it with Check B judged on its listen of the finished film (`listens`, `model`), and the first cut's Check B
    * as `before` when a fail made the cut again.
@@ -795,3 +807,47 @@ export function captionsOffFace<S extends { s: number; e: number }>(
   W?: number,
   H?: number,
 ): { screens: (S & { band?: [number, number] })[]; notes: string[]; takes: { take: number; band: [number, number]; fewer: boolean }[] };
+/** COP-384: a run's sheet's extra shots, Luke's numbers for when and how each is cut in. */
+export const EXTRA_SHOTS: {
+  most: number; seconds: number; leadSec: number; notBeforeSec: number; gapSec: number; minSec: number; lastLineClearSec: number; endClearSec: number;
+  clipFromSec: number; playSpeed: number; zoomFrom: number; zoomFrames: number;
+  splitShare: number; captionsAt: number; captionsHalf: number; captionsLowest: number; faceAt: [number, number];
+  crop: { widthShare: number; marginShare: number; faceTop: number; faceBottom: number };
+  blur: string;
+  whoosh: { leadSec: number; underDb: number };
+};
+/** COP-384: one extra shot as the manifest names it. */
+export type CutExtraShot = { n: number; file: string; word: string; nth: number; label: string; layout: "full" | "split" };
+/** COP-384: a word as the shots match it: lower case, its ends' punctuation off. */
+export function shotWord(word: unknown): string;
+/** COP-384: the manifest's extra shots that read. */
+export function extraShotsOf(manifest: unknown): CutExtraShot[];
+/** COP-384: whether a shot's clip is a video ffmpeg can read: a picture stream, and a frame decoded where the cut reads from. */
+export function shotClipReadable(file: string): boolean;
+/** COP-384: where each shot comes in on the finished film, by Luke's rule, and a note for each left out. */
+export function placeExtraShots(
+  shots: readonly CutExtraShot[],
+  rows: readonly { text: string; start: number; end: number; lineId?: string }[],
+  opts?: { filmSec: number; stopAt?: number | null; notBefore?: number; joins?: readonly number[] },
+): { placed: (CutExtraShot & { start: number; end: number; at: number })[]; notes: string[] };
+/** COP-384: the split layout's frame around a face box on the film (or none): the shot's height, the strip's, the crop. */
+export type CutSplitLayout = { splitH: number; stripH: number; margin: number; crop: [number, number, number, number] };
+export function splitLayout(face: CutFaceBox | null, W?: number, H?: number, opts?: { minHc?: number }): CutSplitLayout;
+/** COP-384: where the face sits in the person's strip while a split shot is on, as parts of the height. */
+export function faceInStrip(face: CutFaceBox, split: CutSplitLayout, H?: number): { top: number; bottom: number };
+/** COP-384: where a split shot's captions sit, clear of the face: at 0.76, just under the chin, or with the person shown smaller. */
+export function splitCaptionPlace(
+  at: { face: CutFaceBox | null; split: CutSplitLayout; share: number },
+  W?: number,
+  H?: number,
+): { band: [number, number]; how: "at" | "below" | "smaller"; split: CutSplitLayout; fits?: boolean };
+/** COP-384: the cut's note of where a split shot's captions sit, and why (`captionsFit` false: past 0.86 all the same). */
+export function splitCaptionsNote(shot: { n: number; captionsHow: "at" | "below" | "smaller"; captionBand: [number, number]; captionsFit?: boolean }): string;
+/** COP-384: caption screens shown while a split shot is on, in the shot's own band, else at EXTRA_SHOTS.captionsAt of the height. */
+export function captionsOverSplits<S extends { s: number; e: number }>(
+  screens: S[],
+  placed: readonly { layout: "full" | "split"; start: number; end: number; captionBand?: [number, number] }[],
+  speed?: number,
+): (S & { band?: [number, number] })[];
+/** COP-384: a placed shot on the film's 24 fps frames: its first frame and how many it covers. */
+export function shotFrames(shot: { start: number; end: number }): { first: number; frames: number };

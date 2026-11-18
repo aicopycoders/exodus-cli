@@ -1198,6 +1198,7 @@ function swipeLines(swipe, after, sheet = false) {
         ...(typeof draft.song?.sentence === "string" && draft.song.sentence.trim() ? [`Song: ${draft.song.sentence}`] : []),
         ...(draft.howClose ? [draft.howClose.sentence] : []),
         costLine(swipe),
+        ...(typeof swipe.takenNote === "string" && swipe.takenNote.trim() ? [swipe.takenNote] : []),
         "",
         sheet
             ? sheetStartLine(swipe)

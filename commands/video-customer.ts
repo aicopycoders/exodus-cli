@@ -175,6 +175,11 @@ export interface CustomerRun {
    * pack, printed as the server words it. Absent otherwise, and from older servers.
    */
   productNoPhoto?: { name: string; line: string };
+  /**
+   * COP-384: at that stop, the extra shots its board planned, each not dropped, by number, name, word, layout and price
+   * (null with none). Absent when it planned none, and from older servers.
+   */
+  extraShots?: { shots: Array<{ n: number; label: string; word: string; layout: "full" | "split"; usd: number | null }> };
 }
 
 /** P7 stage 4 fix (M2): the song step's notice, each sentence a heads-up; nothing for a value this CLI cannot read. */
@@ -307,6 +312,18 @@ export function noPhotoLines(run: { productNoPhoto?: { line: string } }): string
 /** "the script, the place and the voice". */
 export function listedWords(words: readonly string[]): string {
   return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** COP-384: the extra shots a One-take board planned, as the stop lists them, and how to drop one. */
+export function extraShotLines(run: Pick<CustomerRun, "extraShots">, id: string): string[] {
+  const shots = run.extraShots?.shots ?? [];
+  if (shots.length === 0) return [];
+  const layout = { full: "full screen", split: "split screen" } as const;
+  return [
+    `Extra shots:  ${shots.length} planned, cut in while the voice carries on.`,
+    ...shots.map((shot) => `  ${shot.n}. ${shot.label}, on "${shot.word}", ${layout[shot.layout]}${shot.usd !== null ? `, $${shot.usd.toFixed(2)}` : ""}`),
+    `Drop one:     exodus video drop-shot ${id} --shot <n>`,
+  ];
 }
 
 /**
@@ -847,6 +864,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), "voice"])} are waiting for your yes. No take is filmed before you approve.`,
           ...stopPictureText(pictures),
           ...noPhotoLines(run),
+          ...extraShotLines(run, id),
           `Read them:    exodus video storyboard ${id}`,
           `Approve them: exodus video approve ${id}`,
         ];
@@ -855,6 +873,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         return [
           "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
           ...noPhotoLines(run),
+          ...extraShotLines(run, id),
           `Read them:    exodus video storyboard ${id}`,
           `Approve them: exodus video approve ${id}`,
         ];

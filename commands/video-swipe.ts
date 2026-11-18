@@ -191,6 +191,11 @@ export interface SwipeView {
   scriptNote?: string;
   /** COP-273 P1c fix: a swipe of the member's own words, no ad; absent on every other swipe and from older servers. */
   ownWords?: boolean;
+  /**
+   * COP-436: the server's sentence on what this swipe's write took from the member's earlier write of the same ad (its
+   * samples, characters' pictures and picks, at no cost); absent when it took nothing, and from older servers.
+   */
+  takenNote?: string;
 }
 
 export interface SwipeListRow {
@@ -1874,6 +1879,8 @@ function swipeLines(swipe: SwipeView, after: "write" | "show", sheet = false): s
     // COP-301: the server's sentence on how close a Mirror or Close script came to their ad, printed as it comes.
     ...(draft.howClose ? [draft.howClose.sentence] : []),
     costLine(swipe),
+    // COP-436: what the write took from the earlier write of the same ad, at no cost, printed as the server says it.
+    ...(typeof swipe.takenNote === "string" && swipe.takenNote.trim() ? [swipe.takenNote] : []),
     "",
     sheet
       ? sheetStartLine(swipe)

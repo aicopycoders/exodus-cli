@@ -748,3 +748,50 @@ export function songCaptionScreens(
 export function songLitScreens<T extends { text: string; s: number; e: number; line?: string; words?: { text: string; start: number }[] }>(
   screens: readonly T[], look: SongCaptionLook | null,
 ): { text: string; s: number; e: number; line?: string }[];
+
+/** COP-383: a take's face box, as parts of its frame (video/lib/faceBox.ts). */
+export type CutFaceBox = { top: number; bottom: number; left: number; right: number };
+/** COP-383: the bands captions sit in, top and bottom as shares of the frame's height. */
+export const CAPTION_BANDS: { bottom: [number, number]; middle: [number, number]; top: [number, number] };
+/** COP-383: the room kept between a caption's drawn block and the face, as a share of the frame's height. */
+export const FACE_CLEAR_SHARE: number;
+/** COP-383: a take's face box as the pull wrote it on its scene, or null for anything else. */
+export function faceBoxOf(value: unknown): CutFaceBox | null;
+/** COP-383: where a face box lands once the picture is scaled up by `zoom`, `fromTop` of the gained height cut from the top. */
+export function zoomedFaceBox(box: CutFaceBox, zoom: number, fromTop: number): CutFaceBox;
+/** COP-383: where each take's face is on the film, by scene, under every framing its pieces play in. */
+export function filmFaces(timeline: unknown, faces: ReadonlyMap<number, CutFaceBox>): Map<number, CutFaceBox>;
+/** COP-383: a caption screen's drawn height as a share of the frame's, laid centred on `y` px (the bottom band's with none). */
+export function captionBlockShare(c: unknown, cap: unknown, W?: number, H?: number, capMaxShare?: number | null, y?: number): number;
+/** Landing review of COP-383: where a headline at the top is drawn, top to bottom, as shares of the frame's height. */
+export function headlineDrawnBand(H?: number): { top: number; bottom: number };
+/** COP-383: where a card in a box is drawn, top to bottom, as shares of the frame's height. */
+export function cardDrawnBand(box: readonly number[], H?: number): { top: number; bottom: number };
+/** COP-383: the band a take's captions sit in, clear of its face; null when no band is clear. */
+export function clearBand(
+  args: {
+    face: CutFaceBox;
+    /** The tallest screen's share, or that share as drawn in a given band. */
+    share: number | ((band: readonly [number, number]) => number);
+    base?: readonly [number, number];
+    headline?: boolean;
+    cards?: readonly { top: number; bottom: number }[];
+  },
+  H?: number,
+): [number, number] | null;
+/** COP-383: each take's caption screens in the nearest band clear of its face, or the bottom band with fewer words. */
+export function captionsOffFace<S extends { s: number; e: number }>(
+  args: {
+    screens: S[];
+    words: unknown[];
+    screensWith: (words: unknown[], cap: unknown) => S[];
+    cap: unknown;
+    timeline: unknown;
+    faces: ReadonlyMap<number, CutFaceBox>;
+    headline?: boolean;
+    capMaxShare?: number | null;
+    cards?: readonly { top: number; bottom: number; in: number; out: number }[];
+  },
+  W?: number,
+  H?: number,
+): { screens: (S & { band?: [number, number] })[]; notes: string[]; takes: { take: number; band: [number, number]; fewer: boolean }[] };

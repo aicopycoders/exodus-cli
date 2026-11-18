@@ -1,6 +1,6 @@
 ---
 name: exodus-video
-description: Make a video ad with Exodus from the terminal, a UGC talking-head video included. A competitor's ad swiped into a video for the member's brand comes here, with or without the word "exodus": their ad given as a video file or a video link with a video wanted or an ad in Exodus, or a video or a size asked for with an ad to swipe ("swipe this ad for my brand as a UGC video like theirs: their-ad.mp4, make it at 720p"). It runs `exodus video swipe`, as Swipe a video does on the dashboard; with no ad named ("find some ads to swipe for this product") it offers ads from the brand's swipe library (`exodus video swipe find`). Also here: a video run checked or waited on ("exodus, is my video run done", `exodus video status`), its pieces pulled ("pull the pieces", `exodus video pull`), a cut made or uploaded ("make the cut", "upload my cut"), and the script-first run of a saved video workflow (`exodus workflow run`, "exodus, make a video ad from this script"). Admins get every video command; beta testers with Video switched on get the swipe and their own runs' commands. Not this skill: a UGC script with no video ("write me a UGC script") is `ugc-ads`; the UGC video kit's sheet ("run the preproduction sheet") is `ugc-preproduction`; a timeline ad asked for without "exodus" is `timeline-ad-factory` ("exodus, make a skeleton timeline video" stays here); a link for copy is `swipe`; generic editing ("edit this mp4") without Exodus context is not Exodus.
+description: Make a video ad with Exodus from the terminal, a UGC talking-head video included. A competitor's ad swiped into a video for the member's brand comes here, with or without the word "exodus": their ad given as a video file or a video link with a video wanted or an ad in Exodus, or a video or a size asked for with an ad to swipe ("swipe this ad for my brand as a UGC video like theirs: their-ad.mp4, make it at 720p", "swipe this song ad as a Suno Pixar song"). It runs `exodus video swipe`, as Swipe a video does on the dashboard; with no ad named ("find some ads to swipe for this product") it offers ads from the brand's swipe library (`exodus video swipe find`). Also here: a video run checked or waited on ("exodus, is my video run done", `exodus video status`), its pieces pulled ("pull the pieces", `exodus video pull`), a cut made or uploaded ("make the cut", "upload my cut"), and the script-first run of a saved video workflow (`exodus workflow run`, "exodus, make a video ad from this script"). Admins get every video command; beta testers with Video switched on get the swipe and their own runs' commands. Not this skill: a UGC script with no video ("write me a UGC script") is `ugc-ads`; the UGC video kit's sheet ("run the preproduction sheet") is `ugc-preproduction`; a timeline ad asked for without "exodus" is `timeline-ad-factory` ("exodus, make a skeleton timeline video" stays here); a link for copy is `swipe`; generic editing ("edit this mp4") without Exodus context is not Exodus.
 ---
 
 # Video: make the pieces, cut the ad, hand it back
@@ -164,6 +164,9 @@ this account may start, the Golden Six first, one line each:
 | a skeleton timeline | `skeleton-timeline-template` | `pixar-3d-template` |
 | a song ad, a Suno song, a jingle | `pixar-song-template` | `pixar-3d-template` |
 | personification, the product or a body part talking | `personification-template` | none of its own: ask the member to pick one of the looks the server offers |
+
+The song row is for a song ad with no ad to swipe. A song ad the member names
+to swipe goes to "A song ad: the Suno Pixar Song" under "Swiping a video ad".
 
 A `--style` the server does not offer is refused with the list of looks it
 does offer, and nothing is spent.
@@ -349,7 +352,8 @@ pictures are, then ask: approve, redo a picture, change a voice, move someone
   before you approve; approve and another move are refused until they land.
 - Stop: `exodus workflow cancel <runId>`.
 
-**The song format** waits twice more. `exodus video song <runId>` prints the
+**The song format** (the template door's `pixar-song-template` only: a song
+swipe has neither of these stops) waits twice more. `exodus video song <runId>` prints the
 Song master and its sha256 once one is ready, and the video's page
 (`/video/runs/<runId>`) where it plays until it is approved: give that page
 (after the approval, `exodus video song <runId> --out <dir>` saves it as a
@@ -452,7 +456,8 @@ yourself, and the member says yes.
   cuts, it cuts again by itself (read `status`); on any other, pull, cut and
   upload again.
 
-**On the song format**, tell the member this before they approve: "The song
+**On the song format** (the template door's; a song swipe reads its sheet's
+licence row instead), tell the member this before they approve: "The song
 made here is for review. Before this video runs as a paid ad, make the same
 lyrics and style again in the Suno app while on a Pro or Premier plan, download
 it there and use that file: Suno's terms allow commercial use only of songs made
@@ -481,7 +486,9 @@ one of our formats (`--adapt`, "From one sentence to a film") keeps both.
 
 By default a swipe is one round: read the ad, one question with the plan, and
 on its yes write and make each video. When the member names no ad, the
-options come first (step 0); "Step by step" asks before each paid step.
+options come first (step 0); "Step by step" asks before each paid step. A
+song from the member's own lines with no ad has its own door ("A song ad",
+below).
 
 **How it talks.** Ten rules; the screens below are their templates (the
 question's text, options and money line as written; the message in your words).
@@ -565,6 +572,14 @@ figures or "no printed price" in its label, not only in its description:
 | Step by step; the read past its limit or again (step 1); a start on its own (a refused start, step 5's check) | `Read the ad · no printed price`, `Read the rest · <what is left> · no printed price`, `Read it again · no printed price`, `Make the template · no printed price`, `Write it · no printed price`, `Start it · no printed price` | What the line without its yes printed that it buys, and who pays: each breakdown on the team's keys, each template and write on your model key. A write with people is the sheet's "Write it" row; a start of a kind with a saved sheet, the "Film it?" row. |
 | Mining (step 0) | `Mine them · no printed price` | Every active competitor on the watchlist, up to 50 in one run, on your Scrape Creators key. It starts at once. |
 | The bot again (step 5) | `Call the bot again · no printed price` | One more text swipe call, on your Genesis and model keys. |
+| The song's price | `Make it · about $…, at most $…` | <size>, what it films as the price's head counts it (<n> clips, or about <a>, up to <m> video calls), each filmed at most twice: the song and the pictures before the storyboard stop, the filming after its yes. The at most is what the run is held to without a press. … Not in the price: text calls on your model key, and Exodus's checks, said apart. |
+| The song's first part (an admin) | `Make the first part · about $…, at most $…` | The song, the pictures and the clips of its first <s> s; the rest after a second yes (at most $…, priced again at that stop). The video in all never costs more than the whole video's at most. Exodus's checks, said apart. |
+| The song's roads | `Their song, your words · no printed price`, `Your own lines · no printed price` | 1 script now, on your model key; the video after your yes on its saved sheet, on your Kie and ElevenLabs keys. |
+| The song's lyric | `Write the lyric · about $…, at most $…` | Your lines written as a song, on your model key. It is sung only once you pick it. Nothing is filmed. |
+| The song's samples | `Hear <k> samples · about $…, at most $…` | The song's opening in <k> sounds, four takes a sound in two pairs (two more for a sound when all its takes but at most one were heard as another kind of music), its opening reworded for that kind of music, on your Kie key (one text call on your model key when the sounds are chosen for you); the listens and the rewording on Exodus's key, said apart. Nothing is filmed. |
+| The song's characters | `Draw the characters · about $…, at most $…` | One to three main characters, ten pictures each, on your Kie key and one text call on your model key. Nothing is filmed. |
+| The first part's stop | `Make the rest · about $…, at most $…`, `Redo clip <n> · no printed price` | The rest of the video, held to the at most the stop printed; the video in all never costs more than the whole video's at most. A clip's redo is paid on its own, outside the price (none on a video filmed in calls). |
+| A song's stop | `New video · about $…, at most $…` | The whole ad again from the same swipe, at its own price; what was paid stays paid. |
 
 **What a yes is, at every question on this path**: the sheet, "Film it?", a
 stop's "What now?", Their look, more people, and the storyboard stop and the
@@ -717,7 +732,9 @@ a newly mined ad can show "no transcript yet" for a while.
 
 First, free: `exodus video swipe products`. When it answers "This brand has
 no products yet. Add one in the dashboard first.", tell the member and stop
-before any read.
+before any read. A member who hands over a breakdown id has the read done:
+skip the breakdown, and go on from `exodus video swipe status <breakdownId> --full`
+and the template below (a template made before costs nothing, and says so).
 
 **Reading the ad, without asking.** Read each ad the member named before the
 sheet, and only those. Say so in one line, in words like: "I read the ad
@@ -869,10 +886,12 @@ The rows:
   dashboard shows, and the line says what is not in it (what the swipe paid
   for before the run). When it prints none, no cost is recorded yet: say so,
   and never call the run free.
-- **The saved sheet** (One-take UGC today) comes after the write, with its
-  own yes (step 4). This sheet's yes covers their write and its people only,
-  and the spending option says so, with the people's part only when the dry
-  write printed their price (People, below).
+- **Suno Pixar Song** (`--kind pixar-song`): their song ad, sung for the
+  brand, only when asked ("A song ad: the Suno Pixar Song" below says when).
+- **The saved sheet** (One-take UGC and the Suno Pixar Song today) comes after
+  the write, with its own yes (step 4). This sheet's yes covers their write and
+  its people only, and the spending option says so, with the people's part
+  only when the dry write printed their price (People, below).
 - **People** (a kind whose write can make them: One-take UGC, when the server
   offers people to pick from). Before you send the sheet, run that video's
   write line (step 4) without `--yes`: it writes nothing and pays for nothing.
@@ -937,7 +956,8 @@ The rows:
   Music is made on the member's own ElevenLabs key. Music is off unless the
   member asked for it; the plan's line says which. Caption style, speed, jump
   cuts and the end card come with a later update; One-take UGC's saved sheet
-  already sets them all, its ending among them (step 4).
+  already sets them all, its ending and its music among them (step 4): its
+  music is the sheet's `music` row.
 - **How many.** Ads × personas, with none counting as one persona and the
   characters counting as one today. Show the multiplication, as in "4 videos
   = 2 ads × 2 personas".
@@ -1005,7 +1025,8 @@ Its "Change something" asks which part first, as one question (rule 3) with
 does, four rows a call. "How it is finished" changes only how the app cuts
 the takes once they are filmed, `cardPlace` (in "Captions and text card")
 where the cut puts the text card, and `ending` (in "Ending") how the video
-ends: all free to set, the price's figures the same. Set one only on the member's word. As `sheet` prints them:
+ends: all free to set, the price's figures the same, but `music`, which the
+price names. Set one only on the member's word. As `sheet` prints them:
 
 - `speed`: how fast the video plays, from `1.0` (as filmed) to `1.25`.
 - `pauses`: how much silence between words is cut: `trim`, `keep`, or the
@@ -1028,6 +1049,15 @@ ends: all free to set, the price's figures the same. Set one only on the member'
   can make another than the one the sheet names; `none` turns it off.
 - `ultraRealism`: `phone`, a phone's look (30 frames a second, a light lens
   smudge, phone grain), or `off`.
+- `music`: instrumental music made for this video under the voice, `on`, or
+  `off`. It is `off` with no pick and never on unless the member picks it;
+  when their ad has music, `on` is marked recommended. With `on`, the
+  storyboard writes a short brief from the script (one more text call on the
+  member's model key), and the cut has ElevenLabs make the music on the
+  member's ElevenLabs key, as long as the takes and 2 seconds more (a line of
+  the price, by the minute), quiet under the voice and a little quieter while
+  it speaks. If it cannot be made, the video is finished with no music and
+  says so.
 - `cardPlace`: over the chest while the first line is said (`chest`), a
   headline at the top for the opening (`top`), or one for the whole video
   (`top-film`), for which every take is asked for room above the head; when
@@ -1045,6 +1075,14 @@ ends: all free to set, the price's figures the same. Set one only on the member'
   seconds past the last word), or the member's own short words over the last
   shot. Words we write make no claim: an offer such as "53% OFF" is only ever
   the member's own words.
+
+The captions keep clear of the person's face, with nothing to set: when the
+cut draws captions, the video step finds where the face is in each take
+(one look at three frames, a line of the price), and the cut puts
+each take's captions in the place `captionPlace` asks for, or the nearest one
+clear of the face; never under a headline at the top. When no place is clear,
+they sit low with fewer words at a time. A take whose face was not found keeps
+its captions where `captionPlace` says.
 
 With several videos, the label says how many and the description each one's
 price as printed, never their sum. Each start's `--max-usd`, and each write's
@@ -1067,8 +1105,9 @@ it): a start with no pick films that value. With no pick, the "How it is
 finished" rows and `cardPlace` print `from the kind of ad:` and a start cuts
 them so. A value one of them recommends is used only when picked, unless it is
 the row's value already (`cardPlace`'s `top` while `hook` is on): `voiceSound`
-names it in its reason ("pick it to use it"); `cardPlace` marks it only as
-`recommended` in `--json`. "Let it run" here, said in reply to these
+names it in its reason ("pick it to use it"); `cardPlace` and `music` mark it
+only as `recommended` in `--json` (`music` when their ad has music, which its
+reason says). "Let it run" here, said in reply to these
 saved sheets and their prices, is the yes to the starts with the sheets as
 they stand: set nothing (a size a money limit needs is set before the sheets
 are shown, below), since a start with no pick films each row's value as the
@@ -1505,6 +1544,562 @@ call. Tell the member what went wrong, and ask whether to fix it and go on,
 or to make the rest as "On the yes" says, with the persona and the mechanism
 noted only.
 
+### A song ad: the Suno Pixar Song
+
+The swipe can make a competitor's song ad (a story one voice sings over acted,
+animated pictures) as a Suno Pixar Song for the brand: the brand's lines are
+sung, in the Pixar look. Its key is `pixar-song`. It has a saved sheet, so
+steps 3 and 4 hold as they do for One-take UGC, in their forms ("How it
+talks"), with what this part adds. Only the forms carry over: One-take's
+own rows and stops (the person and the voice, how it is filmed, its caption
+looks and card place, the ending, the pauses, the hook and take 1's opening
+pick with `--opening`, the hard words) are not on this kind's sheet or run; a
+song has its own caption row, `songCaptions`. Offer only the rows its sheet
+prints and the stops this part names. This road has no song listen stop and no
+song master command: `exodus video song`, `song approve` and the provider
+quote are the template door's. The run checks the song by itself. A member
+meets it in this order: the read, step 3's "Make it?" and the write, then
+step 4's "Film it?" with the video and what can be bought before it, the run
+waited on in the background, and each stop's "What now?". "After a refusal"
+below says what to do when a step is refused.
+
+**Which door, by the member's own words.** An ad named to swipe (a file, a
+link, an ad in Exodus, or a pick from step 0) with song, sung, Suno or jingle:
+this part, open to every member with Video. A song from the member's own
+lines and no ad ("make a Suno song of these lines"): a swipe of their own
+words, free, first without `--yes` (it only checks the lines), then with it,
+which writes the swipe and prints its id:
+`exodus video swipe new --kind pixar-song --product <id> --script lines.txt --yes`
+(one plain line for each sung line). It has no read, so nothing on its sheet
+is "from their ad"; from the saved sheet on, this part holds as for road 2
+below. The dashboard does not open such a swipe yet: set and start it here.
+The song's own choices (its saved sheet, the asks below and the price before
+the start) may not be switched on for this account yet. Then `swipe new`
+writes nothing and answers so in one sentence, which may name the script
+door that sings the lines with no sheet: say that sentence, offer only the
+way it names, and write nothing else.
+A song ad with no ad named and no lines ("make me a Suno song ad for my
+product"): the template door's `pixar-song-template` ("From one sentence to a
+film"), which needs Templates switched on. When the CLI refuses it, say so
+and offer this part with an ad from their swipe library (step 0). Never send
+a member on to a door the CLI refused them. An ad named and no song said: the
+swipe writes the kind the template read. Never make a song they did not ask
+for.
+
+**The read hears a song.** When the song choices are open, the read of a song
+ad also listens to it, on the team's keys. The saved sheet can then give their
+song's kind of music and who sings it, and on a swipe of their lines its shape
+and its parts, each marked "from their ad". The template can still match a
+sung ad to another kind, such as Custom. When the member said song, write it
+with `--kind pixar-song` whatever the template read; the plan's kind says so in
+a few words ("a Suno Pixar Song; the read heard <kind>"). An ad that can't be
+made in the Pixar look (a phone video of someone talking to the camera) is
+refused before the write is paid, with the kinds it can be made as: tell the
+member, and ask for another ad, a sung or an animated one.
+
+**Two roads**, the sheet's two spending options (the table's "The song's
+roads"). The CLI prints no price for a write; a write is paid on the member's
+model key, also when it is refused.
+
+1. **Their song, the brand's words** (`--mode whole-ad`, how close 1, 2 or
+   3; at 4 or 5 the lyric no longer keeps their song's shape). When their
+   lines read as a song, the lyric keeps their number of lines (it may leave
+   out a few, and says so), each line near its length, and the rhymes; the
+   write's `Song:` line says how close it came, as an estimate.
+   A long story song for a product with few facts in its description is
+   often refused for its claims, and the refusal names the lines.
+2. **The member's own lines, made the way their ad is made** (`--mode
+   their-format --script <file>`): one plain line for each sung line, no
+   speaker names and no `CAST:` block. The write keeps every word, writes
+   only the direction, and checks no claim; it does refuse a line that names
+   their ad's brand, a price or a code from it. It is quick, and a short song
+   makes a cheaper video. Before the write, read each line against the
+   product's facts as step 5's check does, and show the member any line that
+   needs a fact. Their lines are sung as they wrote them, unless they buy the
+   lyric below.
+
+Recommend road 1 when the member wants their ad's song, and road 2 when they
+bring lines or want a cheap first try (about 8 lines). When road 1 is refused
+for its claims, the ways on are the ones its sentence ends with ("A refusal
+for claims", step 4): never road 2 around it, with the refused lines or lines
+you wrote ("Never write around a refusal yourself").
+
+**On the sheet of step 3.** Step 3's "Make it?", its slots filled for a song:
+the kind is "a Suno Pixar Song" (and "the read heard <kind>" when it heard
+another), Script is the road in words (their song, your words, how close; or
+your own lines, word for word), Stop is always at the storyboard, before the
+paid clips, and Music is "the song is the voice and the music", never a bed.
+Its options: 1. the road you recommend (the table's "The song's roads") 2. the
+other road, only when the member has lines 3. Change something 4. Stop.
+Persona and mechanism stay noted only, and step 5 never applies: its bot
+writes lines with speaker names, and this kind is sung by one voice. The
+characters are the tool's; characters to pick from are an ask on the saved
+sheet, after the write. On the yes, the write:
+
+- Road 1: `exodus video swipe write <breakdownId> --product <id> --mode whole-ad --closeness <n> --kind pixar-song --yes`
+- Road 2: `exodus video swipe write <breakdownId> --product <id> --mode their-format --script lines.txt --kind pixar-song --yes`
+
+When it is done, one line: the lyric's opening and what it cost, as printed
+("show script" gives the whole lyric, the `Song:` line when there is one, and
+what it left out). A refusal is a stop that needs the member (step 4), with
+the ways on its sentence names. Each write is a swipe of its own: the sheet,
+the price and the start below are those of the swipe id the latest write
+printed.
+
+**The saved sheet, read once.** Free: `exodus video swipe sheet <swipeId>`.
+Its rows: under Song, `family` (the kind of music), `sound` (that kind's
+sounds, each "name, era"), `singer` (the voice: man or woman), `songSample` (a
+sample to sing the song from), `songTakes` (pairs of takes to choose from) and
+`licence`; on a swipe of their song, `songShape` (its shape, shown only) and
+`songParts` (its parts by line, which the song is tagged by); on a swipe of
+the member's own lines, `lyricShape` and `lyric`. Under Size, `videoSize`
+(480p, the usual size; 720p is sharper at a higher price) and
+`songPart` (the whole song at once, or its first part first: named to an admin
+only, as below). Then `notes`. Under Look, `filmStyle` (the film style the
+pictures and the clips are drawn in): `soft-3d-family-film` (Soft 3D family
+film, today's look), recommended, until the member picks another from its
+list, each by our name.
+Under Animation, `expression`, `movement` and `camera`, each a level of 1 to
+5, and `light`, 0 to 5: each is 3, recommended, until the member picks one,
+and `<row>=` takes it back to 3. Under the characters' pictures, `cast1`, and `cast2`
+and `cast3` once the ask for characters finds more. The last section is Finish. Under Finish,
+`songCaptions` (the captions on the sung words: the sung word lit, three
+words at a time; line by line; one big word at a time; or none) and
+`songEditing` (off: hard cuts only; light: a fade to black into the end
+card), each recommended until the member picks one. `songSample` and
+`cast1` show from the start, each with the free way to its ask's price. When
+it answers that this kind has no sheet, the song choices are not open here
+yet: say so, say the CLI then prints no price before the start, offer none of
+the asks below, and do not start the video unasked. "show sheet" prints these
+rows as `swipe-sheet.md` lays out a song's saved sheet.
+
+Never paste the list of sounds to the member. Before "Film it?", make
+your recommendations: each goes in its question's text in a few words, and
+its reason on "why" (rule 7). Set the kind of music, the sound and the singer
+only on the member's word (a press or a typed answer). The member can change
+any row in their answer:
+
+1. The kind of music. A kind of music the row marks "from their ad" is their
+   song's: keep it. One marked "from the kind of ad" is only where the kind
+   starts, not their ad's: pick the kind of music the product's buyer listens
+   to, and the singer that fits, as your recommendation in the sound question
+   below, and set them on the member's word, in one line:
+   `exodus video swipe sheet set <swipeId> family=<code> singer=<man|woman>`,
+   with `<code>` the kind of music's code as the sheet prints it (for Pop,
+   `G1` there). Name your pick in the question's text, and why on "why".
+   The singer moves the default sound to one that voice sings, and the row
+   says why.
+2. The sound, the member's own choice. Recommend a sound; one or two others
+   of the same kind, each with one reason, are on "why". Prefer a sound whose
+   name is one clear kind, such as "Storytelling Boom Bap": in tests a sound
+   that blends two kinds ("pop rap") came out as another kind of music every
+   time, and a plain one held. When the member picks a blend, say so. Set
+   their pick with `exodus video swipe sheet set <swipeId> sound=<code>`. A
+   sound the singer does not sing is refused in one sentence that names the
+   way: say it. A start is refused while the sound is still the kind's own
+   that nobody chose, so that the member chooses it. A sound counts as chosen
+   when the row says it is from their ad, when a picked sample set it, or when
+   the member set it: then name it in "Film it?"'s text and ask nothing more
+   about it. Otherwise ask the sound question below before any video option.
+3. The song's shape. Say the shape the sheet shows (`songShape`) by its
+   name. On the member's own lines, `lyricShape` is the shape the lyric is
+   written in: their ad's when the row says so, else the lyric ask picks one.
+   Name it, and set another only on the member's word, before the lyric ask:
+   `exodus video swipe sheet set <swipeId> lyricShape=<id>`. Leave `songParts`
+   as the read set it unless the member asks to change it.
+4. The rest stay as the sheet recommends: the song takes (set `songTakes`
+   only when the member asks; more pairs give more takes to keep one in the
+   kind picked, for a little more), and the four animation rows at 3 (set
+   one only when the member asks for bigger or smaller faces, movement or
+   camera, or stronger or softer shadows: a level above or below 3, such as
+   `exodus video swipe sheet set <swipeId> movement=4`). The size row holds
+   480p, the usual size; 720p is sharper at a higher price (the price says
+   both). Set it only on the member's word:
+   `exodus video swipe sheet set <swipeId> videoSize=720p`. The Finish rows
+   stay as recommended unless the member asks (set `songCaptions` or
+   `songEditing` like any row).
+5. The licence row: the song is for review, and before the video runs as a
+   paid ad they make the song again in their own paid Suno account.
+6. The sung words, on a swipe of the member's own lines only. A start is
+   refused while their lines are spoken lines: the `lyric` row is not the
+   member's (no `lyric=yours`, no `lyric=song`), no lyric was made from them,
+   and no line of theirs is a section tag alone, such as "[Chorus]". The
+   price says it ("The start would be refused now: Your lines are spoken
+   lines"), once the sound is chosen; while it names the sound instead, the
+   sheet shows the same three facts. Only then settle this before the sound
+   and the video: the lyric ask below, or, on the member's word, their lines
+   sung as written: `exodus video swipe sheet set <swipeId> lyric=yours`.
+7. The look. `filmStyle` stays as the sheet recommends, today's look, unless
+   the member asks for another. Never paste the list of looks into a
+   question; "show sheet" lists them. When the member asks: name a few from
+   the start of the row's list (it puts the ones up front first), by the
+   sheet's names, and say there are more on "show sheet". Recommend one only
+   for a reason you can say in a few words, such as the product's buyer or
+   how their ad looked in the read. Set it only on the member's word:
+   `exodus video swipe sheet set <swipeId> filmStyle=<id>`, with `<id>` the
+   look's id as the sheet prints it (for Boxy geometric 3D,
+   `boxy-geometric-3d` there); `filmStyle=` takes it back to today's look.
+   A look changes how the people, the places and the product's sheet are
+   drawn, in the pictures and the clips of a video filmed in calls; a video
+   filmed one clip a scene keeps today's look, as the row's "read by" line
+   says. It never changes who a character is: a character picked from
+   pictures stays that character. A set of it is free, and the price stays
+   the same. Characters drawn to pick from keep the look they were drawn in:
+   when another look is picked after, the `cast1` row says so, and only a
+   new characters ask, paid on its own yes, draws new pictures in it (it
+   finds the characters again, so they may differ); so settle the look
+   before the characters ask. A look the row does not offer is refused, and
+   nothing is saved: its sentence lists the ids the row takes. Never say a
+   look is a film's, a studio's or a character's, and never name one for it,
+   also when the member names a film ("make it look like <a film>"): say the
+   looks the sheet offers by their names, and let the member choose.
+
+The price says before the yes when the start would be refused ("The start
+would be refused now:", each with the CLI's command after it). Never offer
+the video while the price prints "The start would be refused now:": settle
+what it names first.
+
+After each set, say its first line: a set can change or clear a row it did not
+name (a new kind of music clears a sound picked), and it says so.
+
+**The price, then one question.** Free: `exodus video swipe sheet price
+<swipeId>`, read after your picks. Its spending option is the price at the
+sheet's rows, in the CLI's figures (the table's "The song's price"; each size's
+price only when they ask), the money line in its question's text; the question
+is "Film it?" below. Its description ends with what the price leaves out,
+shortened, as the table's row says. "why" gives the rest: each
+line of the price, with the keys that pay it and whether it is paid before the
+storyboard or after its yes; the price follows the song's length (more lines,
+a longer song, more clips). On a video filmed in calls the run draws, before
+the storyboard stop, a sheet for each person a video call can send and each
+place's views (drawn again with the people its plan puts in the background),
+and no scene picture: the price's sheets and places lines say how many and
+what they can cost. The at most is what the run is held to without a
+press: the start carries it and is refused if the price has passed it, and the
+run films each clip, or each video call, at most twice on its own. A Redo the
+member presses is paid on its own, outside it, only on a video not filmed in
+calls: a video filmed in calls has none, and its price's at most line names no
+Redo. What was bought before the start is not in it:
+the price says what that cost, apart. With the first part picked, the price is
+the first part's. Who pays, on "why" (the sheet's option named the keys): the
+song, the pictures and the clips on the member's own Kie key, the song's takes
+heard on their ElevenLabs key. The checks and the listens to the song's takes
+are paid by Exodus and are not in the price: the price prints them apart, as
+one "about" figure with no at most, and no yes carries them. The text calls
+on their model key are not in the price and have no number. Read the price
+again after any set.
+
+**What can be bought before the start.** For a sung video this replaces step
+4's rule on people and voices: these are offered once each, unasked, when
+they are worth it to this member, and never bought unasked. `sheet people`
+and `sheet voices` are not this kind's: its sheet has no person or voice row.
+Three asks are each paid on their own yes, and none is in the video's price;
+the fourth, the first part, is a row of the sheet. Each ask is one row of the
+table and one option of "Film it?": its label is the price its line without
+`--yes` printed. That line is free, sends nothing, and prints the price, about
+and at most, and the line that buys it: read it before you offer the ask.
+Buy one only on the member's yes to it, with `--yes --max-usd <n>` and the at
+most it printed. Give none of them `--wait`: they can take many minutes, so
+read the sheet again later.
+
+1. **The lyric** (a swipe of the member's own lines only), worth it when the
+   start would be refused for their spoken lines (item 6 above; the table's
+   "The song's lyric"): their lines
+   written as one, on the member's model key. Free: `exodus video swipe sheet
+   lyric <swipeId>`. On their yes:
+   `exodus video swipe sheet lyric <swipeId> --yes --max-usd <n>`. It waits
+   for the lyric, which can take a few minutes (run it in the background), and
+   prints it, its parts and what it left out of their lines: give its opening,
+   and the rest on "show script". If the command is cut off or says it does
+   not know whether the lyric was written, read the sheet before anything
+   else and never run the paid line again: a second yes buys a second lyric. When the `lyric` row
+   says the lyric is being written now, its ask is still running: buy
+   nothing, wait, read the sheet again later, and ask the member nothing
+   twice. It is sung only after
+   `exodus video swipe sheet set <swipeId> lyric=song`, which also sets the
+   song's parts (the ones the member set on that lyric before, else the
+   lyric's own); `lyric=yours` brings their own lines back with the parts
+   they had, and keeps the parts set on the lyric for it. The set says when
+   it set the parts, and "cleared" only when it cleared them. Samples and
+   characters are made from the lines that will be sung, so on the member's
+   own lines the sung words are settled first: the lyric set as the script, or
+   their lines kept as they are. Offer samples and characters only after that.
+2. **Samples of the song**, worth it when the member has not heard the sound,
+   picked one that blends two kinds, or can't choose between two or three
+   (the table's "The song's samples"):
+   the song's opening sung in up to four sounds before the whole song is
+   paid, four takes a sound in two pairs, and a third pair for a sound when
+   all its takes but at most one were heard as another kind of music; with
+   each sound's opening reworded the way its kind of music sings it, the same
+   things in the same order; on the member's Kie key, with one text call on
+   their model key when the sounds are chosen for them; the listens are on
+   Exodus's key. The rewording's text calls are on Exodus's key too, said
+   apart in the price. The price's lines are the server's: read them, never
+   say them another way. When the samples are made, their sentence says any
+   sound whose opening was sung as written, and any takes the listener could
+   not check (hear those yourself): say it. Free: `exodus video swipe sheet samples <swipeId> --count 4` (four
+   sounds chosen for them), or with `--sounds` and the codes of the one to
+   four sounds they picked. On their yes, the same line with `--yes --max-usd <n>`
+   and the at most it printed:
+   `exodus video swipe sheet samples <swipeId> --count 4 --yes --max-usd <n>`, or
+   `exodus video swipe sheet samples <swipeId> --sounds <code,code> --yes --max-usd <n>`
+   for the sounds they picked (never swap one for the other: they buy
+   different samples). The yes starts the ask and ends; read the sheet again
+   later: the `songSample` row then lists each take (four a sound, numbered
+   across its pairs) and what was heard in it, and the sheet ends with the
+   swipe's page, where each take plays under Song: give the member that page.
+   A swipe of the member's own lines has no page yet: there the takes are
+   heard only from the sheet's list. A pick,
+   `exodus video swipe sheet set <swipeId> songSample=<n>`, also sets the kind
+   of music, the sound and the singer to the take's, and the whole song is
+   sung in its style.
+3. **Characters to pick from**, worth it when how the main characters look
+   matters to the member (the table's "The song's characters"): the ask finds
+   the song's one to three main characters in its lines and draws ten pictures
+   of each; on the member's Kie key, with one text call on their model key.
+   Free: `exodus video swipe sheet cast <swipeId>`. On their yes:
+   `exodus video swipe sheet cast <swipeId> --yes --max-usd <n>`. The yes
+   starts the ask and ends; read the sheet again later: the rows `cast1` to
+   `cast3` then name each character and list its pictures by number, and the
+   sheet ends with the swipe's page, where the pictures are seen under
+   Characters: give the member that page (a swipe of the member's own lines
+   has none yet). A pick,
+   `exodus video swipe sheet set <swipeId> cast1=<n>` (`cast2`, `cast3` for
+   the others): the video draws that character from that picture, never as a
+   new figure.
+4. **The first part**, a row and not an ask: a cheaper first look at the
+   song's opening before the whole video is filmed. Only an admin can start
+   one today: offer it only when `exodus brand list` prints `Role: admin` for
+   this key, and to anyone else do not mention it. Offer it in words, once,
+   with what it is for, in the question's "Also" line. Only when the member
+   says they want it, set
+   `exodus video swipe sheet set <swipeId> songPart=first` and read the price
+   again: it is then the first part's, and it says the whole video's too, the
+   first yes's checks apart, and that this video in all never costs more than
+   the whole video's at most.
+   Show the member those figures, the first part's about and at most and the
+   whole video's, and ask the one yes again: a reply such as "yes, with the
+   first part" asks for the first part and is never the yes for the start.
+   Its option is then the table's "The song's first part". The run then stops
+   after the first part for the rest's price and a second yes.
+   When the member does not go on with it, set `songPart=whole` before any
+   start.
+
+**One message, then one answer.** Ask nothing before this message but what
+the write needed. It is step 4's "Film it?" for this kind, sent as one reply,
+its message as text first (rule 2):
+
+> Song written: <n> lines, <their song, your words | your own lines>. For review only: a paid ad needs the song made again in your own paid Suno account. Say "show sheet", "show script" or "why"
+
+Its question is step 4's "Film it?" (the same header), its text:
+
+> It opens: "<the first sung line>". Music: <kind of music>, <sound>, sung by a <man | woman> · Size <size> · <the whole song | the first part first> (the part only to an admin)
+> Also: <each other ask worth it, or the first part to an admin, by name with its label's price> (only when there is one)
+> Spent so far: $<X> on the team's keys for reading their ad, $<W> on yours (the write and each ask, as printed; the text calls on your model key: not printed). Film it?
+
+Its options: 1. the video, as the table's "The song's price" row (with the first part set, "The song's first part") 2. the ask most worth it now, as its table row, or "Show me the lyric and the sheet" when none is 3. Change something: the kind of music, the sound, the singer, the size, the look 4. Stop.
+
+A song of the member's own lines with no ad (`swipe new`) had no read of an
+ad: its money line leaves out "on the team's keys for reading their ad" and
+starts "Spent so far: $<W> on yours".
+
+The asks go in the order of the list above, one an option. On the member's
+own lines the start would be refused for (item 6 above), the sung words come
+first, before the video is offered: the same form with no video
+option, where the lyric is that option (and, to an
+admin, the first part goes in the "Also" line), its other options "Sing my
+lines as written · free" (the `lyric=yours` set above, on that press only),
+Change something and Stop; samples, characters and the video come in
+a later "Film it?", once the sung words are settled. When the start would not
+be refused for their lines, offer no lyric: their lines are the sung words,
+and samples and characters go in this one. Then the sound, when it is not
+chosen yet (item 2 above): the same form with no video option, its text the
+kind of music and the sound you recommend in a few words, the reason on
+"why", and the money line last; its options "Use <the sound> · free" (the
+sets above, on that press only; "(Recommended)" only for a real reason), the
+samples ask as its table row, Change something (the member names a kind of
+music or a sound: set it on that word, then read the price again) and Stop.
+A sample picked sets the sound; then "Film it?". Then wait. The yes is as "What a yes is" says.
+A press of an ask, or a typed yes to it, buys that ask alone. An ask named only in the "Also" line is no option: when the member
+types it, ask it as its own question, its option with the price it printed,
+and "Stop". To "yes to all" or "all of them", list the asks you offered with
+their prices once more and ask which. A reply that only changes a row is not
+the yes: set it, say its first line, read the price again and ask again.
+After an ask is bought and its pick set, read the price again, say what
+changed and the new price in one line, and send "Film it?" again, with the
+next ask worth it as its option. On a press of the video, or a typed yes to
+it, run `exodus video swipe start <swipeId> --yes --max-usd <n>` with its
+label's at most. Never `--one-shot`: that run does not stop at the
+storyboard, so a heads-up that the song came out as another kind of music
+reaches the member only after the clips are paid, and it delivers its own cut
+with no look first; and a first part in one go is refused. Never `--music`.
+Give the member the `Watch it:` link in one line, at once.
+
+**Let it run.** When the member lets it run, keep each row the sheet
+recommends. The sound is still theirs to choose, and so are the sung words.
+When the sound is not chosen yet, ask the sound question first, with the
+kind of music you recommend for the buyer in it and no samples option; on the
+member's own lines the start would be refused for, ask the sung words before
+it, as above. Film the whole
+song and stop at the storyboard. List no paid ask and buy none: "just do it"
+means the same. Send "Film it?" once, its only spending option the video, and
+ask its yes: letting it run never skips that yes, never adds `--one-shot` and
+never picks the first part.
+
+**The wait.** After the start, wait on the run in the background with
+`exodus video wait <runId>` and say one line: "Making the song and the
+storyboard · I'll tell you when it needs you." When the wait ends, read
+`exodus video status <runId>` once and do what it prints. Never promise the
+member a listen of the song before its pictures.
+
+**The run's stops.** A stop that needs the member is step 4's "What now?" (the
+same header): its message "Stopped for you." with each cost line the step
+printed and "why"; its question's text what happened, what is still good, and
+the money line; its options the free look first, a free way on marked "free",
+and the paid way on with its table row's label. The song's ways on:
+
+- **A stop at the plan.** The run first plans one scene for each sung line.
+  When it can't (each sung line its own scene, in order; no more new
+  characters than the song has lines; every character picked from pictures
+  kept), it stops there, before any clip, and status says why. Say
+  it. The way on is a new video from the same swipe, paid again (the table's
+  "A song's stop"); what was picked on the sheet stays. When it asks for more
+  sung lines, that is a new write.
+- **The song** is made and checked by the run itself before the storyboard
+  stop (after the
+  yes at the storyboard when the storyboard is held for a review first). A
+  take that sings every line is kept; else the take that sang the most, when
+  it sang at least 85% of the lines, and status names the lines it missed:
+  say them. Under that the run stops at its song and no clip is made; the
+  song, and any sheet or place drawn by then, is paid.
+  Say what status says. The way on is a new video from the same swipe:
+  another sound or more pairs, each set only on the member's word (free sets), the price read again, and a new
+  "Film it?" whose video option carries its new at most
+  (`exodus video swipe show <swipeId>` says whether that start needs `--again`).
+- **The storyboard**, its pictures drawn: stop 3. When status prints a
+  heads-up that the song came out as another kind of music than the sheet's,
+  or the lines a kept take missed (on a member's key, status and their
+  `exodus video storyboard` print it as "Heads-up:"), read the member its
+  sentence first. On a
+  video filmed in calls no scene picture is drawn: status names the pictures
+  each call is filmed from (the people's sheets, the places' views) and the
+  video's page where they are seen, the member's `exodus video storyboard`
+  shows the scenes' lines, and neither offers a redo: give the member that
+  page. Approve buys the clips, or the video
+  calls (with the first
+  part, its clips only), the expensive part, inside the price they said yes
+  to; stopping leaves the song and the pictures paid; a new video with another
+  sound is paid again. Once the song is made, its lines can no longer change.
+  On a storyboard held for a review the song is not made yet: say it comes
+  after this yes, and so does any heads-up about it. A video draws at most the
+  places its price covered, fewer for a short lyric, the ones in the most
+  lines first; a place past them gets no picture of its own, and its sentence
+  says so: say it.
+- **The first part's stop** (with `songPart=first`). After the storyboard's
+  yes the run films the first part and stops. `exodus video status <runId>`
+  then prints its clips, the video's page, whether a rough cut with the song
+  under them was made, the rest's price (about and at most) and the line that
+  makes the rest. The dashboard does not show that rough cut or this stop yet:
+  never tell the member the page plays it. Its "What now?": the text says the
+  first part is made, the rest's about and at most as the stop printed them,
+  and that this video in all never costs more than the whole video's at most
+  the price showed before the start; its options: 1. "Look at the first part"
+  (the page the stop printed, free) 2. "Not now · free" (it buys nothing more, and the video waits)
+  3. the rest, as the table's "The first part's stop" row 4. a clip's redo,
+  as that row, when the member names a clip and the stop printed a
+  `Redo a clip:` line. On their yes to the rest run
+  `exodus video approve <runId> --max-usd <n>` with the at most the stop
+  printed: the rest is refused if it now costs more. A clip redo at this stop
+  is a paid press the CLI prints no price for: say so, and wait for their yes.
+  A video filmed in calls prints no redo line and gets no option 4: its stop
+  says a clip can't be filmed again on its own; when a clip of its first part
+  was not made, it prints no rest either, and the way on is a new video (the
+  table's "A song's stop").
+- **A stop for length.** A run can also stop in one sentence when its
+  song or its board is longer than the price covered. Say it, and what it
+  says was paid. The way on is "A song's stop".
+- **The clips.** No clip is filmed more than twice on its own, and no
+  automatic redo runs; a clip may say its take was kept with a fault. A Redo
+  is a new press, paid on its own; a video filmed in calls has none (below).
+- **A video filmed in calls** (one clip for every one to three sung lines,
+  from the pictures of its people and places): no scene's clip or picture is
+  made again on its own, and a call the video service refused or could not
+  make is sent once more as it was, never a third time. Its
+  storyboard offers no picture redo, and a hold of its cut offers no scene
+  made again. A run whose clips can no longer be
+  filmed as calls, or whose saved price could not be read, stops before any
+  clip in one sentence that says what was paid. The way on is a new video,
+  which makes the whole ad again at its own price, shown before its yes (the
+  table's "A song's stop"). The cut fits each call's clip to its lines
+  ("Cutting the ad").
+- **The finish.** A sung video ends 3.5 s after its last sung word (or
+  where the song ends, when that is sooner), and, with the brand's pack photo,
+  its last 4 s (at most half the film) are the end card, the song playing on
+  under it; its captions and its move into the card are
+  the Finish rows'. That is the app's cut: a cut of the pulled pieces draws
+  none of it.
+- **The end** is "End: watch and approve". Say the licence row again before
+  the approve. Delivered is step 4's three lines, its second line the
+  licence's: before it runs as a paid ad, the song is made again in their own
+  paid Suno account.
+
+**After a refusal.** Say the sentence the CLI prints, then the way on it
+names. Never promise a try the code does not have. The ways on, each refusal
+in one line:
+
+- An ask's line with `--yes` and no `--max-usd`: nothing was sent. Run it
+  without `--yes`, read the price, and ask.
+- An ask's yes under its price now: nothing was bought. Read the price again,
+  show it, and ask again.
+- An ask while one of its kind is being made: wait until it is made, read the
+  sheet, and ask again only on the member's word.
+- Samples past what this swipe may spend on them: ask for fewer sounds.
+- The samples asks used up: on the member's word, pick one of the samples made, or set the sound.
+- The asks for characters used up, or past what they may spend: pick one of
+  the pictures made, or let the video draw its own cast.
+- The lyric asks used up (three a swipe, no sum): keep the lyric made, or
+  their own lines.
+- A lyric asked for while it is the swipe's script: set `lyric=yours` first,
+  then ask again on the member's word.
+- A missing key: the member adds it in Settings → Keys, then asks again; for
+  samples whose missing key is the model key, name the sounds instead.
+- An ask that ended with nothing to pick says what it cost. Asking again is
+  paid again and needs the member's word. When samples chosen for the member
+  found no sound to sing, name one to four sounds with `--sounds`.
+- A set refused: its sentence says what the row takes. A sample of another
+  sound or singer than the rows above: set `songSample=<n>` alone.
+- No price for the video: say its sentence, and do not start.
+- The start refused because the song's sound is not chosen yet: ask the sound question above; on the member's word, pick one of the samples (`songSample=<n>`) or set the sound (`sound=<code>`), as the CLI's next line says; then read the price again and ask a new yes.
+- The start refused because the member's lines are spoken lines with no lyric made: the lyric ask (its price first), or, on their word, `lyric=yours` to sing them as written; then read the price again and ask a new yes.
+- The start refused because it can now cost more than its at most: read the
+  price again, show it, and ask a new yes.
+- The start of a first part refused because the member is not an admin: set
+  `songPart=whole`, read the price again, and ask again.
+- The start refused because the swipe already has a video: follow that run;
+  a second video only with `--again`, on the member's yes to a second video.
+- A change of the storyboard at its stop refused because its places, or a
+  sheet, were already drawn as many times as the price covers: nothing was
+  drawn. Approve it as it is, or a new video to change it; never the same
+  change again.
+- The rest's approve with no `--max-usd`: run the line the stop printed.
+- The rest refused because it now costs more: read
+  `exodus video status <runId>` again and ask a yes to the new figure.
+- The rest's price can't be worked out: the rest can't be made from this
+  video; the way on is a new video.
+- A scene's clip or picture asked for again on a video filmed in calls: it
+  can't be made again on its own; the way on is a new video.
+- A stop of the run (at the plan, the song with no take that sang at least
+  85% of its lines, a stop for length, a first part whose song timing is unknown, a video
+  that can no longer be filmed as calls or whose saved price could not be
+  read): a new video from the same swipe, paid again; a change the sentence
+  names (a faster kind of music, fewer or more lines, fewer characters) is
+  said with it, and fewer or more lines is a new write.
+
+**Not built: never offer it.** An end card of the member's own design, a flash at the song's turn, or a move into the end card other than the Finish rows'.
+Hook only makes no short song: never offer it. Never `--style` on its start:
+this kind is started in its own look, and a start with another is refused;
+another look is the `filmStyle` row (item 7 above), set before the start.
+
 ### Step by step: a yes before each paid step
 
 For a member who asks for stops: the steps above, with one question before
@@ -1529,7 +2124,7 @@ row), and run the same line with `--yes` only after their yes.
    kind it was matched to, or another named with `--kind` on the member's yes.
    For a kind this ad can't be made as (step 3's "The kind of ad"), stop here
    and make the video from that format with the ad's words ("From one sentence
-   to a film").
+   to a film"); a song ad is the exception ("A song ad: the Suno Pixar Song").
 3. **The choices**, as questions: the product, what to swipe (`--mode`, as
    step 4's write line says) and how close (`--closeness`, 2 if left off).
 4. **The write.** Step 4's write line: its people's price goes in the option
@@ -1572,6 +2167,20 @@ exodus video swipe sheet voices <swipeId>                 the voices that fit th
                                                           any, and the page where the samples play: one read of the
                                                           voice list on the member's ElevenLabs key, no speech;
                                                           voice=<n> picks one
+exodus video swipe sheet lyric <swipeId> [--yes --max-usd <n>]
+                                                          a sung video of the member's own lines: those lines
+                                                          written as a song (paid, the price first, on their
+                                                          model key); lyric=song sings it
+exodus video swipe sheet samples <swipeId> [--sounds <code,...> | --count <n>] [--yes --max-usd <n>]
+                                                          a sung video: its opening sung in up to 4 sounds,
+                                                          four takes a sound in two pairs
+                                                          (paid, the price first, on their Kie key, a text call
+                                                          on their model key when chosen for them; the listens
+                                                          on Exodus's key); songSample=<n> picks a take
+exodus video swipe sheet cast <swipeId> [--yes --max-usd <n>]
+                                                          a sung video: its main characters, ten pictures each
+                                                          (paid, the price first, on their Kie key and a text
+                                                          call on their model key); cast1=<n> picks a picture
 exodus video swipe run --sheet <file> [--status] [--persona <name>] [--yes] [--retry-refused] [--wait]   every video of a sheet saved as a JSON file
 ```
 
@@ -1878,6 +2487,8 @@ exodus video voices <runId> --set <character>=<voiceId>   give a character a voi
 exodus video quote <runId>                                a quoting format: the exact prepared requests and prices
                                                           before any clip; approve them with --request-quote <reviewSha256>
 exodus video approve <runId>                              keep going
+exodus video approve <runId> --max-usd <n>                a sung video's first part: make the rest, held to the
+                                                          most its stop printed
 exodus video song <runId>                                 a song-first run: the Song master, heard on the video's page
 exodus video song approve <runId> --master <sha256>       approve the master you listened to
 exodus video song import <runId> --file <audio> --lyric <text|@file> --rights "…" [--from <s> --to <s>]
@@ -3082,6 +3693,15 @@ the pieces:
   exception is a manifest with `wholeVoice: true`, which the automatic cut adds
   for a kind whose voice is a song: then `narration.mp3` is laid whole and each
   narrated scene lasts its stretch of it, from `narration.json`'s cuts.
+- **A video filmed in calls** (a song whose clips each hold one to three sung
+  lines, listed under `calls` in `manifest.json`, as the pull says): each
+  call's clip lasts exactly its lines' stretch of the song (its `seconds`). A
+  call with `orderedSec`, the seconds its clip was ordered at, plays from its
+  start so those seconds fill that stretch: a clip longer than its order loses
+  its end, and a shorter one holds its last frame. A call with none is played
+  whole, sped up or slowed down to fit. The team's pull refuses a workspace
+  whose first-cut is older and would cut it another way: `exodus update`
+  (free), then pull again.
 - Otherwise: A-roll in manifest order as the spine, each reaction put in as its
   own beat of at most 1.5 s right after its cue line with its own sound, each
   other cutaway laid over the spine at its cued word (falling back to a

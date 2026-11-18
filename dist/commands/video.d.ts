@@ -2,6 +2,7 @@ import { type TemplateAudition } from "../lib/template-audition.js";
 import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
+import { type FaceBox } from "../lib/faceBox.js";
 import { type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
@@ -143,6 +144,7 @@ export type ArtifactSubset = {
     voiceLock?: unknown;
     songCall?: SongCallInPoint;
     availableTakes?: StoredTake[];
+    faceBox?: FaceBox;
 } | {
     type: "audio";
     sceneIndex?: number;
@@ -530,6 +532,7 @@ export interface ManifestScene {
     voiceLock?: unknown;
     songCall?: SongCallInPoint;
     availableTakes?: ManifestTake[];
+    faceBox?: FaceBox;
     clipStatus: string;
     error: string | null;
     flagged: boolean;

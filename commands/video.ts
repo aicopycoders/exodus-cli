@@ -21,6 +21,7 @@ import {
 } from "./workflow.js";
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
+import { faceBoxOf, type FaceBox } from "../lib/faceBox.js";
 import {
   customerAnswer,
   customerRunPage,
@@ -1062,6 +1063,8 @@ export type ArtifactSubset =
       songCall?: SongCallInPoint;
       /** Already-paid alternate takes of this scene the run kept on file. Absent on older runs. */
       availableTakes?: StoredTake[];
+      /** COP-383: a One-take take's face, as parts of its frame (video/lib/faceBox.ts). Absent: none found or looked for. */
+      faceBox?: FaceBox;
     }
   | {
       type: "audio";
@@ -2379,7 +2382,9 @@ function songPartLines(stop: Extract<RunStop, { at: "pilot" }>, part: SongPartSt
     // Landing #5000 (COP-406): the page, never the rough cut's stored file address (COP-375's rule).
     `Watch it here:        ${runUrl}`,
     ...(part.previewReady
-      ? ["That page has its rough cut with the song, and its clips one by one."]
+      // Landing #5003: the run page does not draw the first part's stop or its rough cut yet (#5002's COP-406), so the
+      // line never says it does.
+      ? ["Its rough cut with the song is made, but the dashboard does not show it yet."]
       // COP-273 P4f cut (C3): the worker makes the rough cut only of every first-part clip, never with one missing.
       : failedScenes.length
         ? ["There is no rough cut with the song: it is made only when every clip of the first part is made."]
@@ -2769,6 +2774,12 @@ export interface ManifestScene {
   songCall?: SongCallInPoint;
   /** Already-paid alternate takes pulled beside the clip. Absent when the run stored none. */
   availableTakes?: ManifestTake[];
+  /**
+   * COP-383: where the take's face is, as parts of its frame: top and bottom of its height, left and right of its width
+   * (video/lib/faceBox.ts). The cut sets the take's captions clear of it (first-cut captionBands). Absent when the run
+   * found no face in the take, or looked for none.
+   */
+  faceBox?: FaceBox;
   /** The clip ledger row's status (pending/running/done/failed), or "missing"
    *  when the run never wrote one. */
   clipStatus: string;
@@ -2988,6 +2999,7 @@ type SceneClipPull = {
   voiceLock?: unknown;
   songCall?: SongCallInPoint;
   availableTakes?: StoredTake[];
+  faceBox?: FaceBox;
 };
 
 /**
@@ -3022,6 +3034,7 @@ function clipFromArtifact(
   if (!artifact || artifact.type !== "video" || artifact.final || !artifact.videoUrl) {
     return null;
   }
+  const faceBox = faceBoxOf(artifact.faceBox);
   return {
     download: {
       file: `${scenePrefix(sceneIndex)}.${extFor(artifact.videoUrl, "video")}`,
@@ -3041,6 +3054,7 @@ function clipFromArtifact(
     ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
     ...(songCallInPointOf(artifact) ? { songCall: songCallInPointOf(artifact) } : {}),
     ...(artifact.availableTakes ? { availableTakes: artifact.availableTakes } : {}),
+    ...(faceBox ? { faceBox } : {}),
   };
 }
 
@@ -3555,6 +3569,7 @@ export function planPull(
       ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
       ...(clip?.songCall ? { songCall: clip.songCall } : {}),
       ...(availableTakes ? { availableTakes } : {}),
+      ...(clip?.faceBox ? { faceBox: clip.faceBox } : {}),
       clipStatus: item?.status ?? "missing",
       error: item?.error ?? null,
       flagged: item?.flagged === true,

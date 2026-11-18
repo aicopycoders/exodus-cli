@@ -625,6 +625,8 @@ export function finishingOf(manifest) {
     ...(f.songEnd === true ? { songEnd: true } : {}),
     ...(on.captions && nameIn(SONG_CAPTION_LOOKS, f.songCaptions) ? { songCaptions: f.songCaptions } : {}),
     ...(nameIn(SONG_EDITING_LEVELS, f.songEditing) ? { songEditing: f.songEditing } : {}),
+    // COP-383: a run's sheet's music, laid at Luke's level (LIGHT_MUSIC), a name only the worker writes.
+    ...(f.musicMix === "light" ? { musicMix: "light" } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -704,6 +706,15 @@ const UNDER_FILTERS = ["highpass", "lowpass", "sidechaincompress"];
 export const ROOM_UNDER_DB = 27;
 export const ROOM_FADE_SEC = 0.08;
 const ROOM_RATE = 48000;
+/**
+ * COP-383, musicMix "light": a run's sheet's music at Luke's lock (lab/post_v2.py final3, post3.py final): its loudness
+ * `underDb` under the voice's after its chain (measured in one extra pass of the voice alone, as the room is), faded in
+ * over `fadeInSec` and out over the film's last `fadeOutSec`, and ducked lightly while the voice speaks: a compressor
+ * keyed on the voice, its threshold `duck.underDb` under the voice's loudness, ratio 1.33, about 4 dB. It is laid on the
+ * finished film's clock, after the speed step, so the music keeps its own tempo, and after the voice's chain and the
+ * duck under it, so cleanVoice neither turns it down 6 dB more (UNDER_VOICE) nor ducks it hard: one level, one duck.
+ */
+export const LIGHT_MUSIC = { underDb: 20, fadeInSec: 0.5, fadeOutSec: 1, duck: { underDb: 18, ratio: 1.33, attack: 40, release: 450, knee: 2 } };
 
 /** A seeded generator of numbers in [0, 1) (mulberry32): the same seed gives the same numbers on every machine. */
 function seeded(seed) {
@@ -5967,6 +5978,13 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     );
     under = [...under, "[roombed]"];
   }
+  // COP-383: the voice as the music's duck hears it, split off before it is mixed (lightMusic, laid after the speed step).
+  let lightKey = null;
+  if (finish?.lightMusic) {
+    filters.push(`${voice}asplit=2[vlm][lmkeyraw]`);
+    voice = "[vlm]";
+    lightKey = "[lmkeyraw]";
+  }
   if (finish?.meters) {
     // cutChecks: the voice, and everything under it mixed, each also written alone to be measured.
     filters.push(`${voice}asplit=2[metered][vmeter]`);
@@ -5992,6 +6010,23 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     const end = filmFrames(pictureSec, speed) * SAMPLES_PER_FRAME;
     filters.push(`[mix]atempo=${speed},apad,atrim=end_sample=${end},afade=t=out:ss=${end - END_FADE_SAMPLES}:ns=${END_FADE_SAMPLES}[mixfaster]`);
     audioLabel = "mixfaster";
+  }
+  // COP-383, the sheet's music at Luke's level (LIGHT_MUSIC), on the finished film's clock: the track at its own tempo,
+  // faded in and out, ducked by the voice heard at the film's speed, and mixed under the finished sound.
+  if (finish?.lightMusic && lightKey) {
+    const m = finish.lightMusic;
+    const end = speed ? filmFrames(pictureSec, speed) * SAMPLES_PER_FRAME : Math.round(pictureSec * EDIT_SAMPLE_RATE);
+    const filmSec = end / EDIT_SAMPLE_RATE;
+    const k = addInput("-i", m.file);
+    const d = LIGHT_MUSIC.duck;
+    filters.push(`${lightKey}${speed ? `atempo=${speed},` : ""}apad,atrim=end_sample=${end}[lmkey]`);
+    filters.push(
+      `[${k}:a]${stereo},apad,atrim=end_sample=${end},asetpts=PTS-STARTPTS,volume=${m.gainDb}dB,` +
+        `afade=t=in:d=${LIGHT_MUSIC.fadeInSec},afade=t=out:st=${sec(Math.max(0, filmSec - LIGHT_MUSIC.fadeOutSec))}:d=${LIGHT_MUSIC.fadeOutSec}[lmraw]`,
+    );
+    filters.push(`[lmraw][lmkey]sidechaincompress=threshold=${m.threshold}:ratio=${d.ratio}:attack=${d.attack}:release=${d.release}:knee=${d.knee}[lmbed]`);
+    filters.push(`[${audioLabel}][lmbed]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[withmusic]`);
+    audioLabel = "withmusic";
   }
 
   return [
@@ -7056,6 +7091,200 @@ function lookDialogues(c, W, H, y, from, to, startCs) {
 }
 
 /**
+ * COP-383, captions off the face: the bands a caption sits in, as shares of the frame's height, top to bottom of each
+ * (video/lib/sheetFinish.ts PLACE_BAND): the cut centres a screen in its band.
+ */
+export const CAPTION_BANDS = { bottom: [0.66, 0.74], middle: [0.46, 0.54], top: [0.12, 0.18] };
+/** COP-383: the room kept between a caption's drawn block and the face, as a share of the frame's height (19 px of 1920). */
+export const FACE_CLEAR_SHARE = 0.01;
+
+const facePart = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+/**
+ * COP-383: a take's face box as the pull wrote it on its scene (video/lib/faceBox.ts): top, bottom, left and right as
+ * parts of the take's frame, top above bottom and left of right; null for anything else.
+ */
+export function faceBoxOf(value) {
+  if (!isObject(value)) return null;
+  const { top, bottom, left, right } = value;
+  return facePart(top) && facePart(bottom) && facePart(left) && facePart(right) && top < bottom && left < right ? { top, bottom, left, right } : null;
+}
+
+const clamp01 = (n) => Math.min(1, Math.max(0, n));
+/**
+ * COP-383: where a face box lands on the film once its picture is scaled up by `zoom` and cropped back to the frame:
+ * centred left to right, and `fromTop` of the height it gained cut from its top (0.5 a centred crop, 0 one that keeps the
+ * top edge, ADDED_CUT.top an added cut's).
+ */
+export function zoomedFaceBox(box, zoom, fromTop) {
+  const y = (v) => clamp01(v * zoom - (zoom - 1) * fromTop);
+  const x = (v) => clamp01((v - 0.5) * zoom + 0.5);
+  return { top: y(box.top), bottom: y(box.bottom), left: x(box.left), right: x(box.right) };
+}
+
+/**
+ * COP-383: a spine segment's framings as the graph draws them (buildFfmpegArgs, framedPicture), each a zoom and the
+ * share of the gained height cut from the top: its own (the punch-in and the pace pass's step, centred, or keeping the
+ * top edge under a headline for the whole film), and with cuts added its other framing (alternateZoom), which a take
+ * with no change of its own that starts in it plays in whole.
+ */
+function segmentFramings(seg) {
+  const ownZoom = (seg.punchIn ? PUNCH_IN_SCALE : 1) * (seg.paceZoom ? PACE_PASS.zoom : 1);
+  const own = { zoom: ownZoom, fromTop: seg.zoomTop ? 0 : 0.5 };
+  const other = { zoom: alternateZoom(seg), fromTop: seg.zoomTop ? 0 : ADDED_CUT.top };
+  if (seg.framing?.length > 0) return [own, other];
+  return seg.framing && seg.otherFirst ? [other] : [own];
+}
+
+const unionBox = (boxes) => (boxes.length === 0 ? null : {
+  top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)),
+  left: Math.min(...boxes.map((b) => b.left)), right: Math.max(...boxes.map((b) => b.right)),
+});
+
+/**
+ * COP-383: where each take's face is on the film, by scene: its box (`faces`, by scene, from the manifest) under every
+ * framing each of its pieces plays in, joined. A take with no box is not in it.
+ */
+export function filmFaces(timeline, faces) {
+  const out = new Map();
+  for (const seg of timeline.spine) {
+    const box = faces.get(seg.sceneIndex);
+    if (!box || seg.source !== "clip") continue;
+    out.set(seg.sceneIndex, unionBox([...(out.has(seg.sceneIndex) ? [out.get(seg.sceneIndex)] : []), ...segmentFramings(seg).map((f) => zoomedFaceBox(box, f.zoom, f.fromTop))]));
+  }
+  return out;
+}
+
+/** COP-383: the take on screen at a second of the cut's clock (before the speed-up), or null. */
+function takeAt(timeline, t) {
+  const seg = timeline.spine.find((s) => t >= s.startSec - 1e-6 && t < s.startSec + s.seconds - 1e-6) ?? (t >= 0 ? timeline.spine.at(-1) : null);
+  return seg ? seg.sceneIndex : null;
+}
+
+/**
+ * COP-383: a caption screen's drawn height as a share of the frame's: a look's lines as lookLayout lays them centred
+ * on `y` (px; the bottom band's 0.7 with none), else the caption style's lines at its size (about 0.55 em a character
+ * over the frame's width less its margins). Landing review: a look shrinks a block to the room around where it sits
+ * (COP-382 `fit`), so a block is measured where it would be drawn: in the middle it may be taller than at the bottom.
+ */
+export function captionBlockShare(c, cap, W = WIDTH, H = HEIGHT, capMaxShare = null, y = undefined) {
+  const look = drawnLookOf(cap);
+  if (look && c.look === look && c.words?.length) {
+    const spec = CAPTION_LOOKS_DRAWN[look];
+    const layout = lookLayout(look, c.words, W, H, y);
+    const scale = W / WIDTH;
+    const slot = layout.lh + 2 * spec.padY * scale;
+    return (layout.lines.length * slot + (layout.lines.length - 1) * spec.lineGap * scale) / H;
+  }
+  const thick = /thick black outline/i.test(cap?.style ?? "");
+  const size = Math.min(Math.round(H * (thick ? 0.05 : 0.034)), capMaxShare ? Math.round(H * capMaxShare) : Infinity);
+  const perLine = Math.max(1, Math.floor((W - 120) / (0.55 * size)));
+  const lines = Math.max(1, Math.ceil(String(c.text ?? "").length / perLine));
+  return (lines * size * 1.25 + 2 * (thick ? 7 : 1.5)) / H;
+}
+
+/** COP-383: whether a block of `share` centred in `band` keeps FACE_CLEAR_SHARE from the face (or a card), top to bottom. */
+const bandClear = (band, share, face) => {
+  const centre = (band[0] + band[1]) / 2;
+  return centre + share / 2 + FACE_CLEAR_SHARE <= face.top || centre - share / 2 - FACE_CLEAR_SHARE >= face.bottom;
+};
+
+const bandName = (band) => Object.keys(CAPTION_BANDS).find((name) => CAPTION_BANDS[name][0] === band[0] && CAPTION_BANDS[name][1] === band[1]) ?? null;
+
+/**
+ * COP-383: where a card in a box is drawn, top to bottom, as shares of the frame's height: centred in its box (editAss
+ * `\pos`), in the Card style's opaque box (its 18 px edge and 4 px shadow) at 0.036 of the height a line, as two lines
+ * at most (1.25 of the size each). The lower box, 0.56 to 0.64, draws from about 0.545 to 0.655, past its own edges.
+ */
+export function cardDrawnBand(box, H = HEIGHT) {
+  const centre = (box[1] + box[3]) / 2;
+  const half = (2 * Math.round(H * 0.036) * 1.25 + 2 * 18 + 4) / 2 / H;
+  return { top: Math.round((centre - half) * 10_000) / 10_000, bottom: Math.round((centre + half) * 10_000) / 10_000 };
+}
+
+/**
+ * Landing review of COP-383: where a headline at the top is drawn, top to bottom, as shares of the frame's height: from
+ * the top edge to the lower of its two boxes' rounded box (headlineDialogues: the font's size and HEADLINE_PAD_PX each
+ * side, centred in the box).
+ */
+export function headlineDrawnBand(H = HEIGHT) {
+  const half = (headlineFontPx(H) + 2 * HEADLINE_PAD_PX) / 2 / H;
+  const bottom = Math.max(...[HEADLINE_BOX, HEADLINE_BOX_NO_ROOM].map((b) => (b[1] + b[3]) / 2 + half));
+  return { top: 0, bottom: Math.round(bottom * 10_000) / 10_000 };
+}
+
+/**
+ * COP-383: the band a take's captions sit in, clear of its face: the band asked for (`base`, the sheet's place, the
+ * bottom with none) when its tallest screen (`share`) clears the face there, else the nearest band that does, the lower
+ * on a tie; never the top under a headline at the top (`headline`). A band they move to also clears every card shown
+ * over the take (`cards`, the lower box at 0.56 to 0.64 of the height: the member's card over the chest), so a caption
+ * moved to the middle never touches it; the band asked for keeps today's place beside a card. Null when no band is clear.
+ * Landing review: `share` may be a function of the band, the tallest screen as drawn there (a look's block grows with the
+ * room around it), and a band moved to under a headline at the top also keeps clear of the headline as drawn
+ * (headlineDrawnBand), so a tall block in the middle never reaches it.
+ */
+export function clearBand({ face, share, base = CAPTION_BANDS.bottom, headline = false, cards = [] }, H = HEIGHT) {
+  const shareAt = typeof share === "function" ? share : () => share;
+  const centre = (b) => (b[0] + b[1]) / 2;
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+  const others = Object.values(CAPTION_BANDS).filter((b) => !same(b, base));
+  const order = [base, ...others.sort((a, b) => Math.abs(centre(a) - centre(base)) - Math.abs(centre(b) - centre(base)) || centre(b) - centre(a))];
+  const head = headlineDrawnBand(H);
+  const clearOfCards = (band) => same(band, base) ||
+    ([...cards, ...(headline ? [head] : [])]).every((card) => bandClear(band, shareAt(band), card));
+  return order.find((band) => !(headline && same(band, CAPTION_BANDS.top)) && bandClear(band, shareAt(band), face) && clearOfCards(band)) ?? null;
+}
+
+/**
+ * COP-383, captions off the face: each take with a face box (`faces`, on the film's frame, filmFaces) gets its captions
+ * in the nearest band clear of its face (clearBand), judged by its tallest screen; when no band is clear, the bottom
+ * band with fewer words a screen (half the words, rounded up), so each screen is shorter. A take with no box keeps
+ * today's place and screens. `screensWith(words, cap)` groups the cut's words into screens as the cut does; a screen
+ * belongs to the take on screen at its first word, and takes its band (`band`, top and bottom shares) from it. Never
+ * the top band under a headline at the top (`headline`), so no caption moves into it; the words over the last shot
+ * come after the captions stop (captionsBeforeEndCard), so none moves into them either.
+ */
+export function captionsOffFace({ screens, words, screensWith, cap, timeline, faces, headline = false, capMaxShare = null, cards = [] }, W = WIDTH, H = HEIGHT) {
+  if (faces.size === 0 || screens.length === 0) return { screens, notes: [], takes: [] };
+  const base = Array.isArray(cap?.place) && cap.place.length === 2 ? cap.place : CAPTION_BANDS.bottom;
+  const takeOf = (c) => takeAt(timeline, c.s);
+  // Each take's screens; its tallest is measured in each band, where a look's block would be drawn (captionBlockShare).
+  const screensOf = new Map();
+  for (const c of screens) {
+    const take = takeOf(c);
+    if (faces.has(take)) screensOf.set(take, [...(screensOf.get(take) ?? []), c]);
+  }
+  const tallestIn = (take) => (band) =>
+    Math.max(...screensOf.get(take).map((c) => captionBlockShare(c, cap, W, H, capMaxShare, Math.round(((band[0] + band[1]) / 2) * H))));
+  // The cards shown while each take is on screen (`cards`: { top, bottom, in, out } on the cut's clock).
+  const cardsOver = (take) => {
+    const segs = timeline.spine.filter((seg) => seg.sceneIndex === take);
+    const from = Math.min(...segs.map((seg) => seg.startSec));
+    const to = Math.max(...segs.map((seg) => seg.startSec + seg.seconds));
+    return cards.filter((card) => card.in < to && card.out > from);
+  };
+  const takes = [...screensOf.keys()].sort((a, b) => a - b).map((take) => {
+    const band = clearBand({ face: faces.get(take), share: tallestIn(take), base, headline, cards: cardsOver(take) }, H);
+    return { take, band: band ?? CAPTION_BANDS.bottom, fewer: band === null };
+  });
+  const look = drawnLookOf(cap);
+  const per = Math.max(1, Math.round(cap?.wordsPerLine?.median ?? (look ? CAPTION_LOOKS_DRAWN[look].words : 3)));
+  const fewerPer = Math.max(1, Math.ceil(per / 2));
+  const fewer = new Set(takes.filter((t) => t.fewer).map((t) => t.take));
+  const shorter = fewer.size > 0 ? screensWith(words, { ...(cap ?? {}), wordsPerLine: { median: fewerPer } }) : [];
+  const bandOf = new Map(takes.map((t) => [t.take, t.band]));
+  const placed = [...screens.filter((c) => !fewer.has(takeOf(c))), ...shorter.filter((c) => fewer.has(takeOf(c)))]
+    .sort((a, b) => a.s - b.s)
+    .map((c) => (bandOf.has(takeOf(c)) ? { ...c, band: bandOf.get(takeOf(c)) } : c));
+  const baseName = bandName(base) ?? "asked-for";
+  const notes = takes.flatMap(({ take, band, fewer: short }) => {
+    if (short) return [`captions: no band is clear of take ${take}'s face, so its captions sit in the bottom band, at most ${fewerPer} word${fewerPer === 1 ? "" : "s"} a screen`];
+    if (band[0] === base[0] && band[1] === base[1]) return [];
+    return [`captions: take ${take}'s face reaches the ${baseName} band, so its captions sit in the ${bandName(band)} band`];
+  });
+  return { screens: placed, notes, takes };
+}
+
+/**
  * One ASS file for the burn: the caption screens in their band, the cards in
  * their boxes, the hook box and the end card. Boxes are [x0, y0, x1, y1] as
  * shares of the frame. Every word on screen is the script's or the storyboard's.
@@ -7080,7 +7309,9 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
   const box = (b) => `\\pos(${Math.round(((b[0] + b[2]) / 2) * W)},${Math.round(((b[1] + b[3]) / 2) * H)})`;
   // COP-382: a look of Luke's lock draws its screens (lookCaptionScreens) in its own style; any other screen as today.
   const look = songLook ? null : drawnLookOf(cap);
-  const capLine = (c, k) => `Dialogue: 1,${csTime(starts[k])},${end(c, k)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`;
+  // COP-383: a screen moved off its take's face sits in its own band.
+  const yOf = (c) => (Array.isArray(c.band) ? Math.round(((c.band[0] + c.band[1]) / 2) * H) : y);
+  const capLine = (c, k) => `Dialogue: 1,${csTime(starts[k])},${end(c, k)},Cap,,0,0,0,,{\\pos(${W / 2},${yOf(c)})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`;
   return [
     "[Script Info]", "ScriptType: v4.00+", `PlayResX: ${W}`, `PlayResY: ${H}`, "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
     "[V4+ Styles]",
@@ -7094,7 +7325,7 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
     ...(cards.some((c) => c.label && c.headline) ? [headlineStyle(H)] : []), "",
     "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ...captions.flatMap((c, k) => (look && c.look === look && c.words?.length
-      ? lookDialogues(c, W, H, y, starts[k], endCs(c, k), (t) => captionStartCs(t / speed))
+      ? lookDialogues(c, W, H, yOf(c), starts[k], endCs(c, k), (t) => captionStartCs(t / speed))
       : [capLine(c, k)])),
     ...cards.filter((c) => c.label).flatMap((c) => (c.headline
       ? headlineDialogues(c, W, H, at)
@@ -8450,7 +8681,7 @@ function applyLoudness(mix, measured, out, limit, linear = false) {
  * retain that final observation without changing the legacy mastering result.
  * `limit` (limitPeaks) is the limiter's ceiling, PEAK_LIMIT; a limited cut over
  * the limit is limited again lower (LIMIT_AGAIN_MAX), one under it is left as it is.
- * `linear` (COP-354, a room bed laid): pass two is pass one's gain alone (loudnessApplyArgs). */
+ * `linear` (COP-354, a room bed laid; COP-383, or the sheet's music): pass two is pass one's gain alone (loudnessApplyArgs). */
 export function finishLoudnessPass(mix, out, limit = null, onMeasured = null, linear = false) {
   const measured = measureLoudness(mix);
   let ceiling = limit;
@@ -8572,6 +8803,50 @@ function roomBed(name, timeline, { resolve, out, clean, levelSegments, pictureSe
     return { note: `roomSound ${name}: ffmpeg could not make the room, so the cut's own faint room tone stayed` };
   }
   return { room: { file: files.bed, gainDb }, record: { sound: name, voiceLufs, bedRmsDb, gainDb, underDb: ROOM_UNDER_DB } };
+}
+
+/**
+ * COP-383: the sheet's music at Luke's level for this cut: the voice measured alone after its chain (one pass of its
+ * sound, as roomBed's), the music measured, the gain that puts it LIGHT_MUSIC.underDb under the voice, and the duck's
+ * threshold LIGHT_MUSIC.duck.underDb under the voice, as a level. Or the note that says why it cannot be laid.
+ */
+/**
+ * COP-383: ffmpeg's range for sidechaincompress's threshold (its option's own bounds); a duck keyed below it is no duck.
+ */
+export const SIDECHAIN_THRESHOLD = { min: 0.000976563, max: 1 };
+
+/**
+ * COP-383: the music's gain and its duck's threshold for a voice of `voiceLufs` and music of `musicLufs` (LIGHT_MUSIC), or
+ * a note when it cannot be laid: a voice or music with no loudness to set it by, or a voice so quiet that the duck's
+ * threshold would fall below ffmpeg's range (SIDECHAIN_THRESHOLD): no sane duck, so no music. The threshold is kept
+ * inside the range. Never throws: the film never fails because of its music.
+ */
+export function lightMusicLevels(voiceLufs, musicLufs) {
+  if (!heardVoice(voiceLufs)) return { note: "musicMix: the voice had no loudness to set the music against, so the video has no music" };
+  const gainDb = gainUnder(voiceLufs, LIGHT_MUSIC.underDb, musicLufs, null);
+  if (gainDb === null) return { note: "musicMix: the music file could not be measured, so the video has no music" };
+  const raw = 10 ** ((voiceLufs - LIGHT_MUSIC.duck.underDb) / 20);
+  if (!(raw >= SIDECHAIN_THRESHOLD.min)) {
+    return { note: `musicMix: the voice is too quiet (${voiceLufs} LUFS) for the music's duck to follow it, so the video has no music` };
+  }
+  const threshold = Math.min(SIDECHAIN_THRESHOLD.max, Math.round(raw * 1e6) / 1e6);
+  return { gainDb, threshold: Math.max(SIDECHAIN_THRESHOLD.min, threshold) };
+}
+
+function lightMusicBed(file, timeline, { resolve, out, clean, levelSegments }) {
+  const voice = `${path.resolve(path.dirname(out), path.basename(out, path.extname(out)))}.music-voice-level.wav`;
+  const voiceArgs = buildFfmpegArgs(timeline, { resolve, music: null, out: voice, finish: { levelSegments, ...(clean ? { clean } : {}) }, voiceOnly: true });
+  if (spawnSync("ffmpeg", voiceArgs, { stdio: ["ignore", "ignore", "pipe"] }).status !== 0) {
+    rmSync(voice, { force: true });
+    return { note: "musicMix: ffmpeg could not render the voice alone to set the music against, so the video has no music" };
+  }
+  const voiceLufs = measureLufs(voice);
+  rmSync(voice, { force: true });
+  const musicLufs = heardVoice(voiceLufs) ? measureLufs(file) : null;
+  const levels = lightMusicLevels(voiceLufs, musicLufs);
+  if (levels.note) return levels;
+  const { gainDb, threshold } = levels;
+  return { music: { file, gainDb, threshold }, record: { voiceLufs, musicLufs, gainDb, underDb: LIGHT_MUSIC.underDb, duck: { ...LIGHT_MUSIC.duck, threshold } } };
 }
 
 /**
@@ -9945,15 +10220,16 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       const stop = endLayers
         ? (endLayers.dip ? { in: endLayers.dip.from } : endLayers)
         : ending ? { in: roundMs(ending.in - ENDING.captionsClearSec * speed) } : endLayers;
-      const screens = captionsBeforeEndCard(!finish.captions
-        ? []
-        : songLook
-          ? songCaptionScreens(timed(lineWords(timeline, storyboard)), songLook)
-          : look
-            ? lookCaptionScreens(timed(finish.captionsByLine ? lineWords(timeline, storyboard) : wordRows(timeline)), cap, speed)
-            : finish.captionsByLine
-              ? lineCaptionScreens(timed(lineWords(timeline, storyboard)), cap)
-              : captionScreens(timed(wordRows(timeline)), cap), stop);
+      // COP-383: the cut's words and how they are grouped into screens, kept so captions moved off a face are grouped again.
+      const capWords = !finish.captions ? [] : timed(songLook || finish.captionsByLine ? lineWords(timeline, storyboard) : wordRows(timeline));
+      const screensOf = (words) => (songLook
+        ? songCaptionScreens(words, songLook)
+        : look
+          ? lookCaptionScreens(words, cap, speed)
+          : finish.captionsByLine
+            ? lineCaptionScreens(words, cap)
+            : captionScreens(words, cap));
+      let screens = captionsBeforeEndCard(finish.captions ? screensOf(capWords) : [], stop);
       if (lookWanted) {
         notes.push(look
           ? `captions: the ${look} look of Luke's lock, in the cut's own fonts`
@@ -9971,6 +10247,21 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
             : storyboardCards(storyboard, timeline))
         : [];
       const drawn = burnedCards.find((c) => c.headline && c.label);
+      // COP-383: each take's captions in the nearest band clear of its face, never under the headline at the top.
+      const faces = new Map(manifest.scenes.flatMap((scene) => (faceBoxOf(scene.faceBox) ? [[scene.sceneIndex, faceBoxOf(scene.faceBox)]] : [])));
+      if (finish.captions && !songLook && faces.size > 0) {
+        const screensWith = (words, c) => (look ? lookCaptionScreens(words, c, speed) : finish.captionsByLine ? lineCaptionScreens(words, c) : captionScreens(words, c));
+        const offFace = captionsOffFace({
+          screens, words: capWords, screensWith, cap, timeline, faces: filmFaces(timeline, faces), headline: Boolean(drawn),
+          ...(finish.captionsByLine ? { capMaxShare: CAPTION_MAX_SHARE } : {}),
+          // The member's card over the chest (cardBox's lower box), and any other card drawn in a box, never a headline:
+          // each as drawn, past its box's own edges (cardDrawnBand).
+          cards: burnedCards.filter((c) => c.label && !c.headline && Array.isArray(c.box)).map((c) => ({ ...cardDrawnBand(c.box), in: c.in, out: c.out })),
+        });
+        screens = captionsBeforeEndCard(offFace.screens, stop);
+        burned = screens;
+        notes.push(...offFace.notes);
+      }
       if (drawn) {
         notes.push(finish.cardPlace === "top-film"
           ? "cardPlace: the card is a headline at the top for the whole video; every step closer keeps the frame's top edge"
@@ -10151,7 +10442,10 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   // else lies under it. Music runs under the whole film and fills its silences today already, so the worker reads the
   // film's own silences, as today, and the record says so. A sound effect, a bed of its own or a reaction's tail lies
   // under only part of it: the film's other silences would be hidden from the guard, so the pick is not used.
-  const musicUnder = Boolean(music);
+  // COP-383: a run's sheet's music (musicMix "light") is a bed like the room: the worker gets the voice's own silences
+  // with it (below), so a voice that drops out under the music is still caught. Only the kind's own music is `musicUnder`.
+  const sheetMusic = finish?.musicMix === "light" && Boolean(music);
+  const musicUnder = Boolean(music) && !sheetMusic;
   const partlyUnder = !musicUnder && ((mixSound?.effects?.length ?? 0) > 0 || (mixSound?.beds?.length ?? 0) > 0 ||
     timeline.spine.some((seg) => seg.audio === "clip" && seg.reaction?.tail));
   let voiceSilencesHeard = null;
@@ -10201,11 +10495,36 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       }
     }
   }
+  // COP-383: a run's sheet's music at Luke's level, in the place of the kind's music mix, on a cut of its own clock. It
+  // fills every silence of the film, as a room bed does, so it is laid only with the voice's own silences in hand for
+  // the worker's guard (voiceSilences); when they cannot be read, the video has no music.
+  let lightMusic = null;
+  let musicRecord = null;
+  const lightMusicNote = `musicMix: the sheet's music ${LIGHT_MUSIC.underDb} dB under the voice, fading in over ${LIGHT_MUSIC.fadeInSec} s and out over ${LIGHT_MUSIC.fadeOutSec} s, ducked lightly (ratio ${LIGHT_MUSIC.duck.ratio}) while the voice speaks`;
+  // Whether the voice's own silences go to the worker: with a bed under the film (the room's, the sheet's music) or a
+  // picked voice chain; with neither, the film is today's and the worker reads its own silences.
+  const handsSilences = () => Boolean(room?.file || lightMusic || (clean && finish?.voiceSound && clean.voice === VOICE_SOUNDS[finish.voiceSound]));
+  if (sheetMusic) {
+    if (timeline.mapped || template) notes.push("musicMix: the sheet's music is not laid on a template launch's cut or one laid on its measured map");
+    else {
+      voiceSilencesHeard ??= heardSilences(timeline, {
+        resolve: here, out, clean: todayClean, levelSegments: !finish.finishLoudness, finishLoudness: finish.finishLoudness, speed,
+      });
+      const made = voiceSilencesHeard
+        ? lightMusicBed(at(music), timeline, { resolve: at, out, clean, levelSegments: !finish.finishLoudness })
+        : { note: "musicMix: the voice's silences could not be read for the worker's last guard, so the video has no music" };
+      if (made.note) notes.push(made.note);
+      else {
+        ({ music: lightMusic, record: musicRecord } = made);
+        notes.push(lightMusicNote);
+      }
+    }
+  }
   // With neither a picked chain nor a bed in the film after all, the film is today's: the worker reads its own silences.
-  if (!room?.file && !(clean && finish?.voiceSound && clean.voice === VOICE_SOUNDS[finish.voiceSound])) voiceSilencesHeard = null;
-  const ffmpegArgs = buildFfmpegArgs(timeline, {
+  if (!handsSilences()) voiceSilencesHeard = null;
+  const argsWith = (withMusic) => buildFfmpegArgs(timeline, {
     resolve: at,
-    music: music ? at(music) : null,
+    music: music && !sheetMusic ? at(music) : null,
     out: rendered,
     ...(finish
       ? {
@@ -10216,17 +10535,31 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ...(pictures.length ? { pictures } : {}), ...(clean ? { clean } : {}), ...(meters ? { meters } : {}),
           ...(endLayers ? { endCard: endLayers } : {}),
           ...(look ? { look } : {}), ...(deliverFps ? { deliverFps } : {}),
+          ...(withMusic && lightMusic ? { lightMusic } : {}),
         },
       }
       : {}),
     ...(mixSound ? { sound: mixSound } : {}),
   });
+  let ffmpegArgs = argsWith(true);
   if (meters?.allowAbsentBed) {
     rmSync(meters.voice, { force: true });
     rmSync(meters.bed, { force: true });
   }
   if (look) for (const file of [LOOK_PROBE.freeze, LOOK_PROBE.motion]) rmSync(here(file), { force: true });
-  const res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass || look ? { cwd: path.resolve(dir) } : {}) });
+  let res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass || look ? { cwd: path.resolve(dir) } : {}) });
+  // COP-383: the film never fails for its music: a graph with the sheet's music that ffmpeg refuses is made again without it.
+  if (res.status !== 0 && lightMusic) {
+    // The record says what the film holds: no music, so no note of its level, and the voice's silences only when another
+    // bed or a picked chain still asks for them.
+    notes.splice(notes.indexOf(lightMusicNote), 1);
+    notes.push("musicMix: ffmpeg could not lay the sheet's music, so the video was made again with no music");
+    lightMusic = null;
+    musicRecord = null;
+    if (!handsSilences()) voiceSilencesHeard = null;
+    ffmpegArgs = argsWith(false);
+    res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass || look ? { cwd: path.resolve(dir) } : {}) });
+  }
   if (room?.file) rmSync(room.file, { force: true });
   if (res.status !== 0) {
     const quoted = ffmpegArgs.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
@@ -10251,7 +10584,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   if (finish?.finishLoudness) {
     try {
       loudness = finishLoudnessPass(rendered, out, peakLimit, template
-        ? (measured) => { loudnessMeasurement = measured; } : null, Boolean(room?.file));
+        ? (measured) => { loudnessMeasurement = measured; } : null, Boolean(room?.file) || Boolean(lightMusic));
     } catch (error) {
       // A limited pass already limited itself again (#4573); the same mix would only be refused the same way.
       if (!template || peakLimit != null || !(error instanceof FirstCutError)) throw error;
@@ -10414,6 +10747,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ...(voiceSilencesHeard ? { voiceSilences: voiceSilencesHeard } : {}),
     // COP-354: the room sound the cut laid, and its level against the voice.
     ...(roomRecord ? { room: roomRecord } : {}),
+    ...(musicRecord ? { music: musicRecord } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
   writeFileSync(paths.pace, `${JSON.stringify(pace, null, 2)}\n`);

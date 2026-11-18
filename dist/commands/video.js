@@ -13,6 +13,7 @@ import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/scrip
 import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
+import { faceBoxOf } from "../lib/faceBox.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
@@ -1395,7 +1396,7 @@ function songPartLines(stop, part, runId, runUrl) {
             : `Run ${runId} made the first part: ${n === 1 ? "1 clip" : `${n} clips`}, ${until} (${scenesPhrase(part.scenes)}), and is waiting for you.`,
         `Watch it here:        ${runUrl}`,
         ...(part.previewReady
-            ? ["That page has its rough cut with the song, and its clips one by one."]
+            ? ["Its rough cut with the song is made, but the dashboard does not show it yet."]
             : failedScenes.length
                 ? ["There is no rough cut with the song: it is made only when every clip of the first part is made."]
                 : part.previewStale
@@ -1697,6 +1698,7 @@ function clipFromArtifact(sceneIndex, artifact) {
     if (!artifact || artifact.type !== "video" || artifact.final || !artifact.videoUrl) {
         return null;
     }
+    const faceBox = faceBoxOf(artifact.faceBox);
     return {
         download: {
             file: `${scenePrefix(sceneIndex)}.${extFor(artifact.videoUrl, "video")}`,
@@ -1716,6 +1718,7 @@ function clipFromArtifact(sceneIndex, artifact) {
         ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
         ...(songCallInPointOf(artifact) ? { songCall: songCallInPointOf(artifact) } : {}),
         ...(artifact.availableTakes ? { availableTakes: artifact.availableTakes } : {}),
+        ...(faceBox ? { faceBox } : {}),
     };
 }
 function pullStoredTakes(sceneIndex, takes, downloads, texts) {
@@ -2146,6 +2149,7 @@ export function planPull(run, items, opts) {
             ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
             ...(clip?.songCall ? { songCall: clip.songCall } : {}),
             ...(availableTakes ? { availableTakes } : {}),
+            ...(clip?.faceBox ? { faceBox: clip.faceBox } : {}),
             clipStatus: item?.status ?? "missing",
             error: item?.error ?? null,
             flagged: item?.flagged === true,

@@ -8,6 +8,8 @@
 //     909100          the one-take storyboard node's picture of the place, drawn before its stop (COP-351)
 //     909110          the one-take video node's take prompts said again with rows added at its stop (COP-387)
 //     909120 + n      the one-take video node's check of take n's opening, take 1 only (COP-377)
+//     909210 + n      the one-take video node's face boxes of take n, 1 to 6 (COP-383, the post-production band)
+//     909220          the one-take storyboard node's music brief, one text call (COP-383, the post-production band)
 //   [910000, 920000)  cast identity stills (cast-anchor.ts CAST_LEDGER_BASE)
 //   [920000, 960000)  set gate room options (#2202)
 //   [960000, …)       cast gate option renders (#2202)

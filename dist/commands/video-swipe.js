@@ -642,7 +642,19 @@ function startedOf(data) {
 function breakdownReadOf(data) {
     if (!isRecord(data) || !isRecord(data.breakdown) || !Array.isArray(data.breakdown.steps))
         return null;
-    return { breakdown: data.breakdown, template: isRecord(data.template) ? data.template : null };
+    return {
+        breakdown: data.breakdown,
+        template: isRecord(data.template) ? data.template : null,
+        ...("kindMatch" in data ? { kindMatch: data.kindMatch } : {}),
+    };
+}
+export function kindMatchLines(spend, { before = false } = {}) {
+    if (!isRecord(spend) || typeof spend.costUsd !== "number" || !Number.isFinite(spend.costUsd))
+        return [];
+    const tries = `${typeof spend.calls === "number" && spend.calls > 1 ? `, over ${spend.calls} tries` : ""}${before ? ", when it was made" : ""}`;
+    return spend.atMost === true
+        ? [`Matching the ad to a kind of video cost at most ${usd(Math.ceil(Math.round(spend.costUsd * 1e6) / 1e4) / 100)} on the member's key${tries}: the provider did not say what all of it cost.`]
+        : [`Matching the ad to a kind of video cost ${usd(spend.costUsd)} on the member's key${tries}.`];
 }
 async function waitForBreakdown(breakdownId, opts, deps, say) {
     const said = new Set();
@@ -677,9 +689,9 @@ async function waitForBreakdown(breakdownId, opts, deps, say) {
         return { code: 1, lines: [error, hint], json: { error, mayStillFinish: hint } };
     }
     const { read } = ended.done;
-    return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template } };
+    return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template, ...(read.kindMatch !== undefined ? { kindMatch: read.kindMatch } : {}) } };
 }
-function breakdownEndLines({ breakdown, template }, dashboardUrl) {
+function breakdownEndLines({ breakdown, template, kindMatch }, dashboardUrl) {
     if (breakdown.sourceKind === "none")
         return ownReadLines(breakdown._id);
     if (breakdown.status === "failed") {
@@ -688,7 +700,7 @@ function breakdownEndLines({ breakdown, template }, dashboardUrl) {
             "Reading the ad again is paid too: run the same exodus video swipe command with --yes, after the member's yes.",
         ];
     }
-    return ["The breakdown is done.", pageLine(dashboardUrl, breakdown._id), ...spentLines(breakdown), ...nextAfterBreakdown(breakdown._id, template)];
+    return ["The breakdown is done.", pageLine(dashboardUrl, breakdown._id), ...spentLines(breakdown), ...kindMatchLines(kindMatch), ...nextAfterBreakdown(breakdown._id, template)];
 }
 function spentLines(breakdown) {
     if (breakdown.reused)
@@ -921,6 +933,7 @@ export async function swipeTemplateFlow(breakdownId, opts, deps) {
                 ...kept,
                 ...templateLines(template),
                 ...(costFree ? ["This template was already made, so it cost nothing."] : []),
+                ...kindMatchLines(template.kindMatch, { before: costFree }),
                 ...nextAfterTemplate(breakdownId),
             ],
     });
@@ -940,7 +953,7 @@ export async function swipeTemplateFlow(breakdownId, opts, deps) {
         if (state.status === "stored" && isRecord(state.template))
             return { done: { template: state.template } };
         if (state.status === "failed")
-            return { done: { error: typeof state.error === "string" ? state.error : "no reason was given." } };
+            return { done: { error: typeof state.error === "string" ? state.error : "no reason was given.", kindMatch: state.kindMatch } };
         return null;
     }, TEMPLATE_MAX_POLLS, deps);
     const hint = `The template may still be made: exodus video swipe status ${breakdownId}`;
@@ -952,8 +965,10 @@ export async function swipeTemplateFlow(breakdownId, opts, deps) {
     const result = ended.done;
     if ("refused" in result)
         return waitRefused(result.refused, hint, json);
-    if ("error" in result)
-        return failed(`The template could not be made: ${result.error}`, json, { breakdownId });
+    if ("error" in result) {
+        const spent = kindMatchLines(result.kindMatch);
+        return failed([`The template could not be made: ${result.error}`, ...spent].join(" "), json, { breakdownId, ...(spent.length ? { kindMatch: result.kindMatch } : {}) });
+    }
     return done(result.template, false, out.kept);
 }
 export async function swipeProductsFlow(opts, deps) {
@@ -1130,9 +1145,10 @@ function requestOf(ask, memberScript) {
 function costLine(swipe) {
     if (swipe.ownWords === true)
         return "It cost nothing: no model was called.";
-    return swipe.costUsd !== null
+    const write = swipe.costUsd !== null
         ? `It cost ${usd(swipe.costUsd)} on the member's key.`
         : "What it cost is unknown: the provider reported no usage for it.";
+    return [write, ...kindMatchLines(swipe.kindMatch)].join(" ");
 }
 function sheetStartLine(swipe) {
     const id = swipe._id;

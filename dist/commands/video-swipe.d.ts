@@ -158,6 +158,12 @@ export interface SwipeTemplateView {
         about?: string;
         reason: string;
     }>;
+    kindMatch?: KindMatchSpend;
+}
+export interface KindMatchSpend {
+    costUsd: number;
+    atMost: boolean;
+    calls: number;
 }
 export interface SwipeDraft {
     script: string;
@@ -200,6 +206,7 @@ export interface SwipeView {
     checksFound?: string[];
     workflowRunId: string | null;
     costUsd: number | null;
+    kindMatch?: KindMatchSpend;
     runHoldsStart?: boolean;
     scriptNote?: string;
     ownWords?: boolean;
@@ -573,6 +580,9 @@ export interface SwipeRunOptions extends SwipeOpts {
 }
 export declare function breakdownPage(dashboardUrl: string, breakdownId: string): string;
 export declare function swipeBreakdownFlow(source: SwipeSource, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare function kindMatchLines(spend: unknown, { before }?: {
+    before?: boolean;
+}): string[];
 export declare function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptions, deps: VideoDeps, full?: boolean): Promise<FlowResult>;
 export declare function fullLines(data: Record<string, unknown>): string[];
 export declare function filmingLines(filming: SwipeFilming | undefined, version?: string): string[];

@@ -143,6 +143,18 @@ export interface SwipeTemplateView {
    * none is offered.
    */
   offered?: Array<{ key: string; label: string; about?: string; reason: string }>;
+  /** #5069: what matching the ad cost on the member's key, every call summed; absent from older servers. */
+  kindMatch?: KindMatchSpend;
+}
+
+/**
+ * #5069: what matching an ad to a kind of video cost on the member's key, every call summed (the server's
+ * swipeKindMatchCalls). `atMost`: a call's cost was never reported, so it is counted at the most it could cost.
+ */
+export interface KindMatchSpend {
+  costUsd: number;
+  atMost: boolean;
+  calls: number;
 }
 
 export interface SwipeDraft {
@@ -171,6 +183,8 @@ export interface SwipeView {
   checksFound?: string[];
   workflowRunId: string | null;
   costUsd: number | null;
+  /** #5069: what matching its ad to a kind of video cost, once for the ad; absent when none was booked, and from older servers. */
+  kindMatch?: KindMatchSpend;
   /** False when the swipe's run failed or was cancelled, so it starts again without --again; absent from older servers. */
   runHoldsStart?: boolean;
   /** COP-273 P1b fix S2: why the script is not the one approved on the sheet (the song switch is off); absent otherwise. */
@@ -1132,11 +1146,28 @@ function startedOf(data: unknown): { breakdownId: string; existing: boolean } {
   return { breakdownId: typeof d.breakdownId === "string" ? d.breakdownId : "", existing: d.existing === true };
 }
 
-type BreakdownRead = { breakdown: SwipeBreakdown; template: SwipeTemplateView | null };
+type BreakdownRead = { breakdown: SwipeBreakdown; template: SwipeTemplateView | null; kindMatch?: unknown };
 
 function breakdownReadOf(data: unknown): BreakdownRead | null {
   if (!isRecord(data) || !isRecord(data.breakdown) || !Array.isArray(data.breakdown.steps)) return null;
-  return { breakdown: data.breakdown as unknown as SwipeBreakdown, template: isRecord(data.template) ? (data.template as unknown as SwipeTemplateView) : null };
+  return {
+    breakdown: data.breakdown as unknown as SwipeBreakdown,
+    template: isRecord(data.template) ? (data.template as unknown as SwipeTemplateView) : null,
+    ...("kindMatch" in data ? { kindMatch: data.kindMatch } : {}),
+  };
+}
+
+/**
+ * #5069: the one sentence saying what matching the ad to a kind of video cost on the member's key, or none when the
+ * server booked no call (or is older than it). A cost never reported is said as the most it could have been.
+ */
+export function kindMatchLines(spend: unknown, { before = false }: { before?: boolean } = {}): string[] {
+  if (!isRecord(spend) || typeof spend.costUsd !== "number" || !Number.isFinite(spend.costUsd)) return [];
+  // A template made before: what it cost then, after the line saying this ask cost nothing.
+  const tries = `${typeof spend.calls === "number" && spend.calls > 1 ? `, over ${spend.calls} tries` : ""}${before ? ", when it was made" : ""}`;
+  return spend.atMost === true
+    ? [`Matching the ad to a kind of video cost at most ${usd(Math.ceil(Math.round(spend.costUsd * 1e6) / 1e4) / 100)} on the member's key${tries}: the provider did not say what all of it cost.`]
+    : [`Matching the ad to a kind of video cost ${usd(spend.costUsd)} on the member's key${tries}.`];
 }
 
 /** Waits for a breakdown to end, saying each step's label once as it starts. */
@@ -1179,10 +1210,10 @@ async function waitForBreakdown(
     return { code: 1, lines: [error, hint], json: { error, mayStillFinish: hint } };
   }
   const { read } = ended.done;
-  return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template } };
+  return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template, ...(read.kindMatch !== undefined ? { kindMatch: read.kindMatch } : {}) } };
 }
 
-function breakdownEndLines({ breakdown, template }: BreakdownRead, dashboardUrl: string): string[] {
+function breakdownEndLines({ breakdown, template, kindMatch }: BreakdownRead, dashboardUrl: string): string[] {
   if (breakdown.sourceKind === "none") return ownReadLines(breakdown._id);
   if (breakdown.status === "failed") {
     return [
@@ -1191,7 +1222,7 @@ function breakdownEndLines({ breakdown, template }: BreakdownRead, dashboardUrl:
     ];
   }
   // COP-345: and the page again, once it is done.
-  return ["The breakdown is done.", pageLine(dashboardUrl, breakdown._id), ...spentLines(breakdown), ...nextAfterBreakdown(breakdown._id, template)];
+  return ["The breakdown is done.", pageLine(dashboardUrl, breakdown._id), ...spentLines(breakdown), ...kindMatchLines(kindMatch), ...nextAfterBreakdown(breakdown._id, template)];
 }
 
 function spentLines(breakdown: SwipeBreakdown): string[] {
@@ -1478,6 +1509,8 @@ export async function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOptio
           ...kept,
           ...templateLines(template),
           ...(costFree ? ["This template was already made, so it cost nothing."] : []),
+          // #5069: what matching the ad cost when it was made, on the member's key.
+          ...kindMatchLines(template.kindMatch, { before: costFree }),
           ...nextAfterTemplate(breakdownId),
         ],
   });
@@ -1489,13 +1522,13 @@ export async function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOptio
   opts.onJob?.(job);
   const out = progress(opts);
   out.say("Making the template on the member's key. It takes up to six minutes.");
-  const ended = await poll<{ refused: ApiResponse<unknown> } | { template: SwipeTemplateView } | { error: string }>(
+  const ended = await poll<{ refused: ApiResponse<unknown> } | { template: SwipeTemplateView } | { error: string; kindMatch?: unknown }>(
     () => deps.get(`${SWIPE_TEMPLATE_PATH}?breakdownId=${encodeURIComponent(breakdownId)}&job=${encodeURIComponent(job)}`),
     (polled) => {
       if (!polled.ok) return { done: { refused: polled } };
       const state = isRecord(polled.data) ? polled.data : {};
       if (state.status === "stored" && isRecord(state.template)) return { done: { template: state.template as unknown as SwipeTemplateView } };
-      if (state.status === "failed") return { done: { error: typeof state.error === "string" ? state.error : "no reason was given." } };
+      if (state.status === "failed") return { done: { error: typeof state.error === "string" ? state.error : "no reason was given.", kindMatch: state.kindMatch } };
       return null;
     },
     TEMPLATE_MAX_POLLS,
@@ -1508,7 +1541,11 @@ export async function swipeTemplateFlow(breakdownId: string, opts: SwipeRunOptio
   }
   const result = ended.done;
   if ("refused" in result) return waitRefused(result.refused, hint, json);
-  if ("error" in result) return failed(`The template could not be made: ${result.error}`, json, { breakdownId });
+  if ("error" in result) {
+    // #5069: a make that gave up was paid too.
+    const spent = kindMatchLines(result.kindMatch);
+    return failed([`The template could not be made: ${result.error}`, ...spent].join(" "), json, { breakdownId, ...(spent.length ? { kindMatch: result.kindMatch } : {}) });
+  }
   return done(result.template, false, out.kept);
 }
 
@@ -1774,9 +1811,11 @@ function requestOf(ask: WriteAsk, memberScript: string | undefined): Record<stri
 function costLine(swipe: SwipeView): string {
   // COP-273 P1c fix 2: a swipe of the member's own words called no model (its mark, never a reported cost of 0).
   if (swipe.ownWords === true) return "It cost nothing: no model was called.";
-  return swipe.costUsd !== null
+  const write = swipe.costUsd !== null
     ? `It cost ${usd(swipe.costUsd)} on the member's key.`
     : "What it cost is unknown: the provider reported no usage for it.";
+  // #5069: and, once for its ad, what matching the ad to a kind of video cost.
+  return [write, ...kindMatchLines(swipe.kindMatch)].join(" ");
 }
 
 /**

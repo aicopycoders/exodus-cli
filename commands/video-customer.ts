@@ -150,6 +150,83 @@ export interface CustomerRun {
    * address, null when none came out. Absent when the board drew none, and from older servers.
    */
   place?: { name: string; look: string; imageUrl: string | null };
+  /**
+   * COP-273 P7 stage 4: on a sung run filmed in calls (convex/videoRunView.ts customerRunViewOf, songCallsOfRunView), its
+   * calls and the pictures each is filmed from, or the stop's own sentence. Absent on every other run.
+   */
+  songCalls?: unknown;
+  /**
+   * COP-273 P7 stage 4 fix (M2): the song step's notice in the server's own short sentences (convex/lib/video/songNotice.ts):
+   * the lines the song's kept take missed, and a song that came out as another kind of music. Absent otherwise.
+   */
+  songNotice?: string[];
+}
+
+/** P7 stage 4 fix (M2): the song step's notice, each sentence a heads-up; nothing for a value this CLI cannot read. */
+function songNoticeLines(notice: unknown): string[] {
+  return Array.isArray(notice) ? notice.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => `Heads-up: ${s}`) : [];
+}
+
+/**
+ * P7 stage 4: the server's sentences for a run filmed in calls, copied word for word (video/lib/songCalls.ts
+ * SONG_CALL_NEW_VIDEO, SONG_CALL_NO_SCENE_PICTURES; the CLI package does not import video/lib). video-song-calls-stop.test.ts
+ * holds each equal to the server's.
+ */
+export const SONG_CALL_NEW_VIDEO = "A new video makes the whole ad again, at its own price, shown before you start.";
+export const SONG_CALL_NO_SCENE_PICTURES =
+  "This video is filmed from the pictures of its people and places, one clip for every one to three sung lines, so no picture of a scene was drawn.";
+/** What the server refuses on such a run (songCallSceneRedoRefused), said as a fact with its way on. */
+export const SONG_CALL_NO_ONE_SCENE = `One scene's clip or picture can't be made again on its own. ${SONG_CALL_NEW_VIDEO}`;
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** One picture of a call in the member's words, by its kind (video/lib/songCalls.ts SongCallPictureKind). */
+function callPictureWords(picture: Record<string, unknown>): string {
+  const who = typeof picture.characterId === "string" ? picture.characterId : "a person";
+  switch (picture.kind) {
+    case "character-sheet": return `the sheet of ${who}`;
+    case "character-picture": return `the picture of ${who}`;
+    case "product-sheet": return "the product's sheet";
+    case "product-plate": return "the product's picture";
+    case "props-sheet": return "the props' sheet";
+    case "place-view":
+      return `${typeof picture.place === "string" ? picture.place : "a place"}${typeof picture.view === "string" ? `, view ${picture.view}` : ""}${picture.lit === true ? ", lit" : ""}`;
+    default: return typeof picture.kind === "string" ? picture.kind : "a picture";
+  }
+}
+
+/**
+ * P7 stage 4: the storyboard stop of a run filmed in calls, from its `songCalls` (video/lib/songCallsOfRun.ts
+ * SongCallsView, or `{ problem }`): no scene picture was drawn (scout scene-frames.ts), the pictures each call is filmed
+ * from, the view's notes, and that no scene is made again on its own. The stop's own sentence when it has a problem.
+ * P10 finding 22: the server's sentence (`notYet`) while the places are still to be drawn, as at the stop the check
+ * before pictures makes at the board, in place of the calls. Nothing for a value this CLI cannot read.
+ * COP-375 (dev's #4911), the lead's ruling of Nov 17: each picture by what it is, never its address; `page`, the
+ * video's page, which draws each call's pictures (run-song-stop.tsx), is said after them ("See the pictures:", as the
+ * storyboard says it). No page line when there is none.
+ */
+/** Landing #5000 (COP-402): the stop says its clips cannot be filmed, so the server refuses an approve and none is offered. */
+export function songCallsProblem(songCalls: unknown): boolean {
+  return isObject(songCalls) && typeof songCalls.problem === "string";
+}
+
+export function songCallStopLines(songCalls: unknown, page = ""): string[] {
+  if (!isObject(songCalls)) return [];
+  if (typeof songCalls.problem === "string") return [songCalls.problem];
+  if (typeof songCalls.notYet === "string") return [songCalls.notYet];
+  if (!Array.isArray(songCalls.calls)) return [];
+  const lines = [SONG_CALL_NO_SCENE_PICTURES, "The pictures each video call is filmed from:"];
+  let drawn = false;
+  for (const call of songCalls.calls.filter(isObject)) {
+    const scenes = Array.isArray(call.scenes) ? call.scenes : [];
+    const pictures = Array.isArray(call.pictures) ? call.pictures.filter(isObject) : [];
+    lines.push(`  Call ${String(call.n)} (${scenes.length === 1 ? "scene" : "scenes"} ${scenes.join(", ")}): ${pictures.length === 1 ? "1 picture" : `${pictures.length} pictures`}`);
+    for (const picture of pictures) lines.push(`    ${callPictureWords(picture)}`);
+    drawn = drawn || pictures.length > 0;
+  }
+  if (drawn && page) lines.push(`See the pictures: ${page}`);
+  const notes = Array.isArray(songCalls.notes) ? songCalls.notes.filter((note): note is string => typeof note === "string" && note.trim() !== "") : [];
+  return [...lines, ...notes, SONG_CALL_NO_ONE_SCENE];
 }
 
 /**
@@ -194,6 +271,10 @@ function heldLines(run: CustomerRun, page: string): string[] {
   const one = (scenes?.length ?? holds.length) === 1;
   const head = `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`;
   if (!scenes?.length) {
+    // P7 stage 4 fix (S5): an older server's hold on a run filmed in calls: no scene is made again on its own.
+    if (run.songCalls !== undefined) {
+      return [head, ...holds.map((hold) => `  ${hold}`), SONG_CALL_NO_ONE_SCENE, `${one ? "Keep it" : "Keep each one"} as it is on the video's page: ${page}`];
+    }
     return [head, ...holds.map((hold) => `  ${hold}`), `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`];
   }
   return [head, ...heldSceneChoiceLines(run, scenes, page)];
@@ -258,12 +339,16 @@ function heldSceneChoiceLines(run: CustomerRun, scenes: readonly CustomerHeldSce
   const voices = scenes.filter((s) => s.voice && !s.take && !s.unfilmed);
   const faults = scenes.filter((s) => !s.take && !s.unfilmed && !s.voice);
   const keepable = faults.filter((s) => !s.voiceLocked);
+  // P7 stage 4: on a run filmed in calls no scene's clip is filmed or made again on its own (the server refuses it,
+  // songCallSceneRedoRefused): the way on is a new video, said once; keeping a scene as it is stays.
+  const calls = run.songCalls !== undefined;
   const inParens = (price: string) => (price ? ` (${price})` : "");
   const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
   const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
   return [
     ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
-    ...(unfilmed.length > 0
+    ...(calls && (unfilmed.length > 0 || faults.length > 0) ? [SONG_CALL_NO_ONE_SCENE] : []),
+    ...(unfilmed.length > 0 && !calls
       ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first${unfilmedPrice}: ${page}`]
       : []),
     ...takes.map((s) =>
@@ -280,7 +365,7 @@ function heldSceneChoiceLines(run: CustomerRun, scenes: readonly CustomerHeldSce
     ...(faults.length > 0
       ? [
           // #4955: a scene that can't be kept in its filmed voice (voiceLocked) is only made again.
-          `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again${keepable.length > 0 ? ", or keep it as it is," : ""} on the video's page. Try again shows the price first${faultPrice}: ${page}`,
+          ...(calls ? [] : [`${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again${keepable.length > 0 ? ", or keep it as it is," : ""} on the video's page. Try again shows the price first${faultPrice}: ${page}`]),
           ...keepable.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
         ]
       : []),
@@ -320,6 +405,13 @@ export interface CustomerStoryboard {
   scenes: CustomerRunScene[] | null;
   /** COP-337: no take gets a picture before this approval, and the approve is open. Absent from older servers. */
   noPictureBeforeApproval?: true;
+  /**
+   * COP-273 P7 stage 3 (convex/videoRunView.ts CustomerCliStoryboard): the run films one video call for one to three
+   * sung lines, so a redo of one scene's picture is refused and none is offered. Absent from older servers.
+   */
+  filmsCalls?: true;
+  /** COP-273 P7 stage 4 fix (M2): the run view's `songNotice`, as it is. Absent otherwise, and from older servers. */
+  songNotice?: string[];
   /** #4825: the run waits at its storyboard before any picture is drawn. Absent from older servers. */
   beforePictures?: true;
   /** #4825: what the check before pictures found, which approving accepts. Absent when none, and from older servers. */
@@ -329,6 +421,36 @@ export interface CustomerStoryboard {
    * script writes them. Absent when none, and from older servers.
    */
   hardWords?: string[];
+  /** COP-381: take 1's openings to pick from on a One-take run, the first picked. Absent otherwise, and from older servers. */
+  openings?: StoryboardOpening[];
+  /** COP-381 landing review (#4995): their code, which an approve with --opening sends back with --openings. */
+  openingsDigest?: string;
+}
+
+/** COP-381: one opening a storyboard offers to pick from, in plain words, as the server sends it. */
+export interface StoryboardOpening {
+  name: string;
+  seen: string;
+  words: string | null;
+}
+
+/**
+ * COP-381: take 1's openings to pick from, numbered as --opening takes them, the first picked, and the approve that
+ * picks another. Nothing for a storyboard with one opening or none. Landing review (#4995): the approve carries the
+ * openings' code (--openings), so a pick names an opening of the storyboard listed here, never of one made again since.
+ */
+export function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string): string[] {
+  if (!openings || openings.length < 2) return [];
+  return [
+    "",
+    `Take 1's opening, its first 2 seconds: pick 1 of ${openings.length}. Opening 1 is picked.`,
+    ...openings.flatMap((opening, i) => [
+      `  ${i + 1}. ${opening.name}`,
+      `     ${opening.seen}`,
+      ...(opening.words ? [`     Words on screen: "${opening.words}"`] : []),
+    ]),
+    `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
+  ];
 }
 
 /**
@@ -372,6 +494,8 @@ export interface CustomerItem {
   status: "ready" | "working" | "failed";
   url: string | null;
   speech?: SpeechSummary;
+  /** COP-273 P4f: a ready clip that is one video call of one to three sung lines: where its lines start in the call's stretch (s). */
+  songCall?: { sceneIndex: number; fromSec: number; seconds: number };
 }
 
 export interface CustomerItems {
@@ -620,8 +744,12 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
       }
       return [
         "Your storyboard is ready for your review.",
+        // P7 stage 4 fix (M2): what the song step said of the kept take, read first.
+        ...songNoticeLines(run.songNotice),
         `See it:      exodus video storyboard ${id}`,
-        `Approve it:  exodus video approve ${id}`,
+        ...(songCallsProblem(run.songCalls) ? [] : [`Approve it:  exodus video approve ${id}`]),
+        // P7 stage 4: a sung run filmed in calls: the pictures each call is filmed from (none on any other run).
+        ...songCallStopLines(run.songCalls, page),
       ];
     case "ready":
       return [
@@ -680,9 +808,15 @@ function sceneLines(scene: CustomerRunScene): string[] {
   return lines;
 }
 
-/** `page` is the run's page (customerRunPage), where the storyboard's pictures are seen (COP-375). */
-export function customerStoryboardLines(board: CustomerStoryboard, page: string): string[] {
+/**
+ * `page` is the run's page (customerRunPage), where the storyboard's pictures are seen (COP-375).
+ * P7 stage 4 fix (S6): `songCalls` is the run answer's (customerRunViewOf), read by `exodus video storyboard` on a run
+ * filmed in calls: status lists the calls' pictures only once the board step is done, never at a storyboard held for a
+ * review first, so the pointer to status is said only when they are listed.
+ */
+export function customerStoryboardLines(board: CustomerStoryboard, page: string, songCalls?: unknown): string[] {
   const id = board.runId;
+  const notice = songNoticeLines(board.songNotice);
   if (board.stage !== "review" || !board.scenes) {
     return [
       "This video isn't waiting for you to review its storyboard right now.",
@@ -701,6 +835,8 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string)
       ...scriptLines(board.scenes),
       ...found,
       ...hardWordLines(board.hardWords),
+      // COP-381: take 1's openings to pick from, numbered.
+      ...openingLines(board.openings, id, board.openingsDigest),
       "",
       "No take gets a picture before you approve.",
       approve,
@@ -717,7 +853,27 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string)
       "",
       "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
       approve,
-      `pick voices: exodus video voices ${id}`,
+      // COP-273 P9 again, fix: a run filmed in calls is sung, and the song is its voice: no voice to pick.
+      ...(board.filmsCalls ? [] : [`pick voices: exodus video voices ${id}`]),
+    ];
+  }
+  // P7 stage 4: a run filmed in calls draws no scene picture (scout scene-frames.ts: no output, the stop kept), so no
+  // scene is "drawing" and the approve is open; the song step ran before this stop, so the voice door is shut
+  // (convex/lib/workflow/castVoices.ts voiceDoor "clips-started"), and a song has no voice to pick: none is offered.
+  if (board.filmsCalls) {
+    const listed = isObject(songCalls) && Array.isArray(songCalls.calls);
+    const problem = isObject(songCalls) && typeof songCalls.problem === "string" ? songCalls.problem : null;
+    return [
+      "Storyboard",
+      ...board.scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]),
+      "",
+      ...notice,
+      SONG_CALL_NO_SCENE_PICTURES,
+      listed
+        ? `See the pictures each video call is filmed from: exodus video status ${id}`
+        : problem ?? "No picture a video call is filmed from is listed yet.",
+      SONG_CALL_NO_ONE_SCENE,
+      `approve with: exodus video approve ${id}`,
     ];
   }
   const stillDrawing = board.scenes.some((s) => s.frameStatus === "pending" || s.frameStatus === "drawing");
@@ -726,6 +882,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string)
     ...board.scenes.flatMap(sceneLines),
     ...hardWordLines(board.hardWords),
     "",
+    ...notice,
     stillDrawing
       ? "Waiting for every scene to finish drawing before you can approve."
       : `approve with: exodus video approve ${id}`,

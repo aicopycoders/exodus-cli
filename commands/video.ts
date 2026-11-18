@@ -7,6 +7,7 @@ import { displayRunStatus, formatApiError } from "../lib/format.js";
 import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { probeDurationSec } from "../lib/preflight.js";
+import { findWorkspaceRoot } from "../lib/state.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
@@ -32,6 +33,7 @@ import {
   customerStageLines,
   customerStatusLines,
   customerStoryboardLines,
+  openingLines,
   customerVoicesLines,
   speechSummaryLines,
   type SpeechSummary,
@@ -42,10 +44,16 @@ import {
   type CustomerRun,
   type CustomerStart,
   type CustomerStoryboard,
+  type StoryboardOpening,
   type CustomerVoices,
   type ScriptTidied,
   spendAskLines,
   onOwnDashboard,
+  songCallStopLines,
+  songCallsProblem,
+  SONG_CALL_NEW_VIDEO,
+  SONG_CALL_NO_ONE_SCENE,
+  SONG_CALL_NO_SCENE_PICTURES,
   VOICE_RETRY_COST,
 } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
@@ -140,7 +148,8 @@ The whole loop, in order:
 
   4. exodus video storyboard <runId>
      The scene cards: what each scene says and whether its picture is drawn.
-     The pictures are on the run's page, which it names.
+     The pictures are on the run's page, which it names. On a One-take run
+     with the hook on, it also lists take 1's openings, numbered.
 
   5. exodus video voices <runId>
      Who is in the ad, which voice each one has, how the voices get applied
@@ -149,6 +158,10 @@ The whole loop, in order:
   6. exodus video approve <runId>          (looks right — keep going)
      Guided runs only. A One-shot run approves its own storyboard and stops
      here only when its checks find a problem.
+     exodus video approve <runId> --opening <n> --openings <code>
+       A One-take storyboard that lists openings: take 1 starts with
+       opening n. Copy the line the storyboard prints, code and all.
+       Without --opening, opening 1.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
      exodus video broll <runId>
@@ -256,7 +269,8 @@ Usage:
   exodus video storyboard <runId> [--json]
   exodus video map <runId> [--place <place>] [--json]
   exodus video move <runId> --move <who>=<x>,<y> [--move ...] [--place <place>] [--note "..."] [--json]
-  exodus video approve <runId> [--approve-stale-cut] [--json]
+  exodus video approve <runId> [--opening <n> --openings <code>] [--approve-stale-cut] [--json]
+  exodus video approve <runId> --max-usd <n> [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
   exodus video broll <runId> [--json]
   exodus video broll add <runId> --line <id> [--note "..."] [--json]
@@ -292,6 +306,10 @@ Usage:
   exodus video swipe sheet price <swipeId> [--json]
   exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
   exodus video swipe sheet voices <swipeId> [--json]
+  exodus video swipe sheet samples <swipeId> [--sounds <code,...> | --count <n>] [--yes --max-usd <n>] [--wait] [--json]
+  exodus video swipe sheet cast <swipeId> [--yes --max-usd <n>] [--wait] [--json]
+  exodus video swipe sheet lyric <swipeId> [--yes --max-usd <n>] [--json]
+  exodus video swipe new --kind <kind> --product <id> --script <file> [--yes] [--json]
 
 Door 2 template sheets (not the separate top-level exodus template pipeline):
   exodus video template list [--json]
@@ -354,6 +372,17 @@ Options:
   --accept-findings    Go on past the check's findings on a storyboard it
                        stopped (approve). Without it, approving that
                        storyboard stops and says why
+  --max-usd <n>        The most a price showed, which a yes is held to: on
+                       swipe start, on swipe sheet people, samples, cast and
+                       lyric with --yes, and on approve at the stop after a
+                       sung video's first part. A yes that would now cost
+                       more is refused
+  --opening <n>        Which opening take 1 starts with, by its number in
+                       exodus video storyboard (approve, a One-take
+                       storyboard that lists openings). Without it, opening 1
+  --openings <code>    With --opening: the code exodus video storyboard prints
+                       with the openings, so the pick is of those openings. If
+                       the storyboard was made again since, nothing is approved
   --set <who>=<voice>  Give a character a voice (voices). The voice is a
                        catalog voice's name, like George, or an ElevenLabs
                        voice ID. Name the character by its ID or by the name
@@ -607,11 +636,18 @@ one.
                        camera and description; the script with who says each
                        line; the cast; and how it is filmed. No pictures
   --look <slug>        The new look (swipe write --mode new-look)
-  --script <file>      Your own script (swipe write --mode their-format)
+  --script <file>      Your own script (swipe write --mode their-format). Its
+                       words stay as they are; the write adds the direction.
+                       For a kind that sings (pixar-song), one plain line for
+                       each sung line, naming no speaker and with no CAST: block
   --kind <kind>        A kind of ad in place of the one the template picked
-                       (swipe write), by its key. A kind this ad can't be made
-                       as is refused, with the kinds it can be made as, before
-                       the write is paid. Every other swipe verb refuses it
+                       (swipe write), by its key; swipe template prints the
+                       key it picked. pixar-song is a story one voice sings over
+                       animated pictures, in the Pixar look: name it for a song
+                       ad, since the template may read a song as spoken. A kind
+                       this ad can't be made as is refused, with the kinds it
+                       can be made as, before the write is paid. Every other
+                       swipe verb refuses it
   --style <look>       A look other than the swipe's own (swipe start)
   --title "<name>"     The ad's name (swipe start). Admin-only
   --again              A second, paid video from a swipe that already has one
@@ -667,6 +703,29 @@ read of the voice list on the member's ElevenLabs key, and no speech: the
 voices that fit the person, best fit first, each with its age and accent when
 known, the one the voice row recommends, and the swipe's page where the
 samples play; voice=<n> picks one, and the video is filmed in it.
+swipe sheet samples is paid (a Suno Pixar Song swipe): the song's opening sung in
+up to 4 sounds, four takes a sound in two pairs (two more for a sound when all
+its takes but at most one were heard as another kind of music), each heard
+once, each sound's opening reworded the way its kind of music sings it;
+--sounds names them by code,
+else --count of them (4 by default) are chosen for the member. Without --yes it
+says the price and makes nothing; --yes --max-usd <the price's most> makes them.
+songSample=<n> picks a take, and sets the kind of music, the sound and the
+singer with it; the full song is then sung in its style.
+swipe sheet cast is paid (a Suno Pixar Song swipe): one text call finds the
+song's 1 to 3 main characters, and each is drawn 10 ways (5 regular, 5
+caricature). Without --yes it says the price and makes nothing; --yes
+--max-usd <the price's most> makes them. cast1=<n> (cast2, cast3) picks a
+picture, and the video draws that character from it, never as a new figure.
+swipe sheet lyric is paid, on the member's model key, for a swipe of their own
+script of a sung kind: their lines written as a song. Without --yes it says the
+price and the lyric made so far; --yes --max-usd <the price's most> writes it.
+lyric=song sings it in the video; lyric=yours brings their own lines back.
+swipe new is free: a swipe of the member's own words with no ad, for a kind of ad
+that sings them, while the server's song sheet is on. Without --yes it only checks
+the lines; --yes writes it. Then the song's shape, a lyric of the lines (paid, its
+price first), the sheet and its price, and the start, as for any swipe with a sheet.
+It is set and started from the CLI for now: the dashboard does not open it yet.
 swipe write also makes people to pick from for a kind whose sheet has a person,
 when the server offers them: without --yes it says their price too, and the
 yes line carries their most (--people-max-usd <n>). The write then makes 4 on
@@ -679,7 +738,9 @@ without them. swipe start waits while people or the animal are being made,
 until 5 minutes after they were asked for.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
-clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
+clip, but for a sung video's first part (songPart=first): it stops after its
+clips for the rest's price and a second yes (approve --max-usd). It stops at
+the storyboard unless --one-shot. --wait on swipe and swipe
 status waits for the breakdown; on swipe start, for the run; on swipe run, for
 each run once every ad is started.
 
@@ -996,6 +1057,9 @@ export type ArtifactSubset =
       /** Kind setting voiceLock: whether each speaker's turn was re-voiced into their pinned voice
        *  (video/lib/voiceLock.ts VoiceLockRecord). Absent unless the kind turns voiceLock on. */
       voiceLock?: unknown;
+      /** COP-273 P4f: the clip is one video call of one to three sung lines: the call's first scene, where this
+       *  scene's lines start in the call's stretch of the song and how long they last (s). Absent on every other clip. */
+      songCall?: SongCallInPoint;
       /** Already-paid alternate takes of this scene the run kept on file. Absent on older runs. */
       availableTakes?: StoredTake[];
     }
@@ -1113,6 +1177,25 @@ export interface PullCastLock {
   cast: PullCastLockMember[];
 }
 
+/** COP-273 P3: what the stop after a sung video's first part says (convex/lib/workflow/pilotStop.ts SongPartStop). */
+export interface SongPartStop {
+  scenes: number[];
+  firstSec: number;
+  untilSec?: number;
+  rest: { aboutUsd: number; mostUsd: number } | null;
+  /** The first part's rough cut, its clips with the song under them (the worker's, no paid call). Its stored file's
+   * address, which the CLI never prints (COP-375): classifyRun turns it into previewReady. */
+  previewUrl?: string;
+  /** The rough cut is ready on the video's page. */
+  previewReady?: true;
+  /** The worker could not make the rough cut: the clips are there, each without the song. */
+  previewFailed?: true;
+  /** What this video has cost so far, from its own books: checks and text calls included, not the member's bill. */
+  spentUsd?: number;
+  /** The rough cut on record is of other clips (a redo at the stop made a new clip): it is not offered. */
+  previewStale?: true;
+}
+
 export interface VideoRun {
   _id: string;
   launchDoor?: "template";
@@ -1134,6 +1217,17 @@ export interface VideoRun {
   pausedNodeId?: string;
   /** Stop 4: the scenes the pilot clip made, and its approval. Absent on every run without a pilot. */
   pilot?: { sceneIndexes?: number[]; approvedAt?: number };
+  /**
+   * COP-273 P3: parked after the first part of a sung video (convex/lib/workflow/pilotStop.ts songPartStopOf): its
+   * scenes, where it ends on the song, and the rest's price that the approve must carry. Absent at every other stop.
+   */
+  songPartStop?: SongPartStop;
+  /**
+   * COP-273 P7 stage 3 fix (M1): present only on a run that films one video call for one to three sung lines
+   * (convex/workflows.ts getRun, songCallsOfRunView: Luke's picture flow and a frozen price that covers calls, the same
+   * gate on which the server refuses a clip's redo, songCallSceneRedoRefused). Read only for whether it is there.
+   */
+  songCalls?: object;
   /** A prepared paid operation is waiting for an exact-request approval, not a final-cut upload. */
   requestQuotePending?: boolean;
   templateAudition?: TemplateAudition;
@@ -1166,6 +1260,8 @@ export interface VideoRun {
   songAsVoice?: true;
   /** Actual selected/kept song master, not merely the format's song intent. */
   heldSong?: true;
+  /** COP-273 S5: a sung run (songAsVoice) that holds no song; the worker does not cut it, a member's own cut may. */
+  songMissing?: true;
   /** Explicit template ambience selection; absent on historical/non-template runs. */
   roomTone?: boolean;
   /** #3304: the Frame and Pacing a paste-a-script run asked for. Absent means
@@ -1230,6 +1326,92 @@ export interface RunDirector {
 
 /** Every read of a run goes through here. A run whose node list is missing or
  *  malformed reads as a run that has not made anything, never as a crash. */
+/** COP-273 S5: the pull's one line for a sung run that holds no song. */
+export const SONG_MISSING_PULL_LINE =
+  "This video's voice is one song, but the run holds no song, so a cut made from these files uses the lines as they were read.";
+
+/**
+ * COP-273 P4f cut: a run that filmed one video call for one to three sung lines is cut with each call's WHOLE clip
+ * sped up or slowed down to last exactly its stretch of the song laid whole (first-cut.mjs songCallFit). The pull's
+ * manifest says so with this marker, the same as first-cut.mjs SONG_CALL_CUT, and lists each call (`calls`).
+ */
+export const SONG_CALL_CUT = "fit" as const;
+
+/** One video call of a pulled run: its scenes, its one clip's file (its first scene's) and its stretch of the song (s). */
+export interface SongCallOfPull {
+  scenes: number[];
+  clip: string;
+  seconds: number;
+  /** P4f cut fix 3: the seconds its clip was ordered at, when its first scene's row says them; the cut fits from them. */
+  orderedSec?: number;
+}
+
+/** Each video call of a pulled run, in scene order; none on a run that filmed one clip a scene. */
+export function songCallsOfPull(scenes: ReadonlyArray<{ index: number; clip: string | null; songCall?: SongCallInPoint }>): SongCallOfPull[] {
+  const calls = new Map<number, { scenes: number[]; clip: string | null; seconds: number; orderedSec?: number }>();
+  for (const scene of [...scenes].sort((a, b) => a.index - b.index)) {
+    if (!scene.songCall) continue;
+    const call = calls.get(scene.songCall.sceneIndex) ?? { scenes: [], clip: null, seconds: 0 };
+    // Fix round 3: the order the cut reads, its first scene's (first-cut.mjs reads the same scene's).
+    if (call.scenes.length === 0 && scene.songCall.orderedSec !== undefined) call.orderedSec = scene.songCall.orderedSec;
+    call.scenes.push(scene.index);
+    call.clip ??= scene.clip;
+    call.seconds += scene.songCall.seconds;
+    calls.set(scene.songCall.sceneIndex, call);
+  }
+  return [...calls.values()].flatMap((c) => (c.clip
+    ? [{ scenes: c.scenes, clip: c.clip, seconds: Math.round(c.seconds * 1000) / 1000, ...(c.orderedSec !== undefined ? { orderedSec: c.orderedSec } : {}) }]
+    : []));
+}
+
+/** P4f cut: the pull of a call run says how its clips are cut (a clip with no ordered seconds: every row before fix round 4). */
+export const SONG_CALL_FIT_LINE =
+  "Each clip listed under calls in manifest.json is played whole, sped up or slowed down to last exactly its lines' stretch of the song (its seconds).";
+/**
+ * P4f cut fix 3 (review R1): a clip whose call says the seconds it was ordered at is fitted from them (first-cut.mjs
+ * fitSongCalls), so a longer clip loses its end and a shorter one holds its last frame.
+ */
+export const SONG_CALL_ORDERED_FIT_LINE =
+  "Each clip listed under calls in manifest.json with an orderedSec (the seconds it was ordered at) is played from its start at orderedSec divided by seconds times its filmed speed, so those seconds last exactly its lines' stretch of the song (its seconds): a clip longer than its order loses its end, and a shorter one holds its last frame.";
+/** P4f cut fix 3: said beside SONG_CALL_ORDERED_FIT_LINE only when some calls say no ordered seconds. */
+export const SONG_CALL_UNORDERED_FIT_LINE =
+  "A clip listed there with no orderedSec is played whole, sped up or slowed down to last exactly its lines' stretch of the song (its seconds).";
+/** P4f cut (review B-b S3): said only when some scenes share a clip. A call's scene holds one line (songCalls.ts songCallLinesOf). */
+export const SONG_CALL_SHARED_LINE =
+  "Some scenes share one clip: each says where its line starts in that clip's stretch (songCall.fromSec) and how long it lasts (songCall.seconds).";
+
+/** The pull's lines for a run's calls: none for a run that filmed one clip a scene. */
+export function songCallPullLines(calls: readonly SongCallOfPull[]): string[] {
+  if (calls.length === 0) return [];
+  const ordered = calls.filter((call) => call.orderedSec !== undefined).length;
+  const fit = ordered === 0
+    ? [SONG_CALL_FIT_LINE]
+    : [SONG_CALL_ORDERED_FIT_LINE, ...(ordered < calls.length ? [SONG_CALL_UNORDERED_FIT_LINE] : [])];
+  return [...fit, ...(calls.some((call) => call.scenes.length > 1) ? [SONG_CALL_SHARED_LINE] : [])];
+}
+
+/**
+ * P4f cut (review B-a S6): the team pull of a call run refuses a workspace whose first-cut does not fit the clips. Fix
+ * round 2 (S6, the lead's ruling): the refusal stays, and names the free command that mends it as the CLI spells it
+ * (update.ts helpText).
+ */
+export const SONG_CALL_OLD_CUT_SCRIPT =
+  "This video fits each clip to its lines, and this workspace's first-cut is older and would cut it another way, so nothing was pulled. Refresh the workspace, which is free and makes nothing again: exodus update. Then pull it again: exodus video pull <runId>";
+
+/** Whether a workspace's first-cut fits a call's clip (it holds the marker); a workspace with none to read cuts nothing. */
+export function cutScriptFitsSongCalls(script: string | null): boolean {
+  return script === null || script.includes(`export const SONG_CALL_CUT = "${SONG_CALL_CUT}"`);
+}
+
+/** The workspace's own first-cut, as `exodus update` last wrote it, or null when there is none to read. */
+function workspaceCutScript(): string | null {
+  try {
+    return fs.readFileSync(path.join(findWorkspaceRoot(), ".claude", "skills", "exodus-video", "scripts", "first-cut.mjs"), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
 export function asVideoRun(data: unknown): VideoRun {
   const run = (data ?? {}) as VideoRun;
   return { ...run, nodes: Array.isArray(run.nodes) ? run.nodes : [] };
@@ -1326,6 +1508,8 @@ export interface VideoDeps {
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   dashboardUrl: string;
+  /** P4f cut: the workspace's own first-cut script, or null when there is none to read (the worker cuts with its own). */
+  cutScriptOf?: () => string | null;
 }
 
 export const defaultDeps: VideoDeps = {
@@ -1377,6 +1561,7 @@ export const defaultDeps: VideoDeps = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),
   dashboardUrl: getDashboardUrl(),
+  cutScriptOf: workspaceCutScript,
 };
 
 /** The server's own sentence for a run that isn't the caller's (code RUN_NOT_FOUND), or undefined. */
@@ -1445,6 +1630,11 @@ export type RunStop =
        * rows were not read.
        */
       place?: { imageUrl: string | null };
+      /**
+       * COP-273 P7 stage 4: a sung run filmed in calls, its run answer's `songCalls` as sent (convex/workflows.ts getRun):
+       * no scene picture is drawn and none is redrawn on its own, so no frame redo is offered at this stop.
+       */
+      songCalls?: unknown;
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -1452,11 +1642,13 @@ export type RunStop =
   // `appCutOnRun`, filled by resolveStop from the rows, says the cut on the run is the app's own. `appOutdatesCut` says
   // the server's "making" also means any cut on the run is not one to keep (a script-video run, see appCutOutdates).
   // `redoingScenes`, filled by status from the rows (scenesBeingRedone), are the scenes being made again before that cut.
-  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; redoFaultScenes?: number[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[]; fromTemplate?: true }
+  // P7 stage 4 fix (S5): `songCalls`, a sung run filmed in calls (its run answer's `songCalls`), whose server refuses a
+  // scene's clip or picture made again on its own.
+  | { at: "final-watch"; missingScenes?: MissingScene[]; framesNodeId?: string; heldScenes?: number[]; heldTakes?: HeldTake[]; redoFaultScenes?: number[]; cutFailure?: string; appMakesCut?: true; appCutOnRun?: true; appOutdatesCut?: true; redoingScenes?: number[]; fromTemplate?: true; songCalls?: true }
   // Stop 4: the run stopped at its pilot clip and waits before the other clips.
   // `silentScenes` are pilot scenes the board gives no spoken line. `checks` is
   // filled by resolveStop from the scene rows; absent when they were not read.
-  | { at: "pilot"; nodeId?: string; sceneIndexes: number[]; silentScenes?: number[]; checks?: PilotCheck[] }
+  | { at: "pilot"; nodeId?: string; sceneIndexes: number[]; silentScenes?: number[]; checks?: PilotCheck[]; songPart?: SongPartStop; songCalls?: true }
   | { at: "request-quote" }
   | { at: "audition"; audition: NonNullable<VideoRun["templateAudition"]> }
   // Stop 2: parked at the picks box, waiting for the member's picks.
@@ -1666,6 +1858,9 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(run.pausedNodeId ? { nodeId: run.pausedNodeId } : {}),
         sceneIndexes,
         ...(silentScenes.length ? { silentScenes } : {}),
+        // Landing #5000 (COP-406): the rough cut's stored file address stays out of --json too.
+        ...(run.songPartStop ? { songPart: songPartWithoutAddress(run.songPartStop) } : {}),
+        ...(run.songCalls ? { songCalls: true as const } : {}),
       };
     }
     if (run.requestQuotePending === true) return { at: "request-quote" };
@@ -1687,6 +1882,7 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(held ? { heldReason: held } : {}),
         ...(run.blockingMap === true ? { blockingMap: true as const } : {}),
         ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true as const } : {}),
+        ...(run.songCalls ? { songCalls: run.songCalls } : {}),
       };
     }
     if (parkedAtFinalWatch(run)) {
@@ -1715,6 +1911,7 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(appCutOutdates(run) ? { appOutdatesCut: true as const } : {}),
         // COP-344: a run from a template does not say its approve can't be undone (finalApproveLines).
         ...(run.launchDoor === "template" ? { fromTemplate: true as const } : {}),
+        ...(run.songCalls ? { songCalls: true as const } : {}),
       };
     }
     return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -2006,12 +2203,15 @@ function missingSceneLines(
   framesNodeId: string | undefined,
   runId: string,
   runUrl: string,
+  /** P7 stage 4 fix (S5): a run filmed in calls, whose server refuses a scene's clip or picture made again on its own. */
+  songCalls = false,
 ): string[] {
   const scenes = missing.map((m) => m.sceneIndex);
   const lines = [
     `Parked: ${scenesPhrase(scenes)} ${scenes.length === 1 ? "has" : "have"} no clip yet, so the ad isn't complete.`,
   ];
-  for (const { sceneIndex, pictureRefused } of missing) {
+  if (songCalls) lines.push(SONG_CALL_NO_ONE_SCENE);
+  for (const { sceneIndex, pictureRefused } of songCalls ? [] : missing) {
     if (!pictureRefused) {
       lines.push(`Redo clip ${sceneIndex}:     exodus video retry-clip ${runId} --scene ${sceneIndex}`);
       continue;
@@ -2046,10 +2246,12 @@ function heldSceneLines(
   heldTakes: HeldTake[] = [],
   /** #4721: the held scenes whose one redo left a drawing fault in. Undefined (the rows were not read): all of them. */
   redoFaultScenes?: number[],
+  /** P7 stage 4 fix (S5): a run filmed in calls: no scene is remade on its own (the keep stays). */
+  songCalls = false,
 ): string[] {
   const takes = scenes.filter((scene) => heldTakes.some((t) => t.sceneIndex === scene));
   const faults = scenes.filter((scene) => !takes.includes(scene));
-  return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage, redoFaultScenes) : [])];
+  return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage, redoFaultScenes, songCalls) : [])];
 }
 
 /** COP-277: the One-take takes held for their words: each one's sentence, its keep, and where to watch it first. */
@@ -2069,7 +2271,7 @@ function heldTakeLines(takes: number[], heldTakes: HeldTake[], runId: string, vi
   ];
 }
 
-function drawingFaultLines(scenes: number[], runId: string, videoPage: string, redoFaultScenes?: number[]): string[] {
+function drawingFaultLines(scenes: number[], runId: string, videoPage: string, redoFaultScenes?: number[], songCalls = false): string[] {
   const one = scenes.length === 1;
   // #4721: only a scene whose one redo left its fault in was made again; any other was held for the check it failed.
   const redone = redoFaultScenes === undefined ? scenes : scenes.filter((scene) => redoFaultScenes.includes(scene));
@@ -2082,11 +2284,13 @@ function drawingFaultLines(scenes: number[], runId: string, videoPage: string, r
   ].join(", and ");
   return [
     `Held: ${heldWhy}, so the final video wasn't made.`,
-    ...scenes.map((scene) =>
-      one
-        ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
-        : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`,
-    ),
+    ...(songCalls
+      ? [SONG_CALL_NO_ONE_SCENE]
+      : scenes.map((scene) =>
+          one
+            ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
+            : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`,
+        )),
     // COP-277: the keep the page's "Use as-is" makes, from here.
     ...scenes.map((scene) =>
       one ? `Keep it as it is: exodus video keep ${runId} --scene ${scene}` : `Keep scene ${scene} as it is: exodus video keep ${runId} --scene ${scene}`,
@@ -2101,6 +2305,7 @@ function drawingFaultLines(scenes: number[], runId: string, videoPage: string, r
  * about the clip is approved unseen.
  */
 function pilotLines(stop: Extract<RunStop, { at: "pilot" }>, runId: string, runUrl: string): string[] {
+  if (stop.songPart) return songPartLines(stop, stop.songPart, runId, runUrl);
   const scenes = stop.sceneIndexes;
   const checks = stop.checks ?? [];
   const failedScenes = checks.filter((c) => c.clip === "failed").map((c) => c.sceneIndex);
@@ -2132,6 +2337,88 @@ function pilotLines(stop: Extract<RunStop, { at: "pilot" }>, runId: string, runU
   lines.push(
     `Redo it:              exodus video retry-clip ${runId} --scene ${redoScene ?? "<n>"} --note "<what is wrong>"`,
     `Make the other clips: exodus video approve ${runId}`,
+  );
+  return lines;
+}
+
+/** COP-273 P3: said at the stop after a first part, both sentences true whatever was made (the lead's ruling 9). */
+export const SONG_PART_NOT_NOW =
+  "Not now: nothing more is made or paid until you say yes. The song, the look and characters, the pictures and the first part's clips are paid.";
+export const SONG_PART_LATER =
+  "You can make the rest later from this video at the price it shows then, or start a new video, which pays again from the start.";
+/**
+ * P7 stage 3 fix (M1): the server's sentences for a run filmed in calls, copied word for word (video/lib/songCalls.ts
+ * SONG_CALL_NEW_VIDEO, SONG_CALL_FIRST_PART_NOT_MADE; the CLI package does not import video/lib). video-pilot.test.ts
+ * holds each equal to the server's.
+ */
+// P7 stage 4: defined once, in video-customer.ts, where the member's stops say it too.
+export { SONG_CALL_NEW_VIDEO };
+export const SONG_CALL_FIRST_PART_NOT_MADE =
+  `A clip of this video's first part was not made, and a clip of this video can't be filmed again on its own, so the rest will not be filmed. ${SONG_CALL_NEW_VIDEO}`;
+
+/** A first part's stop as --json prints it: whether its rough cut is ready, never the stored file's address. */
+function songPartWithoutAddress(part: SongPartStop): SongPartStop {
+  const { previewUrl, ...rest } = part;
+  return { ...rest, ...(previewUrl ? { previewReady: true as const } : {}) };
+}
+
+/**
+ * COP-273 P3: the stop after a sung video's first part, in section-3 order: what was made and where to watch it, each
+ * clip's failed or skipped check (a sung clip has no spoken line, so no word check is printed), the rest's price, the
+ * commands, and what "not now" means.
+ */
+function songPartLines(stop: Extract<RunStop, { at: "pilot" }>, part: SongPartStop, runId: string, runUrl: string): string[] {
+  const checks = stop.checks ?? [];
+  const failedScenes = checks.filter((c) => c.clip === "failed").map((c) => c.sceneIndex);
+  const n = part.scenes.length;
+  const until = part.untilSec !== undefined ? `the song's first ${Math.round(part.untilSec)} s` : "the song's first part";
+  const lines = [
+    failedScenes.length
+      ? `Run ${runId}'s first part has a clip that was not made (${scenesPhrase(failedScenes)}) and is waiting for you.`
+      : `Run ${runId} made the first part: ${n === 1 ? "1 clip" : `${n} clips`}, ${until} (${scenesPhrase(part.scenes)}), and is waiting for you.`,
+    // Landing #5000 (COP-406): the page, never the rough cut's stored file address (COP-375's rule).
+    `Watch it here:        ${runUrl}`,
+    ...(part.previewReady
+      ? ["That page has its rough cut with the song, and its clips one by one."]
+      // COP-273 P4f cut (C3): the worker makes the rough cut only of every first-part clip, never with one missing.
+      : failedScenes.length
+        ? ["There is no rough cut with the song: it is made only when every clip of the first part is made."]
+        : part.previewStale
+        ? ["There is no rough cut of the first part's clips as they are now: each clip is made without the song, which is laid under them in the cut."]
+        : part.previewFailed
+          ? ["Its rough cut with the song could not be made: each clip is made without the song, which is laid under them in the cut."]
+          : ["Each clip is made without the song: the song is laid under them in the cut."]),
+  ];
+  for (const c of checks) {
+    if (c.clip === "failed") lines.push(`Clip failed, scene ${c.sceneIndex}: ${c.error ?? "no clip was made"}`);
+    else if (c.clip === "making") lines.push(`Clip, scene ${c.sceneIndex}: still being made, not checked yet`);
+    else {
+      for (const detail of c.failed) lines.push(`Check failed, scene ${c.sceneIndex}: ${detail}`);
+      for (const detail of c.skipped) lines.push(`Check skipped, scene ${c.sceneIndex}: ${detail}`);
+    }
+  }
+  const redoScene = failedScenes[0] ?? part.scenes[0];
+  // P7 stage 3 fix (M1): a run filmed in calls has no redo of one clip (convex/workflows.ts retry, songCallSceneRedoRefused),
+  // and with a clip of its first part not made its rest is refused (the approve, SONG_CALL_FIRST_PART_NOT_MADE): the
+  // server's own sentence then stands for the rest, the redo and "later".
+  if (stop.songCalls && failedScenes.length > 0) {
+    lines.push(SONG_CALL_FIRST_PART_NOT_MADE, SONG_PART_NOT_NOW);
+  } else {
+    lines.push(
+      part.rest
+        ? `The rest:             about $${part.rest.aboutUsd.toFixed(2)}, at most $${part.rest.mostUsd.toFixed(2)}, paid only when you say yes to it.`
+        : "The rest:             its price can't be worked out, so it can't be made: start a new video with the whole song.",
+      stop.songCalls
+        ? `A clip of this video can't be filmed again on its own. ${SONG_CALL_NEW_VIDEO}`
+        : `Redo a clip:          exodus video retry-clip ${runId} --scene ${redoScene ?? "<n>"} --note "<what is wrong>"`,
+      ...(part.rest ? [`Make the rest:        exodus video approve ${runId} --max-usd ${part.rest.mostUsd.toFixed(2)}`] : []),
+      SONG_PART_NOT_NOW,
+      SONG_PART_LATER,
+    );
+  }
+  lines.push(
+    // Fix round 2: what the run's own books hold, said apart from the rest's price: not the member's bill.
+    ...(part.spentUsd !== undefined ? [`So far this video has cost $${part.spentUsd.toFixed(2)} to make, checks and text calls included.`] : []),
   );
   return lines;
 }
@@ -2184,13 +2471,18 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
         : [
             "Parked: the storyboard is waiting for your yes.",
             `Read it:    exodus video storyboard ${runId}`,
-            `Approve it: exodus video approve ${runId}`,
+            ...(songCallsProblem(stop.songCalls) ? [] : [`Approve it: exodus video approve ${runId}`]),
           ]),
     ];
     if (stop.showAd) {
       lines.push(`Send back:  exodus video flag ${runId} --note "what's wrong"`);
     }
-    if (stop.framesNodeId) {
+    // P7 stage 4: a sung run filmed in calls drew no scene picture and the server refuses one scene's redo
+    // (convex/lib/workflow/songCallsView.ts songCallSceneRedoRefused): its calls' pictures in place of the redo.
+    if (stop.songCalls) {
+      // COP-375: the pictures by what they are, then the video's page that draws them (as the place's picture above).
+      lines.push(...songCallStopLines(stop.songCalls, videoPage || runUrl));
+    } else if (stop.framesNodeId) {
       lines.push(
         `Redo one frame: exodus video retry-frame ${runId} --node ${stop.framesNodeId} --scene <n>`,
       );
@@ -2202,9 +2494,9 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     // #2266: a scene with no clip outranks every cut state below. "Every piece
     // is made" would be false, and the server refuses the approval anyway.
     if (stop.missingScenes?.length) {
-      return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
+      return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl, stop.songCalls === true);
     }
-    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes, stop.redoFaultScenes);
+    if (stop.heldScenes?.length) return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes, stop.redoFaultScenes, stop.songCalls === true);
     // #4573: the app's cut was refused and nothing has cut it since, so the run is not waiting on anything. Every attach
     // clears the refusal, so a cut still on the run is older than it: one a redo outdated, not one to approve.
     if (stop.cutFailure) {
@@ -2472,6 +2764,9 @@ export interface ManifestScene {
   voicePitchMethod: string | null;
   /** Kind setting voiceLock: the clip's lock record, which the worker's cut checks. Absent when the clip has none. */
   voiceLock?: unknown;
+  /** COP-273 P4f: the clip is one video call of one to three sung lines; this scene's lines start `fromSec` into the
+   *  call's stretch of the song. The cut plays the call's whole clip fitted to that stretch. Absent on every other clip. */
+  songCall?: SongCallInPoint;
   /** Already-paid alternate takes pulled beside the clip. Absent when the run stored none. */
   availableTakes?: ManifestTake[];
   /** The clip ledger row's status (pending/running/done/failed), or "missing"
@@ -2596,6 +2891,10 @@ export interface VideoManifest {
   roomTone?: boolean;
   /** A held template song is laid whole and owns the audio without a separate bed. */
   wholeVoice?: true;
+  /** COP-273 P4f cut: a call run is cut with each call's whole clip fitted to its stretch of the song (first-cut.mjs). */
+  songCallCut?: typeof SONG_CALL_CUT;
+  /** COP-273 P4f cut: each video call: its scenes, its one clip's file and its stretch of the song (s). */
+  calls?: SongCallOfPull[];
   templateMotion?: { enabled: true };
   /** #3304: the run's Frame and Pacing, which the cut follows (a "jump-cuts"
    *  pacing is cut with punch-ins). Written only when the run asked for one. */
@@ -2687,8 +2986,34 @@ type SceneClipPull = {
   voicePitchMethod: string | null;
   replannedIdea: ReplannedIdea | null;
   voiceLock?: unknown;
+  songCall?: SongCallInPoint;
   availableTakes?: StoredTake[];
 };
+
+/**
+ * COP-273 P4f: where a scene sits in the one clip a video call made for one to three sung lines (scout clips.ts writes
+ * it on the clip artifact of every scene the call covers): the call's first scene, where the scene's lines start in the
+ * call's stretch of the song and how long they last, seconds (the cut fits the call's whole clip to that stretch).
+ */
+export interface SongCallInPoint {
+  sceneIndex: number;
+  fromSec: number;
+  seconds: number;
+  /** P4f cut fix 2 (S3): the seconds the call's clip was ordered at, when the clip says them; the cut fits from them. */
+  orderedSec?: number;
+}
+
+/** The artifact's in-point in its call's clip, when it has a whole one. */
+function songCallInPointOf(artifact: { songCall?: unknown }): SongCallInPoint | undefined {
+  const call = artifact.songCall as Partial<SongCallInPoint> | undefined;
+  return call && Number.isInteger(call.sceneIndex) && Number.isFinite(call.fromSec) && (call.fromSec as number) >= 0 &&
+    Number.isFinite(call.seconds) && (call.seconds as number) > 0
+    ? {
+        sceneIndex: call.sceneIndex as number, fromSec: call.fromSec as number, seconds: call.seconds as number,
+        ...(Number.isFinite(call.orderedSec) && (call.orderedSec as number) > 0 ? { orderedSec: call.orderedSec as number } : {}),
+      }
+    : undefined;
+}
 
 function clipFromArtifact(
   sceneIndex: number,
@@ -2714,6 +3039,7 @@ function clipFromArtifact(
     voicePitchMethod: artifact.voicePitchMethod ?? null,
     replannedIdea: artifact.replannedIdea ?? null,
     ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
+    ...(songCallInPointOf(artifact) ? { songCall: songCallInPointOf(artifact) } : {}),
     ...(artifact.availableTakes ? { availableTakes: artifact.availableTakes } : {}),
   };
 }
@@ -3227,6 +3553,7 @@ export function planPull(
       voicePitchHz: clip ? clip.voicePitchHz : null,
       voicePitchMethod: clip ? clip.voicePitchMethod : null,
       ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
+      ...(clip?.songCall ? { songCall: clip.songCall } : {}),
       ...(availableTakes ? { availableTakes } : {}),
       clipStatus: item?.status ?? "missing",
       error: item?.error ?? null,
@@ -3307,6 +3634,15 @@ export function planPull(
       ...(clipAudio ? { clipAudio } : {}),
       ...(run.videoChoice?.videoModel === "template-video" && run.heldSong === true
         ? { wholeVoice: true as const, templateMotion: { enabled: true as const } } : {}),
+      // COP-273 P4f cut: a run that filmed one video call for one to three sung lines is cut with its song laid whole,
+      // each call's whole clip fitted to its stretch of it, on the member's own cut as on the worker's.
+      ...(scenes.some((scene) => scene.songCall)
+        ? {
+            wholeVoice: true as const,
+            songCallCut: SONG_CALL_CUT,
+            calls: songCallsOfPull(scenes.map((scene) => ({ index: scene.sceneIndex, clip: scene.clip, songCall: scene.songCall }))),
+          }
+        : {}),
       ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
       ...(finished ? { video: finished.file } : {}),
     },
@@ -5896,6 +6232,8 @@ export async function statusFlow(
   // COP-319 review: the words leave out a step's by-design note; --json keeps every warning.
   const said = warnings
     .filter((w) => !byDesign(run.nodes.find((n) => n.nodeId === w.nodeId)))
+    // P7 stage 4 fix (S1): the scene-frames step's sentence on a run filmed in calls, which the stop's lines say first.
+    .filter((w) => !(w.warning === SONG_CALL_NO_SCENE_PICTURES && guidance.includes(SONG_CALL_NO_SCENE_PICTURES)))
     .map((w) => (everyHoldKept && w.warning ? { ...w, warning: heldChoiceMade(w.warning) } : w));
 
   if (json) {
@@ -6335,6 +6673,12 @@ interface GateCards {
   framesNodeId?: string | null;
   /** #3914: set on a B-roll run only. */
   broll?: true;
+  /** COP-381: a One-take board's openings to pick from while it waits for its review, the first picked. */
+  openings?: StoryboardOpening[];
+  /** COP-381 landing review (#4995): the openings' code, sent back with a pick. */
+  openingsDigest?: string;
+  /** COP-381: once approved, the opening picked, by its number and name, when one was. */
+  openingPicked?: { n: number; name: string };
   /** The check before pictures, on a kind that runs it. `open`: a block still holds the storyboard. */
   logicFindings?: {
     findings: Array<{ id: string; severity: string; kind: string; scenes: number[]; what: string }>;
@@ -6352,7 +6696,14 @@ export async function storyboardFlow(
   if (!res.ok) return errorResult(res, json);
   const board = customerAnswer<CustomerStoryboard>(res.data);
   if (board) {
-    return { code: 0, lines: json ? [JSON.stringify(board)] : customerStoryboardLines(board, customerRunPage(deps.dashboardUrl, board.runId)) };
+    if (json) return { code: 0, lines: [JSON.stringify(board)] };
+    // P7 stage 4 fix (S6): on a run filmed in calls, whether status lists the calls' pictures yet: a second, non-fatal
+    // read of the run answer (a refusal or a dropped connection says only that none is listed yet).
+    const runRes = board.filmsCalls
+      ? await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`).catch(() => null)
+      : null;
+    const songCalls = runRes?.ok === true ? customerAnswer<CustomerRun>(runRes.data)?.songCalls : undefined;
+    return { code: 0, lines: customerStoryboardLines(board, customerRunPage(deps.dashboardUrl, board.runId), songCalls) };
   }
   const cards = res.data as GateCards;
   if (json) return { code: 0, lines: [JSON.stringify(cards)] };
@@ -6382,6 +6733,9 @@ export async function storyboardFlow(
     lines.push("", "Scenes outside any block");
     for (const scene of loose) lines.push(...sceneCardLines(scene));
   }
+  // COP-381: take 1's openings to pick from, numbered, while the storyboard waits; past it, the one picked.
+  lines.push(...openingLines(cards.openings, runId, cards.openingsDigest));
+  if (!cards.openings && cards.openingPicked) lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
 
   // #1845: the voices ride the storyboard stop, so a person sees who speaks with
   // what before approving instead of having to know about a second command. A
@@ -6416,6 +6770,8 @@ export async function storyboardFlow(
     .catch(() => null);
   const showAd = runRes?.ok === true && isShowAd(asVideoRun(runRes.data));
   const blockingMap = runRes?.ok === true && asVideoRun(runRes.data).blockingMap === true;
+  // P7 stage 4: a sung run filmed in calls (its run answer's `songCalls`): no frame redo, its calls' pictures instead.
+  const songCalls = runRes?.ok === true ? asVideoRun(runRes.data).songCalls : undefined;
 
   const logic = cards.logicFindings;
   if (logic) {
@@ -6427,16 +6783,19 @@ export async function storyboardFlow(
     }
     for (const n of logic.notes ?? []) lines.push(`  note: ${n}`);
   }
-  lines.push(
-    "",
-    logic?.open
-      ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
-      : `approve with: exodus video approve ${runId}`,
-  );
+  // Landing #5000 (COP-402): a sung run whose calls cannot be filmed is refused an approve, so none is offered.
+  if (!songCallsProblem(songCalls)) {
+    lines.push(
+      "",
+      logic?.open
+        ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
+        : `approve with: exodus video approve ${runId}`,
+    );
+  }
   if (showAd) {
     lines.push(`send it back: exodus video flag ${runId} --note "what's wrong"`);
   }
-  if (cards.framesNodeId) {
+  if (cards.framesNodeId && !songCalls) {
     lines.push(
       `redo one frame: exodus video retry-frame ${runId} --node ${cards.framesNodeId} --scene <n>`,
     );
@@ -6451,6 +6810,9 @@ export async function storyboardFlow(
     const workflowId = runRes?.ok === true ? asVideoRun(runRes.data).workflowId : undefined;
     lines.push(`See the pictures: ${reviewUrl(deps.dashboardUrl, { _id: runId, ...(workflowId ? { workflowId } : {}) })}`);
   }
+  // COP-375: the calls' pictures by what they are, then the video's page, which draws them (run-song-stop.tsx); the
+  // workflow page reviewUrl opens for an admin does not.
+  if (songCalls) lines.push("", ...songCallStopLines(songCalls, customerRunPage(deps.dashboardUrl, runId)));
   return { code: 0, lines };
 }
 
@@ -6576,9 +6938,32 @@ async function waitsForFinalApprove(runId: string, deps: VideoDeps): Promise<{ t
   }
 }
 
+/**
+ * COP-381: the opening `approve --opening <n>` picks, a whole number from 1 (the server refuses one the storyboard does
+ * not list); undefined when none was typed, "bad" for anything else. Landing review of #4981: read as typed, so
+ * `--opening=2` counts too (parseArgs files it under the whole key), and the last one typed wins.
+ */
+export function approveOpeningOf(occurrences: readonly FlagOccurrence[]): number | undefined | "bad" {
+  const typed = occurrences.filter((occurrence) => occurrence.flag === "opening");
+  if (typed.length === 0) return undefined;
+  const value = typed[typed.length - 1].value;
+  return value !== undefined && /^[1-9]\d*$/.test(value) ? Number(value) : "bad";
+}
+
+/**
+ * COP-381 landing review (#4995): the openings' code `approve --openings <code>` sends with a pick, as `exodus video
+ * storyboard` printed it; undefined when none was typed, "bad" for anything else. The last one typed wins.
+ */
+export function approveOpeningsDigestOf(occurrences: readonly FlagOccurrence[]): string | undefined | "bad" {
+  const typed = occurrences.filter((occurrence) => occurrence.flag === "openings");
+  if (typed.length === 0) return undefined;
+  const value = typed[typed.length - 1].value?.trim().toLowerCase();
+  return value !== undefined && /^[0-9a-f]{16}$/.test(value) ? value : "bad";
+}
+
 export async function approveFlow(
   runId: string,
-  opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string; auditionDigest?: string },
+  opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string; auditionDigest?: string; maxUsd?: number; opening?: number; openingsDigest?: string },
   deps: VideoDeps,
 ): Promise<FlowResult> {
   let requestQuote: { quotes: PreparedQuoteView[] } | undefined;
@@ -6605,6 +6990,10 @@ export async function approveFlow(
     ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
     ...(requestQuote ? { requestQuote } : {}),
     ...(opts.auditionDigest ? { auditionDigest: opts.auditionDigest } : {}),
+    // COP-273 P3: the most the member was shown for the rest of a first part; sent only when they typed it.
+    ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
+    // COP-381: the opening take 1 starts with, sent only when the member typed --opening; the server checks it.
+    ...(opts.opening !== undefined ? { opening: opts.opening, ...(opts.openingsDigest ? { openings: opts.openingsDigest } : {}) } : {}),
   });
   // #1845: a refused approve (a chosen voice ElevenLabs is certain is gone) comes
   // back 400 with one plain sentence — printed as-is, exit 1, nothing approved.
@@ -6615,7 +7004,9 @@ export async function approveFlow(
     const refusal = errorResult(res, opts.json);
     const staleCut = !opts.json && videoApiError(res).includes("approve this cut anyway");
     if (!opts.json && videoApiError(res).includes("accept the findings")) {
-      return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId} --accept-findings`] };
+      // Landing review of #4981: with the opening picked, so going on films the one the member asked for.
+      const opening = opts.opening !== undefined ? ` --opening ${opts.opening}${opts.openingsDigest ? ` --openings ${opts.openingsDigest}` : ""}` : "";
+      return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId}${opening} --accept-findings`] };
     }
     // An older server's "still being put together" names no scene; a list under it would contradict it.
     const waiting =
@@ -6655,6 +7046,8 @@ export async function approveFlow(
     code: 0,
     lines: [
       ...(final ? finalApprovedLines(final.template) : ["Approved."]),
+      // COP-381: the opening picked, said back.
+      ...(opts.opening !== undefined ? [`Take 1 starts with opening ${opts.opening}.`] : []),
       ...warnings,
       ...(summary.length > 0 ? ["", ...summary, ""] : []),
       `See what happens next: exodus video status ${runId}`,
@@ -7869,7 +8262,18 @@ export async function keepFlow(runId: string, sceneIndex: number, json: boolean,
     return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
   }
   if (!res.ok) return errorResult(res, json);
-  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, sceneIndex })] };
+  // COP-273 P10 fix (held page 2, R1): on a run filmed in calls the server keeps the call's other flagged scenes with
+  // this one and says which, in its own sentence; that sentence is printed as sent.
+  const data = res.data as { keptScenes?: unknown; sentence?: unknown } | null;
+  const keptScenes = Array.isArray(data?.keptScenes) && data.keptScenes.every((n) => typeof n === "number") ? (data.keptScenes as number[]) : null;
+  const sentence = keptScenes && typeof data?.sentence === "string" ? data.sentence : null;
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, sceneIndex, ...(sentence && keptScenes ? { keptScenes } : {}) })] };
+  if (sentence) {
+    return {
+      code: 0,
+      lines: [sentence, "If the final video was waiting on these scenes alone, the app makes it now.", `See where it stands: exodus video status ${runId}`],
+    };
+  }
   return {
     code: 0,
     lines: [
@@ -8452,9 +8856,13 @@ export interface CustomerManifest {
   runId: string;
   pulledAt: string;
   dashboardUrl: string;
-  scenes: Array<{ index: number; clip: string | null; voice: string | null }>;
+  /** `songCall` (COP-273 P4f): the scene's clip is one video call of one to three sung lines; the scene's lines start
+   *  `fromSec` into the call's stretch of the song and last `seconds`. Absent on every other scene. */
+  scenes: Array<{ index: number; clip: string | null; voice: string | null; songCall?: SongCallInPoint }>;
   music: string | null;
   video: string | null;
+  /** COP-273 P4f cut: each video call: its scenes, its one clip's file and its stretch of the song (s). */
+  calls?: SongCallOfPull[];
 }
 
 export function planCustomerPull(
@@ -8478,12 +8886,15 @@ export function planCustomerPull(
     const scene = scenes.get(item.sceneIndex) ?? { index: item.sceneIndex, clip: null, voice: null };
     if (item.url && item.kind === "clip" && scene.clip === null) {
       scene.clip = take(`${scenePrefix(item.sceneIndex)}.${extFor(item.url, "video")}`, item.url);
+      const inPoint = songCallInPointOf(item);
+      if (inPoint) scene.songCall = inPoint;
     }
     if (item.url && item.kind === "voice" && scene.voice === null) {
       scene.voice = take(`${scenePrefix(item.sceneIndex)}.voice.${extFor(item.url, "audio")}`, item.url);
     }
     scenes.set(item.sceneIndex, scene);
   }
+  const calls = songCallsOfPull([...scenes.values()]);
   const videoUrl = run.video?.url;
   const video = videoUrl ? take(`video.${extFor(videoUrl, "video")}`, videoUrl) : null;
   return {
@@ -8495,6 +8906,7 @@ export function planCustomerPull(
       scenes: [...scenes.values()].sort((a, b) => a.index - b.index),
       music,
       video,
+      ...(calls.length ? { calls } : {}),
     },
   };
 }
@@ -8553,6 +8965,7 @@ async function customerPullFlow(
       `Pulled ${downloads.length - failures.length + 1} files into ${dir}`,
       `Every piece is listed in ${manifestPath}.`,
       ...replacedVideoLines(dir, manifest.video, videoBefore, deps),
+      ...songCallPullLines(manifest.calls ?? []),
       ...(manifest.video ? [] : ["The finished video isn't ready yet, so only the scene pieces came down."]),
       // #4761: a video waiting on the member says so, and where each scene's finding is.
       ...customerWaitingNote(run),
@@ -8607,6 +9020,12 @@ export async function pullFlow(
     ...(deps.piecesOnly ? { piecesOnly: true as const } : {}),
   });
 
+  // COP-273 P4f cut (review B-a S6): an older first-cut in this workspace would cut a call run the old way, silently.
+  if (plan.manifest.songCallCut && !cutScriptFitsSongCalls(deps.cutScriptOf?.() ?? null)) {
+    const refusal = SONG_CALL_OLD_CUT_SCRIPT.replace("<runId>", runId);
+    return { code: 1, lines: [json ? JSON.stringify({ runId, error: refusal }) : refusal] };
+  }
+
   deps.mkdirp(dir);
 
   // The manifest lands even for a run that has made nothing yet, so `--out` is
@@ -8651,6 +9070,9 @@ export async function pullFlow(
     `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
     ...replacedVideoLines(dir, plan.manifest.video, videoBefore, deps),
     ...musicLines(plan.manifest),
+    ...songCallPullLines(plan.manifest.calls ?? []),
+    // COP-273 S5: said, never refused: the clips are the member's, and so is the cut they make of them.
+    ...(run.songAsVoice && run.songMissing ? [SONG_MISSING_PULL_LINE] : []),
   ];
   if (plan.manifest.dropped.length > 0) {
     lines.push(
@@ -9509,6 +9931,9 @@ const VALUE_FLAGS = new Set([
   "title",
   "sheet",
   "persona",
+  // COP-381: `approve --opening <n> --openings <code>`, so neither value is read as the run's id.
+  "opening",
+  "openings",
 ]);
 
 /** Value flags of `video swipe find` alone. Every other verb reads them as on dev: a switch, its next word a positional. */
@@ -9519,6 +9944,12 @@ const WRITE_VALUE_FLAGS = new Set(["kind", "people-max-usd"]);
 const START_VALUE_FLAGS = new Set(["max-usd"]);
 /** COP-265 part 7: --count and --max-usd take a value only on `swipe sheet people`. */
 const SHEET_PEOPLE_VALUE_FLAGS = new Set(["count", "max-usd"]);
+/** COP-273 P2: --sounds, --count and --max-usd take a value on `swipe sheet samples`. */
+const SHEET_SAMPLES_VALUE_FLAGS = new Set(["sounds", "count", "max-usd"]);
+/** COP-273 P3: --max-usd takes a value on `approve` (the most the rest's price showed). */
+const APPROVE_VALUE_FLAGS = new Set(["max-usd"]);
+/** COP-273 P4c: --max-usd takes a value on `swipe sheet cast`. */
+const SHEET_CAST_VALUE_FLAGS = new Set(["max-usd"]);
 /** U13 (COP-302): --people-max-usd takes a value on `swipe sheet set` too (the most a choice that buys showed). */
 const SHEET_SET_VALUE_FLAGS = new Set(["people-max-usd"]);
 
@@ -9543,11 +9974,17 @@ export function parsePositional(args = process.argv.slice(3)): string[] {
   const asFind = read(FIND_VALUE_FLAGS);
   if (asFind[0] === "swipe" && asFind[1] === "find") return asFind;
   const asWrite = read(WRITE_VALUE_FLAGS);
-  if (asWrite[0] === "swipe" && asWrite[1] === "write") return asWrite;
+  if (asWrite[0] === "swipe" && (asWrite[1] === "write" || asWrite[1] === "new")) return asWrite;
   const asStart = read(START_VALUE_FLAGS);
   if (asStart[0] === "swipe" && asStart[1] === "start") return asStart;
   const asPeople = read(SHEET_PEOPLE_VALUE_FLAGS);
-  if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && asPeople[2] === "people") return asPeople;
+  if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && (asPeople[2] === "people" || asPeople[2] === "lyric")) return asPeople;
+  const asSamples = read(SHEET_SAMPLES_VALUE_FLAGS);
+  if (asSamples[0] === "swipe" && asSamples[1] === "sheet" && asSamples[2] === "samples") return asSamples;
+  const asApprove = read(APPROVE_VALUE_FLAGS);
+  if (asApprove[0] === "approve") return asApprove;
+  const asCast = read(SHEET_CAST_VALUE_FLAGS);
+  if (asCast[0] === "swipe" && asCast[1] === "sheet" && asCast[2] === "cast") return asCast;
   const asSet = read(SHEET_SET_VALUE_FLAGS);
   if (asSet[0] === "swipe" && asSet[1] === "sheet" && asSet[2] === "set") return asSet;
   return read(new Set());
@@ -9767,6 +10204,18 @@ export async function run(
     if (flags["request-quote"] !== undefined && !/^[0-9a-f]{64}$/.test(requestQuoteHash ?? "")) {
       usage("--request-quote needs the reviewSha256 printed by exodus video quote.");
     }
+    const maxUsd = flagString(flags, "max-usd");
+    if (flags["max-usd"] !== undefined && !(maxUsd !== undefined && /^\d+(\.\d+)?$/.test(maxUsd))) {
+      usage("--max-usd needs the most the rest's price showed, in dollars: exodus video approve <runId> --max-usd 12.34");
+    }
+    const opening = approveOpeningOf(occurrences);
+    if (opening === "bad") usage("--opening needs the number of an opening, as exodus video storyboard lists them: 1, 2 or 3.");
+    // Landing review (#4995): the openings' code goes with the pick, so it names an opening of the storyboard listed.
+    const openingsDigest = approveOpeningsDigestOf(occurrences);
+    if (openingsDigest === "bad") usage("--openings needs the code exodus video storyboard prints with the openings.");
+    if (typeof opening === "number" && openingsDigest === undefined) {
+      usage("--opening goes with --openings <code>, as exodus video storyboard prints it with the openings.");
+    }
     return printResult(
       await approveFlow(
         runId,
@@ -9776,6 +10225,8 @@ export async function run(
           acceptFindings: flags["accept-findings"] === true,
           ...(requestQuoteHash ? { requestQuoteHash } : {}),
           ...(auditionDigest ? { auditionDigest } : {}),
+          ...(maxUsd !== undefined ? { maxUsd: Number(maxUsd) } : {}),
+          ...(typeof opening === "number" ? { opening, ...(typeof openingsDigest === "string" ? { openingsDigest } : {}) } : {}),
         },
         defaultDeps,
       ),

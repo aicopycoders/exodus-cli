@@ -317,6 +317,15 @@ pictures are, then ask: approve, redo a picture, change a voice, move someone
   accepting draws the scene pictures and the video stops once more at them,
   so the member looks at the pictures before anything is filmed. That second
   stop is a normal storyboard review: show it and approve only on their yes.
+- Pick the opening (a One-take run with the hook on): `storyboard` also lists
+  take 1's openings, numbered ("Take 1's opening, its first 2 seconds: pick 1
+  of 3. Opening 1 is picked."), each with what is seen and its words on screen
+  when it has any. Say each in your words and ask which one. Approve with
+  the line it prints, `exodus video approve <runId> --opening <n> --openings
+  <code>`, the code copied as printed; with no `--opening`, opening 1 is
+  filmed. A number the storyboard does not list is refused, and so is a pick
+  after the storyboard was made again (look again, then pick): nothing is
+  approved either way. The page offers the same pick.
 - Redo a picture: `exodus video retry-frame <runId> --node <nodeId> --scene <n>
   --note "<what is wrong>"`, with the node id from the `Redo one frame:` line
   `status` printed. It redraws one picture. The CLI prints no price for it:
@@ -928,7 +937,7 @@ The rows:
   Music is made on the member's own ElevenLabs key. Music is off unless the
   member asked for it; the plan's line says which. Caption style, speed, jump
   cuts and the end card come with a later update; One-take UGC's saved sheet
-  already sets all but the end card (step 4).
+  already sets them all, its ending among them (step 4).
 - **How many.** Ads × personas, with none counting as one persona and the
   characters counting as one today. Show the multiplication, as in "4 videos
   = 2 ads × 2 personas".
@@ -988,25 +997,29 @@ Its question (`AskUserQuestion`, header "Film it?"), its text:
 
 Its options: 1. Film it (the table), its figures from the price's "Price:"
 line 2. Show me the script and the <k> people 3. Change something: person,
-voice, size, how it is filmed, how it is finished, captions and card, their
-look 4. Stop.
+voice, size, how it is filmed, how it is finished, captions and card, the
+ending, their look 4. Stop.
 
 Its "Change something" asks which part first, as one question (rule 3) with
 "How it is finished" among its options, then that part's rows as step 3's
 does, four rows a call. "How it is finished" changes only how the app cuts
-the takes once they are filmed, and `cardPlace` (in "Captions and text card")
-where the cut puts the text card: both free to set, the price's figures the
-same. Set one only on the member's word. As `sheet` prints them:
+the takes once they are filmed, `cardPlace` (in "Captions and text card")
+where the cut puts the text card, and `ending` (in "Ending") how the video
+ends: all free to set, the price's figures the same. Set one only on the member's word. As `sheet` prints them:
 
 - `speed`: how fast the video plays, from `1.0` (as filmed) to `1.25`.
 - `pauses`: how much silence between words is cut: `trim`, `keep`, or the
-  levels `light`, `medium`, `hard`.
+  levels `light`, `medium`, `hard`. It is `medium` with no pick: a pause over
+  0.4 seconds is cut to about 0.2, and a heard "um", "uh" or stray "like" or
+  "you know" the script does not have is cut out; `hard` also cuts the first
+  copy of words said twice in a row; `light` keeps the ums.
 - `cuts`: framing changes added where more than `7`, `5` or `3.5` seconds of
   filmed time pass with no cut, only at a sentence's end or a comma, so some
   stretches run longer; with the row on, every pause the cut shortens by 0.3
   seconds or more changes the framing too, mid-sentence as well; none in the
-  first 6 seconds while a headline at the top may show; no time is cut out;
-  `off` adds none. It is `7` with no pick.
+  first 6 seconds while a headline at the top may show (under a headline for
+  the whole video, each one keeps the frame's top edge instead); no time is
+  cut out; `off` adds none. It is `7` with no pick.
 - `voiceSound`: how the voice sounds: `phone` mic, voice `memo`, `clean` and
   even, or `raw` as recorded.
 - `roomSound`: a faint sound of a place under the voice: `room`, `kitchen`,
@@ -1015,14 +1028,23 @@ same. Set one only on the member's word. As `sheet` prints them:
   can make another than the one the sheet names; `none` turns it off.
 - `ultraRealism`: `phone`, a phone's look (30 frames a second, a light lens
   smudge, phone grain), or `off`.
-- `cardPlace`: over the chest while the first line is said (`chest`), or a
-  headline at the top for the opening (`top`); when take 1 is asked for room
-  above the head for it, the headline sits just below the platform's top bar.
+- `cardPlace`: over the chest while the first line is said (`chest`), a
+  headline at the top for the opening (`top`), or one for the whole video
+  (`top-film`), for which every take is asked for room above the head; when
+  take 1 is asked for room above the head for it, the headline sits just below
+  the platform's top bar.
   At the top, with no words on `headline` and no `headline=none` from the
-  member, it shows the words on screen written for take 1's opening once one
-  more text call on the member's model key checks them (with the hook off,
+  member, it shows the words on screen written for take 1's opening, the one
+  filmed, once one more text call for each opening, on the member's model
+  key, checks them (with the hook off,
   none), and the price names that call among what it leaves out. With no pick
   it is `top` while `hook` is on, else `chest`.
+- `ending`: how the video ends: `none` (on the last word; it is `none` with no
+  pick), `link-below` or `shop-now` (those words over the last shot, from the
+  word "link" or the last sentence, the video holding its last frame 1.6
+  seconds past the last word), or the member's own short words over the last
+  shot. Words we write make no claim: an offer such as "53% OFF" is only ever
+  the member's own words.
 
 With several videos, the label says how many and the description each one's
 price as printed, never their sum. Each start's `--max-usd`, and each write's
@@ -1045,8 +1067,8 @@ it): a start with no pick films that value. With no pick, the "How it is
 finished" rows and `cardPlace` print `from the kind of ad:` and a start cuts
 them so. A value one of them recommends is used only when picked, unless it is
 the row's value already (`cardPlace`'s `top` while `hook` is on): `voiceSound`
-names it in its reason ("pick it to use it"); `pauses` and `cardPlace` mark it
-only as `recommended` in `--json`. "Let it run" here, said in reply to these
+names it in its reason ("pick it to use it"); `cardPlace` marks it only as
+`recommended` in `--json`. "Let it run" here, said in reply to these
 saved sheets and their prices, is the yes to the starts with the sheets as
 they stand: set nothing (a size a money limit needs is set before the sheets
 are shown, below), since a start with no pick films each row's value as the

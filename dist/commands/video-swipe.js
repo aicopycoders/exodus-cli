@@ -6,6 +6,8 @@ import { formatApiError } from "../lib/format.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, onOwnDashboard } from "./video-customer.js";
 import { asVideoRun, describeFetchFailure, RUN_PATH, startedThenWait, waitFlow } from "./video.js";
+import { planSheetSamples, swipeSheetSamplesFlow } from "./video-swipe-samples.js";
+import { planSheetCast, swipeSheetCastFlow } from "./video-swipe-cast.js";
 export const SWIPE_BREAKDOWNS_PATH = "/api/v2/video/breakdowns";
 export const SWIPE_UPLOAD_URL_PATH = "/api/v2/video/breakdowns/upload-url";
 export const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
@@ -17,6 +19,8 @@ export const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 export const SHEET_SOURCES_QUERY = "sources=recommended";
 export const SWIPE_WRITE_PEOPLE_PATH = "/api/v2/video/swipe-write-people";
+export const SWIPE_SHEET_LYRIC_PATH = "/api/v2/video/swipe-sheet/lyric";
+export const SWIPES_OWN_PATH = "/api/v2/video/swipes/own";
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export const SWIPE_MODES = [
     { flag: "whole-ad", mode: "whole", label: "Whole ad", helper: "Every part of their ad, rewritten for your brand." },
@@ -79,7 +83,7 @@ export function needsYesResult(step, json, choice = []) {
         ],
     };
 }
-const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet"];
+const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet", "new"];
 export function parseSwipeMode(value) {
     return SWIPE_MODES.find((m) => m.flag === value.trim().toLowerCase())?.mode ?? null;
 }
@@ -139,7 +143,7 @@ export function planSwipeCommand(rest, occurrences) {
     const [verb, id] = rest;
     if (last("kind") !== undefined) {
         const named = rest.find((word) => VERBS.includes(word));
-        if (named !== "write")
+        if (named !== "write" && named !== "new")
             return usage(kindElsewhere(named));
     }
     const verbNamed = rest.find((word) => VERBS.includes(word));
@@ -219,6 +223,8 @@ export function planSwipeCommand(rest, occurrences) {
     }
     if (verb === "sheet")
         return planSheet(rest.slice(1), occurrences, opts);
+    if (verb === "new")
+        return planOwn(rest, value, opts, occurrences);
     if (!id) {
         const named = verb === "show" || verb === "start" ? "swipeId" : "breakdownId";
         return usage(`video swipe ${verb} needs a ${named === "swipeId" ? "swipe" : "breakdown"} id: exodus video swipe ${verb} <${named}>`);
@@ -275,6 +281,10 @@ function planSheet(words, occurrences, opts) {
     const typedFlag = (names) => occurrences.find((o) => names.some((name) => o.flag === name || o.flag === `no-${name}`))?.flag;
     const switchWords = new Set(occurrences.filter((o) => ["json", "yes", "wait"].includes(o.flag) && o.value !== undefined).map((o) => o.value));
     const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
+    if (given[0] === "samples")
+        return planSheetSamples(given, occurrences, opts);
+    if (given[0] === "cast")
+        return planSheetCast(given, occurrences, opts);
     if (given[0] === "people") {
         const other = typedFlag([
             ...FIND_PAID_FLAGS.filter((flag) => flag !== "yes" && flag !== "wait"),
@@ -314,6 +324,8 @@ function planSheet(words, occurrences, opts) {
             return usage("video swipe sheet people --max-usd goes with --yes, after the price.");
         return { kind: "sheet-people", swipeId, count, maxUsd, opts };
     }
+    if (given[0] === "lyric")
+        return planSheetLyric(given, occurrences, opts, typedFlag);
     const setMost = given[0] === "set" ? occurrences.filter((o) => o.flag === "people-max-usd").at(-1) : undefined;
     let peopleMaxUsd;
     if (setMost) {
@@ -331,7 +343,7 @@ function planSheet(words, occurrences, opts) {
     }
     const peopleOnly = typedFlag(["count"]);
     if (peopleOnly)
-        return usage(`Only video swipe sheet people takes --${peopleOnly}.`);
+        return usage(`Only video swipe sheet people and samples take --${peopleOnly}.`);
     if (given[0] === "set" && opts.yes && peopleMaxUsd === undefined) {
         return usage("video swipe sheet set takes --yes only with --people-max-usd <n>, the most the price of a choice that buys showed. A set that buys nothing takes neither.");
     }
@@ -668,6 +680,8 @@ async function waitForBreakdown(breakdownId, opts, deps, say) {
     return { code: read.breakdown.status === "failed" ? 1 : 0, lines: breakdownEndLines(read, deps.dashboardUrl), json: { breakdown: read.breakdown, template: read.template } };
 }
 function breakdownEndLines({ breakdown, template }, dashboardUrl) {
+    if (breakdown.sourceKind === "none")
+        return ownReadLines(breakdown._id);
     if (breakdown.status === "failed") {
         return [
             `The breakdown failed: ${breakdown.error ?? "no reason was given."}`,
@@ -729,6 +743,8 @@ export async function swipeStatusFlow(breakdownId, opts, deps, full = false) {
     if (opts.json)
         return { code: 0, lines: [JSON.stringify(res.data)] };
     const { breakdown } = read;
+    if (breakdown.sourceKind === "none")
+        return { code: 0, lines: ownReadLines(breakdown._id) };
     const width = Math.max(...breakdown.steps.map((step) => step.status.length));
     const lines = [
         `Breakdown ${breakdown._id}: ${STATUS_WORD[breakdown.status]}`,
@@ -1112,11 +1128,34 @@ function requestOf(ask, memberScript) {
     }
 }
 function costLine(swipe) {
+    if (swipe.ownWords === true)
+        return "It cost nothing: no model was called.";
     return swipe.costUsd !== null
         ? `It cost ${usd(swipe.costUsd)} on the member's key.`
         : "What it cost is unknown: the provider reported no usage for it.";
 }
-function swipeLines(swipe, after) {
+function sheetStartLine(swipe) {
+    const id = swipe._id;
+    const first = `read its saved sheet (free): exodus video swipe sheet ${id}, then its price (free): exodus video swipe sheet price ${id}`;
+    const start = (again) => `then, on the member's yes (paid), exodus video swipe start ${id}${again} --yes --max-usd <the at most>`;
+    if (swipe.workflowRunId && swipe.runHoldsStart === false) {
+        return `It started run ${swipe.workflowRunId}, which failed or was cancelled: exodus video status ${swipe.workflowRunId}. To start the swipe again, ${first}; ${start("")}.`;
+    }
+    if (swipe.workflowRunId) {
+        return `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. A second video from this swipe is paid on its own: ${first}; ${start(" --again")}.`;
+    }
+    return `Before the video, ${first}; ${start("")}.`;
+}
+async function holdsSheet(swipeId, deps) {
+    try {
+        const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`);
+        return res.ok && (sheetOf(res.data)?.sheet.sections.length ?? 0) > 0;
+    }
+    catch {
+        return false;
+    }
+}
+function swipeLines(swipe, after, sheet = false) {
     if (swipe.outcome.kind === "refused") {
         return [
             `The writer refused: ${swipe.outcome.why}`,
@@ -1135,18 +1174,22 @@ function swipeLines(swipe, after) {
         "",
         draft.script,
         "",
+        ...(swipe.scriptNote ? [swipe.scriptNote, ""] : []),
         ...(draft.direction.trim() ? [`Direction: ${draft.direction}`] : []),
         `Kept: ${draft.note.kept}`,
         `Changed: ${draft.note.changed}`,
         ...(draft.lengthGap ? [`Length: ours is about ${draft.lengthGap.ours} s, theirs about ${draft.lengthGap.theirs} s.`] : []),
+        ...(typeof draft.song?.sentence === "string" && draft.song.sentence.trim() ? [`Song: ${draft.song.sentence}`] : []),
         ...(draft.howClose ? [draft.howClose.sentence] : []),
         costLine(swipe),
         "",
-        swipe.workflowRunId && swipe.runHoldsStart === false
-            ? `It started run ${swipe.workflowRunId}, which failed or was cancelled: exodus video status ${swipe.workflowRunId}. Starting the swipe again is paid (ask first): exodus video swipe start ${swipe._id} --yes`
-            : swipe.workflowRunId
-                ? `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. A second video from this swipe is paid on its own and needs --again (ask first): exodus video swipe start ${swipe._id} --again --yes`
-                : `Start the video (paid; ask first): exodus video swipe start ${swipe._id} --yes`,
+        sheet
+            ? sheetStartLine(swipe)
+            : swipe.workflowRunId && swipe.runHoldsStart === false
+                ? `It started run ${swipe.workflowRunId}, which failed or was cancelled: exodus video status ${swipe.workflowRunId}. Starting the swipe again is paid (ask first): exodus video swipe start ${swipe._id} --yes`
+                : swipe.workflowRunId
+                    ? `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. A second video from this swipe is paid on its own and needs --again (ask first): exodus video swipe start ${swipe._id} --again --yes`
+                    : `Start the video (paid; ask first): exodus video swipe start ${swipe._id} --yes`,
     ];
 }
 export async function swipeWriteFlow(breakdownId, ask, opts, deps) {
@@ -1219,7 +1262,8 @@ export async function swipeWriteFlow(breakdownId, ask, opts, deps) {
         const answer = written ? { ok: true, swipe, ...(people ? { people: people.json } : {}) } : { ok: false, refused: true, swipe };
         return { code: written ? 0 : 1, lines: [JSON.stringify(answer)] };
     }
-    const lines = swipeLines(swipe, "write");
+    const sheet = written && (await holdsSheet(swipe._id, deps));
+    const lines = swipeLines(swipe, "write", sheet);
     const withPeople = !people ? lines : written ? [...lines.slice(0, -1), ...people.lines, "", ...lines.slice(-1)] : [...lines, ...people.lines];
     return { code: written ? 0 : 1, lines: [...out.kept, ...withPeople] };
 }
@@ -1363,7 +1407,8 @@ export async function swipeShowFlow(swipeId, opts, deps) {
         return failed("The server's answer about this swipe could not be read.", opts.json);
     if (opts.json)
         return { code: 0, lines: [JSON.stringify({ ok: true, swipe })] };
-    return { code: 0, lines: swipeLines(swipe, "show") };
+    const sheet = swipe.outcome.kind === "written" && (await holdsSheet(swipe._id, deps));
+    return { code: 0, lines: swipeLines(swipe, "show", sheet) };
 }
 const writtenAt = (ms) => `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 export async function swipeListFlow(opts, deps) {
@@ -1378,7 +1423,7 @@ export async function swipeListFlow(opts, deps) {
     return {
         code: 0,
         lines: swipes.map((row) => {
-            const mode = modeOf(row.request.mode);
+            const mode = row.source?.sourceKind === "none" ? { label: "your own words, no ad" } : modeOf(row.request.mode);
             const step = row.request.closeness !== undefined ? closenessOf(row.request.closeness) : undefined;
             const ad = row.source?.sourceUrl ?? row.source?.fileName ?? "an ad";
             return [
@@ -1424,7 +1469,19 @@ function sheetOf(data, own = "") {
         return null;
     return { sheet: data.sheet, dashboardUrl: onOwnDashboard(typeof data.dashboardUrl === "string" ? data.dashboardUrl : "", own) };
 }
-export function personSectionPage(dashboardUrl) {
+const LONG_LIST = 20;
+function isLongList(row, above) {
+    return (row.options?.length ?? 0) > LONG_LIST && ownerOf(row.options ?? [], above) !== null;
+}
+function ownerOf(options, above) {
+    if (!above || typeof above.value !== "string" || above.value === "")
+        return null;
+    const code = `${above.value}.`;
+    if (!options.every((option) => option.id.startsWith(code)))
+        return null;
+    return above.options?.find((option) => option.id === above.value)?.label ?? above.value;
+}
+export function personSectionPage(dashboardUrl, section = "person") {
     if (!dashboardUrl)
         return "";
     const hash = dashboardUrl.indexOf("#");
@@ -1432,7 +1489,7 @@ export function personSectionPage(dashboardUrl) {
     const fragment = hash === -1 ? "" : dashboardUrl.slice(hash);
     const query = link.indexOf("?");
     const params = query === -1 ? [] : link.slice(query + 1).split("&").filter((param) => param !== "" && !/^sheet(=|$)/.test(param));
-    return `${query === -1 ? link : link.slice(0, query)}?${[...params, "sheet=person"].join("&")}${fragment}`;
+    return `${query === -1 ? link : link.slice(0, query)}?${[...params, `sheet=${section}`].join("&")}${fragment}`;
 }
 function optionLines(row, above, swipeId) {
     const lines = [];
@@ -1443,6 +1500,11 @@ function optionLines(row, above, swipeId) {
     if (pictured) {
         for (const option of options)
             lines.push(`    ${option.id}: ${option.label}`);
+    }
+    else if (isLongList(row, above)) {
+        const cost = row.optionsCostUsd ? `, showing them costs ${usd(row.optionsCostUsd)}` : "";
+        const owner = ownerOf(options, above);
+        lines.push(`    options (${options.length}${cost} of ${owner}; they follow ${above.id}, and a new ${above.id} alone clears a ${row.label.toLowerCase()} you picked):`, ...options.map((option) => `      ${option.id}: ${option.label}`));
     }
     else if (options.some((option) => option.line)) {
         for (const option of options)
@@ -1459,6 +1521,12 @@ function optionLines(row, above, swipeId) {
     const noneMade = row.optionsStatus && !row.optionsStatus.making && options.length === 0 && (row.optionsStatus.asksLeft ?? 0) > 0;
     if (row.id === "who" && (row.optionsStatus?.noneYet || noneMade))
         lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
+    if (row.id === "songSample" && row.optionsStatus?.noneYet)
+        lines.push(`    See the price (free): exodus video swipe sheet samples ${swipeId}`);
+    if (row.id === "cast1" && row.optionsStatus?.noneYet)
+        lines.push(`    See the price (free): exodus video swipe sheet cast ${swipeId}`);
+    if (row.id === "lyric" && !options.some((option) => option.id === "song"))
+        lines.push(`    See the price (free): exodus video swipe sheet lyric ${swipeId}`);
     if (row.id === "voice" && row.value === null)
         lines.push(`    List the voices: exodus video swipe sheet voices ${swipeId}`);
     return lines;
@@ -1479,7 +1547,8 @@ export function sheetLines(sheet, dashboardUrl) {
     for (const section of sheet.sections) {
         lines.push("", section.label);
         for (const row of section.rows) {
-            const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
+            const long = isLongList(row, section.rows[section.rows.indexOf(row) - 1]);
+            const picked = typeof row.value === "number" || long ? row.options?.find((option) => option.id === String(row.value)) : undefined;
             const none = row.none && row.value === row.none.value ? row.none : undefined;
             const named = row.value !== null && typeof row.valueWords === "string" && row.valueWords !== "" ? row.valueWords : undefined;
             const value = row.value === null
@@ -1579,7 +1648,17 @@ function priceOf(data, own = "") {
     return { price, dashboardUrl: onOwnDashboard(typeof data.dashboardUrl === "string" ? data.dashboardUrl : "", own) };
 }
 const lineUsd = (value) => (Math.abs(value * 100 - Math.round(value * 100)) < 1e-6 ? usd(value) : `$${value.toFixed(3)}`);
-function filmWords(row, scriptTakes) {
+function filmWords(row, scriptTakes, song, part) {
+    const each = song ? (song.takesPerClip === 2 ? "twice" : `${song.takesPerClip} times`) : "";
+    const calls = filmsCalls(song);
+    if (song && part && calls)
+        return `${row.size}, the first part only: the video calls of the song's first ${part.firstSec} s, each filmed at most ${each}`;
+    if (song && part)
+        return `${row.size}, the first part only: up to ${part.mostScenes} of ${scriptTakes === 1 ? "1 clip" : `${scriptTakes} clips`}, each filmed at most ${each}`;
+    if (song && calls)
+        return `${row.size}, about ${calls.about}, up to ${calls.most} video calls, each filmed at most ${each}`;
+    if (song)
+        return `${row.size}, ${scriptTakes === 1 ? "1 clip" : `${scriptTakes} clips`}, each filmed at most ${each}`;
     if (row.takes === "first" && scriptTakes > 1)
         return `${row.size}, the first take only`;
     return `${row.size}, ${scriptTakes === 1 ? "its one take" : `all ${scriptTakes} takes`}`;
@@ -1596,9 +1675,53 @@ function cheaperOption(price) {
     return price.options.some((row) => !("why" in row) && !row.startRefusal && row.costUsd < price.picked.costUsd);
 }
 function pickedPriceLine(price) {
-    return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${filmWords(price.picked, price.scriptTakes)}, as the swipe's sheet stands)`;
+    if (price.part && price.song && !filmsCalls(price.song)) {
+        const each = price.song.takesPerClip === 2 ? "twice" : `${price.song.takesPerClip} times`;
+        return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${price.picked.size}, the first part only: about ${price.part.aboutScenes} of ${price.scriptTakes} clips, up to ${price.part.mostScenes}, each filmed at most ${each}, as the swipe's sheet stands)`;
+    }
+    return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${filmWords(price.picked, price.scriptTakes, price.song, price.part)}, as the swipe's sheet stands)`;
+}
+function filmsCalls(song) {
+    const calls = song?.calls;
+    return isRecord(calls) && typeof calls.about === "number" && typeof calls.most === "number" ? calls : null;
+}
+const drawsScenePictures = (song) => song?.drawsScenePictures !== false;
+const hasSceneRedo = (song) => song?.sceneRedo !== false;
+function partLines(price) {
+    if (!price.part)
+        return [];
+    const pictures = !drawsScenePictures(price.song) ? "the sheets, the places" : price.part.picturesBeforeStop === "all" ? "every scene's picture" : "the first part's pictures";
+    const filmed = filmsCalls(price.song) ? "the video calls" : "the clips";
+    return [
+        `First part only: this price is the whole song, the look and characters, ${pictures} and ${filmed} of the song's first ${price.part.firstSec} s.`,
+        `Then the video waits for your second yes: the rest is priced at that stop and made only when you say yes to it. The whole video at once: about ${usd(price.part.whole.costUsd)}, at most ${usd(price.part.whole.maxUsd)}.`,
+        "This video in all never costs more than the whole video's at most, even when the first part's and the rest's figures add up to more.",
+        ...(price.part.wholeWhen ? [`If this is ${price.part.wholeWhen}, the first part is the whole video: it is made at this price, with no second yes.`] : []),
+    ];
+}
+function firstPartLine(price) {
+    const offer = price.firstPart;
+    if (!offer)
+        return [];
+    if (offer.canStart === "yes") {
+        if (price.part)
+            return [`The rest, after your second yes: at most ${usd(offer.rest.maxUsd)}, priced again at that stop.`];
+        return [
+            `Or film the first ${offer.firstSec} s first, free to pick with exodus video swipe sheet set ${price.swipeId} songPart=first: the first yes about ${usd(offer.first.costUsd)}, at most ${usd(offer.first.maxUsd)}${offer.firstChecks ? `, plus about ${usd(offer.firstChecks.aboutUsd)} of checks on Exodus's key` : ""}; the rest at most ${usd(offer.rest.maxUsd)}, priced again at that stop and made only on a second yes. The two yeses together never cost more than the whole video's at most, ${usd(price.picked.maxUsd)}.`,
+        ];
+    }
+    if (offer.canStart === "team-only" && !price.startRefusals.includes(offer.sentence)) {
+        return [`First part only, then the rest after a second yes: ${offer.sentence}`];
+    }
+    return [];
 }
 function changeLine(price) {
+    if (price.song) {
+        if (!price.sizeChoices)
+            return "This server offers the kind's own size and one pair of song takes for now: 480p and more pairs are not switched on.";
+        const sizes = [...new Set(price.options.map((row) => row.size))];
+        return `Change it (free): exodus video swipe sheet set ${price.swipeId} videoSize=<${sizes.join(" or ")}> songTakes=<1, 2 or 3>. The start makes what the sheet says then.`;
+    }
     if (!price.sizeChoices)
         return "This server offers the kind's own size and every take for now: 480p, 1080p and the first take only are not switched on.";
     const rows = distinctOptions(price);
@@ -1608,11 +1731,67 @@ function changeLine(price) {
     return `Change it (free): exodus video swipe sheet set ${price.swipeId} ${parts.join(" ")}. The start films what the sheet says then.`;
 }
 const AT_MOST = "At most: every take and every picture ordered twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
+function songAtMost(song) {
+    const filmed = filmsCalls(song) ? "every video call" : "every clip";
+    const pictures = drawsScenePictures(song) ? ", every scene's picture redrawn once" : ", every picture drawn at most as its line says";
+    const redo = hasSceneRedo(song) ? " A Redo you press is priced on its own." : "";
+    return `At most: ${filmed} filmed twice${pictures} and the song at its caps, the most the run orders without you pressing anything.${redo}`;
+}
+export function songStopCommand(why, swipeId) {
+    const set = `exodus video swipe sheet set ${swipeId}`;
+    const ways = [];
+    if (why.startsWith("The song's sound is not chosen yet:")) {
+        if (why.includes("pick one of the samples"))
+            ways.push(`${set} songSample=<n> picks a sample`);
+        if (why.includes("ask for samples"))
+            ways.push(`exodus video swipe sheet samples ${swipeId} asks for samples (the price first)`);
+        ways.push(`${set} sound=<code> sets the sound`);
+    }
+    else if (why.startsWith("Your lines are spoken lines and no lyric was made from them:")) {
+        if (why.includes("ask for a lyric"))
+            ways.push(`exodus video swipe sheet lyric ${swipeId} asks for a lyric (the price first)`);
+        ways.push(`${set} lyric=yours has your lines sung as you wrote them`);
+    }
+    return ways.length > 0 ? `On the command line: ${ways.join("; ")}.` : null;
+}
+const startRefusalLines = (price) => price.startRefusals.flatMap((why) => {
+    const command = songStopCommand(why, price.swipeId);
+    return [`The start would be refused now: ${why}`, ...(command ? [command] : [])];
+});
 function refusalLines(price) {
     return [
-        ...price.startRefusals.map((why) => `The start would be refused now: ${why}`),
+        ...startRefusalLines(price),
         ...(price.heldBy ? [`This swipe already has a video, run ${price.heldBy}: a start makes a second, paid video only with --again.`] : []),
     ];
+}
+const PAYER_KEY = new Map([
+    ["kie", "your Kie key"],
+    ["elevenlabs", "your ElevenLabs key"],
+    ["model", "your model key"],
+    ["platform", "Exodus's key"],
+]);
+function linePaidWords(line) {
+    const keys = Array.isArray(line.paidBy) ? [...new Set(line.paidBy.map((share) => PAYER_KEY.get(share?.payer)))] : [];
+    const on = keys.length > 0 && keys.every((key) => key !== undefined) ? `, on ${keys.join(" and ")}` : "";
+    const when = line.beforeStop === true ? ", paid before the storyboard stop" : line.beforeStop === false ? ", paid after the storyboard stop" : "";
+    return on + when;
+}
+function lineWords(line) {
+    return `  ${line.what}: ${line.maxUsd !== undefined ? `about ${lineUsd(line.usd)}, at most ${lineUsd(line.maxUsd)}` : lineUsd(line.usd)}${linePaidWords(line)}`;
+}
+function checksLines(price) {
+    const checks = price.song?.checks;
+    return isRecord(checks) && typeof checks.what === "string" && typeof checks.aboutUsd === "number" ? [`${checks.what}: about ${usd(checks.aboutUsd)}.`] : [];
+}
+function sizeLines(price) {
+    if (!price.sizeChoices)
+        return [];
+    const sizeLine = price.song?.sizeLine;
+    if (typeof sizeLine === "string" && sizeLine) {
+        const apart = distinctOptions(price).filter((row) => "why" in row || row.startRefusal);
+        return [sizeLine, ...apart.map((row) => `  ${filmWords(row, price.scriptTakes, price.song, price.part)}: ${priceWords(row)}`), ""];
+    }
+    return ["Each size:", ...distinctOptions(price).map((row) => `  ${filmWords(row, price.scriptTakes, price.song, price.part)}: ${priceWords(row)}`), ""];
 }
 export function priceLines(price, dashboardUrl) {
     const page = dashboardUrl ? [`The swipe on the dashboard: ${dashboardUrl}`] : [];
@@ -1621,13 +1800,16 @@ export function priceLines(price, dashboardUrl) {
     const lines = [
         `The video of swipe ${price.swipeId}${price.kind ? `, ${price.kind.label} (${price.kind.key})` : ""}, before the yes:`,
         `Price: ${pickedPriceLine(price)}.`,
+        ...partLines(price),
+        ...firstPartLine(price),
         ...(price.picked.startRefusal ? [`The start refuses it: ${price.picked.startRefusal}`] : []),
-        ...price.picked.lines.map((line) => `  ${line.what}: ${lineUsd(line.usd)}`),
+        ...price.picked.lines.map(lineWords),
+        ...checksLines(price),
         "",
-        ...(price.sizeChoices ? ["Each size:", ...distinctOptions(price).map((row) => `  ${filmWords(row, price.scriptTakes)}: ${priceWords(row)}`), ""] : []),
+        ...sizeLines(price),
         ...price.notes,
         price.leavesOut,
-        AT_MOST,
+        price.song ? songAtMost(price.song) : AT_MOST,
         ...refusalLines(price),
         changeLine(price),
         ...page,
@@ -1645,6 +1827,60 @@ export async function swipeSheetPriceFlow(swipeId, opts, deps) {
         return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
     return { code: 0, lines: priceLines(read.price, read.dashboardUrl) };
 }
+export const SONG_WHO_PAYS = "Who pays: the song, the pictures and the clips on your own Kie key, and the song's takes are heard on your ElevenLabs key. The text calls that plan the storyboard and write each picture and clip are on your model key: they are not in the price, and no number is shown for them.";
+function beforeStopParts(price) {
+    const lines = price.picked.lines;
+    if (lines.length === 0 || !lines.every((line) => typeof line.beforeStop === "boolean"))
+        return null;
+    const before = lines.filter((line) => line.beforeStop === true);
+    if (before.length === 0 || !before.every((line) => typeof line.maxUsd === "number"))
+        return null;
+    return before.map((line) => ({ name: lineName(line.what), maxUsd: line.maxUsd }));
+}
+function lineName(what) {
+    const head = what.split(":")[0];
+    return head.charAt(0).toLowerCase() + head.slice(1);
+}
+const SONG_REVIEW_FIRST = "A storyboard held for a review first gets its song after that approval instead.";
+function songStartedStopLines(price) {
+    const lines = price.picked.lines;
+    const says = lines.length > 0 && lines.every((line) => typeof line.beforeStop === "boolean");
+    const before = says ? lines.filter((line) => line.beforeStop === true).map((line) => lineName(line.what)) : [];
+    const after = says ? lines.filter((line) => line.beforeStop === false).map((line) => lineName(line.what)) : [];
+    const stop = before.length > 0 && after.length > 0
+        ? `It stops at the storyboard for the member's yes. Bought before it: ${before.join("; ")}. Bought only after that yes: ${after.join("; ")}.`
+        : `It stops at the storyboard for the member's yes. ${filmsCalls(price.song) ? "The video calls are" : "The clips are"} bought only after that yes.`;
+    const second = price.part
+        ? [`After the first part's ${filmsCalls(price.song) ? "video calls" : "clips"} it waits again, for the member's second yes, which that stop prices, unless the song is short enough that the first part is the whole video.`]
+        : [];
+    return [stop, ...second, SONG_REVIEW_FIRST];
+}
+const SONG_CHECK = "(a take with every line sung, else the take that sang the most when it sang at least 85% of the lines)";
+const SONG_TOO_FEW_LINES = "When no take sang at least 85% of the lines, the run stops at its song and no clip is made; what was made by then is paid.";
+const SONG_STATUS_SAYS = "exodus video status says if the song came out as another kind of music than the sheet's, and which lines a kept take missed.";
+function songStartLines(price, step) {
+    if (!isRecord(price.song))
+        return [];
+    const most = usd(price.picked.maxUsd);
+    const known = beforeStopParts(price);
+    const firstMost = known ? Math.round(known.reduce((sum, part) => sum + part.maxUsd * 100, 0)) / 100 : null;
+    const detail = known && `${known.map((part) => `${part.name} ${usd(part.maxUsd)}`).join(", ")}, by the price's own lines; the checks are apart, on Exodus's key`;
+    const upTo = known ? `at most ${usd(firstMost)} of the ${most}` : null;
+    const pictures = drawsScenePictures(price.song) ? "the scene pictures" : "the sheets and the places";
+    const ownLines = drawsScenePictures(price.song) ? "the song's, the scenes' pictures' and the look's" : "the song's, the look's, the sheets' and the places'";
+    const filmed = filmsCalls(price.song) ? "the video calls" : "the clips";
+    const lines = price.part
+        ? [`It buys: the first part only, ${pickedPriceLine(price)}.`, ...partLines(price)]
+        : [`It buys: the whole sung video, ${pickedPriceLine(price)}.`];
+    if (step === "start-one-shot") {
+        lines.push(`With --one-shot nothing waits for you: the song, which the run checks by itself ${SONG_CHECK}, ${drawsScenePictures(price.song) ? "the scene pictures" : "the sheets, the places"} and ${filmed} follow with no stop, and the whole price can be spent.`, `Leave it off to stop at the storyboard first: up to there the song and the pictures are made, ${upTo ? `${upTo} (${detail})` : `for which the price's own lines are ${ownLines}`}, and ${SONG_STATUS_SAYS}`);
+        return lines;
+    }
+    lines.push(`Before you approve anything: the song, which the run checks by itself ${SONG_CHECK}, and ${pictures}; the run stops at the storyboard. ${upTo ? `This part can cost ${upTo}: ${detail}.` : `For this part, the price's own lines are ${ownLines}.`} ${SONG_TOO_FEW_LINES}`, price.part
+        ? `Only after you approve the storyboard: the first part's ${filmsCalls(price.song) ? "video calls" : "clips"}. Then the run waits after the first part for your second yes, which the stop prices, unless the song is short enough that the first part is the whole video. At the storyboard, ${SONG_STATUS_SAYS}`
+        : `Only after you approve the storyboard: ${filmed} and their checks. At the storyboard, ${SONG_STATUS_SAYS}`, SONG_REVIEW_FIRST);
+    return lines;
+}
 async function startNeedsYes(swipeId, step, json, again, choice, deps) {
     let price = null;
     try {
@@ -1656,6 +1892,22 @@ async function startNeedsYes(swipeId, step, json, again, choice, deps) {
     }
     if (!price?.priced)
         return needsYesResult(step, json, choice);
+    if (price.part && step === "start-one-shot") {
+        const refused = "With --one-shot this start would be refused: a first part stops after its clips for your second yes, and a run in one go never stops.";
+        const wayOn = `Leave --one-shot off to make the first part and wait at its stop, or film the whole song in one go: exodus video swipe sheet set ${swipeId} songPart=whole.`;
+        if (json)
+            return { code: 0, lines: [JSON.stringify({ ok: false, refused, wayOn, startRefusals: price.startRefusals })] };
+        return {
+            code: 0,
+            lines: [
+                "This step costs money, so nothing was sent.",
+                ...choice,
+                refused,
+                wayOn,
+                ...startRefusalLines(price),
+            ],
+        };
+    }
     const { buys, paidBy } = PAID[step];
     if (json)
         return { code: 0, lines: [JSON.stringify({ ok: false, needsYes: true, buys, paidBy, price })] };
@@ -1670,13 +1922,13 @@ async function startNeedsYes(swipeId, step, json, again, choice, deps) {
         lines: [
             "This step costs money, so nothing was sent.",
             ...choice,
-            `It buys: ${buys}`,
-            `Who pays: ${paidBy}`,
-            `The whole video's price: ${pickedPriceLine(price)}, ${when}.`,
+            ...(price.song
+                ? [...songStartLines(price, step), SONG_WHO_PAYS, ...checksLines(price)]
+                : [`It buys: ${buys}`, `Who pays: ${paidBy}`, `The whole video's price: ${pickedPriceLine(price)}, ${when}.`]),
             ...(price.picked.startRefusal ? [`The start refuses it: ${price.picked.startRefusal}`] : []),
-            price.leavesOut,
-            AT_MOST,
-            ...price.startRefusals.map((why) => `The start would be refused now: ${why}`),
+            ...(price.song ? [] : [price.leavesOut]),
+            price.song ? songAtMost(price.song) : AT_MOST,
+            ...startRefusalLines(price),
             ...(price.heldBy && !again ? [`This swipe already has a video, run ${price.heldBy}: this start is refused, and a second, paid video needs --again.`] : []),
             ...(cheaperOption(price) ? [`For less, set the sheet first (free): exodus video swipe sheet price ${swipeId} lists each size.`] : []),
             `Ask the member. On their yes, run the same command with --yes --max-usd ${price.picked.maxUsd.toFixed(2)}: the start is refused if it can now cost more.`,
@@ -1694,8 +1946,8 @@ function peopleLines(sheet) {
     const row = rowOfSheet(sheet, "who");
     return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}`);
 }
-function sectionPageLines(lead, dashboardUrl) {
-    const page = personSectionPage(dashboardUrl);
+export function sectionPageLines(lead, dashboardUrl, section) {
+    const page = personSectionPage(dashboardUrl, section);
     return page ? [`${lead} ${page}`] : [];
 }
 const PEOPLE_WAIT_POLLS = (45 * 60_000) / POLL_MS;
@@ -1783,10 +2035,12 @@ async function maxUsdUnsupported(swipeId, maxUsd, deps) {
     const cannot = `so it can't hold this start to ${usd(maxUsd)}, and nothing was started.`;
     try {
         const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
-        return missingRouteLine(res, "exodus video swipe start --max-usd") ? `This server has no price before the yes, ${cannot}` : null;
+        if (missingRouteLine(res, "exodus video swipe start --max-usd"))
+            return { unheld: `This server has no price before the yes, ${cannot}`, price: null };
+        return { unheld: null, price: res.ok ? (priceOf(res.data)?.price ?? null) : null };
     }
     catch {
-        return `The server could not be asked whether it holds a start to a price, ${cannot}`;
+        return { unheld: `The server could not be asked whether it holds a start to a price, ${cannot}`, price: null };
     }
 }
 function recommendedVoiceLines(row) {
@@ -1823,6 +2077,149 @@ export async function swipeSheetVoicesFlow(swipeId, opts, deps) {
             ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
         ],
     };
+}
+const SHEET_LYRIC_LINE = "exodus video swipe sheet lyric <swipeId> [--yes --max-usd <n>] [--json]";
+function planSheetLyric(given, occurrences, opts, typedFlag) {
+    const usage = (line) => ({ kind: "usage", line });
+    const other = typedFlag([...FIND_PAID_FLAGS.filter((flag) => flag !== "yes"), ...FIND_OTHER_FLAGS.filter((flag) => flag !== "max-usd"), "brand", "limit", "count"]);
+    if (other)
+        return usage(`video swipe sheet lyric takes no --${other}. Its flags: --yes, --max-usd, --json.`);
+    const [, swipeId, ...extra] = given;
+    if (!swipeId)
+        return usage(`video swipe sheet lyric needs a swipe id: ${SHEET_LYRIC_LINE}`);
+    if (extra.length > 0)
+        return usage(`video swipe sheet lyric takes one swipe id (got "${extra[0]}"): ${SHEET_LYRIC_LINE}`);
+    const most = occurrences.filter((o) => o.flag === "max-usd").at(-1);
+    const maxUsd = most?.value !== undefined && /^\d+(\.\d+)?$/.test(most.value.trim()) ? Number(most.value.trim()) : most ? Number.NaN : null;
+    if (maxUsd !== null && !Number.isFinite(maxUsd))
+        return usage(`video swipe sheet lyric --max-usd takes the price's most in dollars, such as 0.42 (got "${most?.value ?? ""}").`);
+    if (opts.yes && maxUsd === null)
+        return usage("video swipe sheet lyric --yes needs --max-usd <n>, the most the price said. Run it without --yes first to read the price.");
+    if (maxUsd !== null && !opts.yes)
+        return usage("video swipe sheet lyric --max-usd goes with --yes, after the price.");
+    return { kind: "sheet-lyric", swipeId, maxUsd, opts };
+}
+function lyricAnswerOf(data) {
+    const read = sheetOf(data);
+    if (!read || !isRecord(data) || data.row !== "lyric" || !isRecord(data.price) || typeof data.price.mostUsd !== "number")
+        return null;
+    return { ...data, sheet: read.sheet, dashboardUrl: read.dashboardUrl };
+}
+export const LYRIC_LEFT_OUT_WHY_UNKNOWN = "Why it was left out was not kept for this lyric, made before reasons were kept. Your own lines say it.";
+function lyricLines(made) {
+    return [
+        `The lyric, in the shape ${made.shapeName}:`,
+        ...made.lines.map((line, i) => `  ${String(i + 1).padStart(2)}  ${line}`),
+        `Its parts: ${made.parts}`,
+        ...(made.addedWhy ? [made.addedWhy] : []),
+        ...(made.longerWhy ? [made.longerWhy] : []),
+        ...(made.leftOut.length > 0 ? [`Left out of your script: ${made.leftOut.join("; ")}`, `  ${made.leftOutWhy ?? LYRIC_LEFT_OUT_WHY_UNKNOWN}`] : []),
+    ];
+}
+export async function swipeSheetLyricFlow(swipeId, maxUsd, opts, deps) {
+    let res;
+    try {
+        res = await deps.post(`${SWIPE_SHEET_LYRIC_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, ...(opts.yes ? { yes: true } : {}), ...(maxUsd !== null ? { mostUsd: maxUsd } : {}) });
+    }
+    catch (err) {
+        const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
+        const look = opts.yes ? `Whether a lyric was written is not known. Read it before asking again: exodus video swipe sheet lyric ${swipeId}` : "Nothing was written.";
+        return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, error, asked: opts.yes ? "unknown" : false })] : [error, look] };
+    }
+    if (!res.ok)
+        return swipeError(res, opts.json);
+    const answer = lyricAnswerOf(res.data);
+    if (!answer)
+        return failed(`The server's answer about the lyric could not be read. Read it again: exodus video swipe sheet lyric ${swipeId}`, opts.json);
+    if (opts.json) {
+        const { sheet, dashboardUrl, ...rest } = answer;
+        return { code: answer.asked && !answer.made ? 1 : 0, lines: [JSON.stringify({ ok: !(answer.asked && !answer.made), ...rest, sheet: sheetForJson(sheet), dashboardUrl })] };
+    }
+    const set = `exodus video swipe sheet set ${swipeId}`;
+    const hint = !answer.made && !answer.sung
+        ? []
+        : !answer.sung
+            ? [`Sing it (free): ${set} lyric=song`]
+            : answer.made && answer.made.ask !== answer.sung.ask
+                ? [`Sing the newer one (free): ${set} lyric=song`]
+                : [`Sing your own lines again (free): ${set} lyric=yours`];
+    const sing = answer.made || answer.sung || answer.sentence ? [answer.singing, ...hint] : [];
+    if (!answer.asked) {
+        const most = mostShown(answer.price.mostUsd);
+        const next = answer.refusal ? [answer.refusal] : [`Write it (paid, on your model key, at most $${most}): exodus video swipe sheet lyric ${swipeId} --yes --max-usd ${most}`];
+        const paid = answer.spent ? [answer.spent, "This read wrote and paid nothing."] : ["Nothing was written or paid yet."];
+        return {
+            code: 0,
+            lines: [...(answer.made ? lyricLines(answer.made) : []), ...(answer.sentence ? [answer.sentence] : []), ...sing, answer.price.sentence, ...paid, ...next],
+        };
+    }
+    const cost = answer.costUsd !== null ? [`It cost ${answer.costIsBound ? "at most " : ""}$${mostShown(answer.costUsd)} on your model key.`] : [];
+    if (!answer.made)
+        return { code: 1, lines: [answer.sentence ?? "No lyric was kept.", ...cost, ...sing] };
+    return { code: 0, lines: [...lyricLines(answer.made), ...cost, ...sing] };
+}
+const OWN_LINE = "exodus video swipe new --kind <kind> --product <id> --script <file> [--yes] [--json]";
+function planOwn(rest, value, opts, occurrences) {
+    const usage = (line) => ({ kind: "usage", line });
+    const own = new Set(["kind", "product", "script", "yes", "json", "wait"]);
+    const other = occurrences.map((o) => o.flag.replace(/^no-/, "")).find((flag) => !own.has(flag) && [...FIND_PAID_FLAGS, ...FIND_OTHER_FLAGS, "brand", "limit", "count"].includes(flag));
+    if (other)
+        return usage(`video swipe new takes no --${other}. Its flags: --kind, --product, --script, --yes, --json.`);
+    if (rest[1] !== undefined)
+        return usage(`video swipe new takes no id (got "${rest[1]}"): ${OWN_LINE}`);
+    const kind = value("kind");
+    const productId = value("product");
+    const scriptFile = value("script");
+    if (!kind || !productId || !scriptFile) {
+        const missing = [!kind ? "--kind <kind>" : null, !productId ? "--product <id>" : null, !scriptFile ? "--script <file>" : null].filter(Boolean).join(", ");
+        return usage(`video swipe new needs ${missing}: ${OWN_LINE}`);
+    }
+    if (opts.wait)
+        return usage("video swipe new writes at once and takes no --wait.");
+    return { kind: "new", ask: { kind: kind.trim(), productId: productId.trim(), scriptFile: scriptFile.trim() }, opts };
+}
+export async function swipeOwnFlow(ask, opts, deps) {
+    let script;
+    try {
+        script = deps.readFile(ask.scriptFile);
+    }
+    catch {
+        return failed(`Can't read --script ${ask.scriptFile}. Check the path.`, opts.json);
+    }
+    if (!script.trim())
+        return failed(`--script ${ask.scriptFile} is empty.`, opts.json);
+    const res = await deps.post(SWIPES_OWN_PATH, { kind: ask.kind, productId: ask.productId, script, ...(opts.yes ? { yes: true } : {}) });
+    if (!res.ok)
+        return swipeError(res, opts.json);
+    const answer = isRecord(res.data) ? res.data : {};
+    if (opts.json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, ...answer })] };
+    if (answer.written !== true) {
+        const again = `exodus video swipe new --kind ${ask.kind} --product ${ask.productId} --script ${ask.scriptFile} --yes`;
+        return {
+            code: 0,
+            lines: [String(answer.free ?? "Writing your own words as a swipe is free."), ...(typeof answer.partsNote === "string" ? [answer.partsNote] : []), `Write it (free): ${again}`],
+        };
+    }
+    const id = String(answer.swipeId);
+    const count = typeof answer.lines === "number" ? answer.lines : 0;
+    const page = typeof answer.dashboardUrl === "string" ? ` On the dashboard: ${answer.dashboardUrl}` : " It is set and started from the CLI for now: the dashboard does not open a swipe of your own words yet.";
+    return {
+        code: 0,
+        lines: [
+            `${answer.again === true ? "Already written" : "Written"}: swipe ${id}, your own words (${count} ${count === 1 ? "line" : "lines"}), with no ad.${page}`,
+            `1. The song's shape (free): see the 26 on its sheet, exodus video swipe sheet ${id}, then pick one, exodus video swipe sheet set ${id} lyricShape=<shape>; or let the lyric ask pick it (one more call in its price).`,
+            `2. A lyric of your lines (paid, its price first): exodus video swipe sheet lyric ${id}`,
+            `3. ${sheetStartLine({ _id: id, workflowRunId: typeof answer.workflowRunId === "string" ? answer.workflowRunId : null })}`,
+            ...(typeof answer.partsNote === "string" ? [answer.partsNote] : []),
+        ],
+    };
+}
+function ownReadLines(breakdownId) {
+    return [
+        `Breakdown ${breakdownId}: your own words, not an ad. No ad was read, so it has no steps and no template.`,
+        "Its swipe is listed as your own words: exodus video swipe list. Set it on its sheet: exodus video swipe sheet <swipeId>.",
+    ];
 }
 async function peopleBeforeStart(swipeId, opts, deps, read) {
     const first = read !== undefined ? read : await readSheetForStart(swipeId, deps);
@@ -1940,10 +2337,12 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
         const result = await swipeStartFlow(swipeId, ask, opts, deps, again);
         return json ? result : { ...result, lines: [...animal.lines, ...result.lines] };
     }
+    let price = null;
     if (ask.maxUsd !== undefined) {
-        const unheld = await maxUsdUnsupported(swipeId, ask.maxUsd, deps);
-        if (unheld)
-            return failed(unheld, json);
+        const held = await maxUsdUnsupported(swipeId, ask.maxUsd, deps);
+        if (held.unheld)
+            return failed(held.unheld, json);
+        price = held.price;
     }
     const res = await deps.post(SWIPE_RUNS_PATH, {
         swipeId,
@@ -1970,8 +2369,13 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
             ],
         };
     }
-    if (!res.ok)
-        return swipeError(res, json);
+    if (!res.ok) {
+        const error = isRecord(res.data) ? res.data.error : undefined;
+        const message = typeof error === "string" ? error : isRecord(error) && typeof error.message === "string" ? error.message : "";
+        const command = !json && res.status >= 400 && res.status < 500 ? songStopCommand(message, swipeId) : null;
+        const said = swipeError(res, json);
+        return command ? { ...said, lines: [...said.lines, command] } : said;
+    }
     const customer = customerAnswer(res.data);
     const data = isRecord(res.data) ? res.data : {};
     const runId = customer?.runId ?? (typeof data.runId === "string" ? data.runId : "");
@@ -1980,27 +2384,44 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
     const url = pageOf(runId);
     const card = isRecord(data.card) ? data.card : null;
     const label = (value) => (isRecord(value) && typeof value.label === "string" ? value.label : null);
+    const scriptNote = typeof data.scriptNote === "string" && data.scriptNote ? data.scriptNote : null;
     const head = [
         `Started ad run ${runId} from swipe ${swipeId}`,
         ...(label(card?.conceit) ? [`Kind of ad: ${label(card?.conceit)}`] : []),
         ...(label(card?.style) ? [`Look: ${label(card?.style)}`] : []),
+        ...(scriptNote ? [scriptNote] : []),
         `Watch it: ${url}`,
     ];
-    if (opts.wait)
-        return startedThenWait(runId, head, { json, url, onProgressLine: opts.onProgressLine }, deps);
+    if (opts.wait) {
+        const waited = await startedThenWait(runId, head, { json, url, onProgressLine: opts.onProgressLine }, deps);
+        return json && scriptNote ? withScriptNote(waited, scriptNote) : waited;
+    }
     if (json)
-        return { code: 0, lines: [JSON.stringify({ ok: true, runId, url })] };
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, url, ...(scriptNote ? { scriptNote } : {}) })] };
     return {
         code: 0,
         lines: [
             ...head,
             "",
-            ask.oneShot
-                ? "The app approves the storyboard itself if its checks pass. It only stops for you if they find a problem."
-                : "It stops at the storyboard for the member's yes. The voices and clips are bought only after that yes.",
+            ...(ask.oneShot
+                ? ["The app approves the storyboard itself if its checks pass. It only stops for you if they find a problem."]
+                : price?.priced && price.song
+                    ? songStartedStopLines(price)
+                    : ["It stops at the storyboard for the member's yes. The voices and clips are bought only after that yes."]),
             `Check in whenever: exodus video status ${runId}`,
         ],
     };
+}
+function withScriptNote(result, scriptNote) {
+    if (result.lines.length !== 1)
+        return result;
+    try {
+        const answer = JSON.parse(result.lines[0]);
+        return isRecord(answer) ? { ...result, lines: [JSON.stringify({ ...answer, scriptNote })] } : result;
+    }
+    catch {
+        return result;
+    }
 }
 export const SHEET_FIELDS = [
     "sources",
@@ -3735,6 +4156,14 @@ export async function runSwipePlan(plan, deps, onProgressLine) {
             return swipeSheetPeopleFlow(plan.swipeId, plan.count, plan.maxUsd, opts, deps);
         case "sheet-voices":
             return swipeSheetVoicesFlow(plan.swipeId, opts, deps);
+        case "sheet-samples":
+            return swipeSheetSamplesFlow(plan, opts, deps);
+        case "sheet-cast":
+            return swipeSheetCastFlow(plan, opts, deps);
+        case "sheet-lyric":
+            return swipeSheetLyricFlow(plan.swipeId, plan.maxUsd, opts, deps);
+        case "new":
+            return swipeOwnFlow(plan.ask, opts, deps);
         case "run":
             return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
     }

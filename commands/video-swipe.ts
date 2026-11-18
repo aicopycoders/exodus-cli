@@ -24,6 +24,8 @@ import { formatApiError } from "../lib/format.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { customerAnswer, customerRunPage, customerStageIsWorking, onOwnDashboard, type CustomerRun, type CustomerStart } from "./video-customer.js";
 import { asVideoRun, describeFetchFailure, RUN_PATH, startedThenWait, waitFlow, type FlowResult, type VideoDeps } from "./video.js";
+import { planSheetSamples, swipeSheetSamplesFlow, type SheetSamplesPlan } from "./video-swipe-samples.js";
+import { planSheetCast, swipeSheetCastFlow, type SheetCastPlan } from "./video-swipe-cast.js";
 
 export const SWIPE_BREAKDOWNS_PATH = "/api/v2/video/breakdowns";
 export const SWIPE_UPLOAD_URL_PATH = "/api/v2/video/breakdowns/upload-url";
@@ -46,6 +48,10 @@ export const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 export const SHEET_SOURCES_QUERY = "sources=recommended";
 /** COP-289: GET ?breakdownId=&kind= says whether a write makes people for the sheet, and their price. Free. */
 export const SWIPE_WRITE_PEOPLE_PATH = "/api/v2/video/swipe-write-people";
+/** COP-273 P1b: POST { swipeId, yes?, mostUsd? } writes the member's own lines as a song (paid, the price first). */
+export const SWIPE_SHEET_LYRIC_PATH = "/api/v2/video/swipe-sheet/lyric";
+/** COP-273 P1c: POST { kind, productId, script, yes? } writes a swipe of the member's own words with no ad (free). */
+export const SWIPES_OWN_PATH = "/api/v2/video/swipes/own";
 /** The brand's swipe library (convex/http.ts), the same free read `exodus genesis --list-swipes` makes. */
 export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
@@ -53,7 +59,7 @@ export const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 
 export interface SwipeBreakdown {
   _id: string;
-  sourceKind: "url" | "file" | "ad";
+  sourceKind: "url" | "file" | "ad" | "none";
   sourceUrl: string | null;
   fileName: string | null;
   status: "queued" | "running" | "done" | "failed";
@@ -82,7 +88,10 @@ export interface SwipeFull {
     cast: Array<{ characterId: string; name: string; embodiment: "on-screen" | "voice-only" | "behind-camera"; look: string; voice: string }>;
     script: Array<{ lineId: string; speakerId: string | null; start: number; end: number; text: string }>;
   };
-  /** The breakdown's format version: "1.0", "1.1" or "1.2". */
+  /**
+   * The breakdown's format version: "1.0" to "1.3". 1.3 (COP-273 P1a) adds their song as the read heard it, in closed
+   * values; the CLI prints none of it here: the swipe's saved sheet names it in its song rows.
+   */
   version?: string;
   /** How the ad is filmed (format 1.1, more fields in 1.2); absent from a breakdown of 1.0. */
   filming?: SwipeFilming;
@@ -143,6 +152,8 @@ export interface SwipeDraft {
   direction: string;
   note: { kept: string; changed: string };
   lengthGap?: { ours: number; theirs: number };
+  /** COP-273 S34: on a kind that sings, how close the lyric stays to their song, in the server's one sentence. */
+  song?: { sentence: string };
   /** COP-301: on a Mirror or Close script, the server's one sentence on how close it came to their ad; absent on any other. */
   howClose?: { sentence: string };
 }
@@ -162,6 +173,10 @@ export interface SwipeView {
   costUsd: number | null;
   /** False when the swipe's run failed or was cancelled, so it starts again without --again; absent from older servers. */
   runHoldsStart?: boolean;
+  /** COP-273 P1b fix S2: why the script is not the one approved on the sheet (the song switch is off); absent otherwise. */
+  scriptNote?: string;
+  /** COP-273 P1c fix: a swipe of the member's own words, no ad; absent on every other swipe and from older servers. */
+  ownWords?: boolean;
 }
 
 export interface SwipeListRow {
@@ -260,8 +275,13 @@ export type SwipePriceRow =
       filmedTakes: number;
       costUsd: number;
       maxUsd: number;
-      /** COP-351: `beforeStop`, a line bought before the run stops at its storyboard (convex paradigmLaunch.ts). */
-      lines: Array<{ what: string; usd: number; beforeStop?: true }>;
+      /**
+       * COP-351: `beforeStop`, a line bought before the run stops at its storyboard (convex paradigmLaunch.ts); a song
+       * price says it on each line, true or false (COP-273 P6). Only `true` means before the stop.
+       * COP-273 P6 stage 2 (lib/workflow/songRunPrice.ts SongRunPriceLine): a sung video's line also says who pays it, one
+       * share a key. Absent on every other kind and an older server.
+       */
+      lines: Array<{ what: string; usd: number; maxUsd?: number; paidBy?: Array<{ payer: string; usd: number; maxUsd: number }>; beforeStop?: boolean }>;
       /** The start would refuse this one, in its own sentence (a video tester's daily cap). */
       startRefusal?: string;
     }
@@ -285,6 +305,54 @@ export type SwipePrice =
       /** The swipe's video, when it has one. */
       heldBy: string | null;
       approximate: true;
+      /** COP-273 S6: a sung video's price (its sheet has the song's size): the clips it counts, each filmed at most twice. */
+      song?: {
+        pairs: number;
+        size: string;
+        clips: number;
+        takesPerClip: number;
+        /** COP-273 P6 stage 2: the checks and the song's listens, on Exodus's key and not in the member's figure: one "about". */
+        checks?: { what: string; aboutUsd: number; paidBy: "platform" };
+        /** COP-273 P6 stage 2: one sentence, the size this price films at and what the other size would cost. */
+        sizeLine?: string;
+        /**
+         * P7 stage 3 fix (M2), lib/workflow/songRunPrice.ts: false on Luke's flow, where no scene picture is drawn and no
+         * scene's Redo exists (a call is filmed from the people's and places' pictures). Absent (an older server): true.
+         */
+        drawsScenePictures?: boolean;
+        sceneRedo?: boolean;
+        /** P7 stage 3 fix (M2): on Luke's flow only, the video calls the price counts, in place of one clip a scene. */
+        calls?: { about: number; most: number; aboutPassSec?: number; mostPassSec?: number; blackVideo?: boolean };
+      };
+      /**
+       * COP-273 P3: the sheet picks the first part only. The price is the first part's (convex/lib/workflow/songRunPrice.ts
+       * songPartPrice); `whole` is the whole video's, and the rest is priced again at the stop after the first part.
+       */
+      part?: {
+        part: "first";
+        firstSec: number;
+        picturesBeforeStop: "all" | "first";
+        aboutScenes: number;
+        mostScenes: number;
+        whole: { costUsd: number; maxUsd: number };
+        /** When a short song is made whole at this price, in the worker's own rule's words (absent from an older server). */
+        wholeWhen?: string;
+      };
+      /**
+       * Fix round 3: the first part on the free read, whether or not the sheet picks it (convex/videoSheet.ts
+       * SheetFirstPart): offered with its figures, or the reason it is not. Absent: a kind with none, or an older server.
+       */
+      firstPart?:
+        | {
+            canStart: "yes";
+            firstSec: number;
+            first: { costUsd: number; maxUsd: number };
+            /** COP-273 P6 stage 2 (convex/videoSheet.ts SheetFirstPart): the first yes's checks, about, on Exodus's key, apart. */
+            firstChecks?: { aboutUsd: number; paidBy: "platform" };
+            rest: { maxUsd: number };
+            wholeWhen: string;
+          }
+        | { canStart: "team-only"; firstSec: number; sentence: string };
     }
   | { swipeId: string; kind: { key: string; label: string } | null; priced: false; why: string };
 
@@ -422,10 +490,16 @@ export type SwipePlan =
   | { kind: "sheet-set"; swipeId: string; picks: Record<string, string | null>; peopleMaxUsd?: number; opts: SwipeOpts }
   | { kind: "sheet-price"; swipeId: string; opts: SwipeOpts }
   | { kind: "sheet-people"; swipeId: string; count: number | null; maxUsd: number | null; opts: SwipeOpts }
+  // COP-273 P2: samples of the song before the full song (video-swipe-samples.ts).
+  | SheetSamplesPlan
+  // COP-273 P4c: characters to pick from on a sung swipe (video-swipe-cast.ts).
+  | SheetCastPlan
   | { kind: "sheet-voices"; swipeId: string; opts: SwipeOpts }
+  | { kind: "sheet-lyric"; swipeId: string; maxUsd: number | null; opts: SwipeOpts }
+  | { kind: "new"; ask: OwnAsk; opts: SwipeOpts }
   | { kind: "run"; sheetFile: string; retryRefused: boolean; status: boolean; persona: string | null; opts: SwipeOpts };
 
-const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet"];
+const VERBS = ["status", "template", "products", "write", "show", "list", "start", "run", "find", "sheet", "new"];
 
 /** --mode's word: whole-ad, hook-only, their-format or new-look. */
 export function parseSwipeMode(value: string): ServerMode | null {
@@ -498,7 +572,7 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
   // may stand where the verb goes (`swipe --url L --kind x`), so the verb is the first word that is one.
   if (last("kind") !== undefined) {
     const named = rest.find((word) => VERBS.includes(word));
-    if (named !== "write") return usage(kindElsewhere(named));
+    if (named !== "write" && named !== "new") return usage(kindElsewhere(named));
   }
   // COP-289 review: the people's two flags are the write's alone; any other verb refuses them rather than drop them.
   // U13: but --people-max-usd is also the yes's figure of `sheet set` (planSheet reads it).
@@ -579,6 +653,7 @@ export function planSwipeCommand(rest: string[], occurrences: FlagOccurrence[]):
     return { kind: "run", sheetFile: sheet.trim(), retryRefused: on("retry-refused"), status: on("status"), persona: persona?.trim() ?? null, opts };
   }
   if (verb === "sheet") return planSheet(rest.slice(1), occurrences, opts);
+  if (verb === "new") return planOwn(rest, value, opts, occurrences);
   if (!id) {
     const named = verb === "show" || verb === "start" ? "swipeId" : "breakdownId";
     return usage(`video swipe ${verb} needs a ${named === "swipeId" ? "swipe" : "breakdown"} id: exodus video swipe ${verb} <${named}>`);
@@ -635,8 +710,9 @@ export const SHEET_PEOPLE_MOST = 8;
  * `swipe sheet <swipeId>`, `swipe sheet set <swipeId> <row>=<value> ...`, `swipe sheet price <swipeId>`, and COP-265
  * part 7's `swipe sheet people <swipeId>` (new people to pick from: paid, so the price comes first and --yes makes
  * them) and `swipe sheet voices <swipeId>` (voices to hear: one read of the voice list on the member's ElevenLabs key; no speech is made). `words` are the positional words after `sheet`. A
- * row given with nothing after its `=` is cleared. Only `people` takes a paid step's flags (--count, --yes, --max-usd,
- * --wait); every other flag is refused.
+ * row given with nothing after its `=` is cleared. Only the paid asks take a paid step's flags: `people` (--count, --yes,
+ * --max-usd, --wait), and COP-273's `samples` (--sounds, --count, --yes, --max-usd, --wait), `cast` (--yes, --max-usd,
+ * --wait) and `lyric` (--yes, --max-usd); every other flag is refused.
  */
 function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOpts): SwipePlan {
   const usage = (line: string): SwipePlan => ({ kind: "usage", line });
@@ -647,6 +723,10 @@ function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOp
     occurrences.filter((o) => ["json", "yes", "wait"].includes(o.flag) && o.value !== undefined).map((o) => o.value as string),
   );
   const given = words.filter((word) => !(switchWords.has(word) && (ON_WORDS.has(word.toLowerCase()) || OFF_WORDS.has(word.toLowerCase()))));
+  // COP-273 P2: samples of the song, paid, with flags of their own (video-swipe-samples.ts).
+  if (given[0] === "samples") return planSheetSamples(given, occurrences, opts);
+  // COP-273 P4c: characters to pick from, paid, with flags of their own (video-swipe-cast.ts).
+  if (given[0] === "cast") return planSheetCast(given, occurrences, opts);
   if (given[0] === "people") {
     // --max-usd is the start's too (part 6); here it carries the most the people's price said.
     const other = typedFlag([
@@ -681,6 +761,7 @@ function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOp
     if (maxUsd !== null && !opts.yes) return usage("video swipe sheet people --max-usd goes with --yes, after the price.");
     return { kind: "sheet-people", swipeId, count, maxUsd, opts };
   }
+  if (given[0] === "lyric") return planSheetLyric(given, occurrences, opts, typedFlag);
   // U13: a set whose choice buys carries the most its price showed, with --yes: `sheet set ... --yes --people-max-usd <n>`.
   const setMost = given[0] === "set" ? occurrences.filter((o) => o.flag === "people-max-usd").at(-1) : undefined;
   let peopleMaxUsd: number | undefined;
@@ -693,9 +774,10 @@ function planSheet(words: string[], occurrences: FlagOccurrence[], opts: SwipeOp
     if (!opts.yes) return usage("video swipe sheet set --people-max-usd goes with --yes, after the price.");
     peopleMaxUsd = Number(most);
   }
-  // --count is the people's alone; --max-usd, which the start takes too, is refused below as on part 6's free verbs.
+  // --count is the people's and the samples' (COP-273 P2) alone; --max-usd, which the start takes too, is refused below
+  // as on part 6's free verbs.
   const peopleOnly = typedFlag(["count"]);
-  if (peopleOnly) return usage(`Only video swipe sheet people takes --${peopleOnly}.`);
+  if (peopleOnly) return usage(`Only video swipe sheet people and samples take --${peopleOnly}.`);
   // U13: a set's --yes goes with the most a price showed; alone, it is refused with what it goes with.
   if (given[0] === "set" && opts.yes && peopleMaxUsd === undefined) {
     return usage(
@@ -1101,6 +1183,7 @@ async function waitForBreakdown(
 }
 
 function breakdownEndLines({ breakdown, template }: BreakdownRead, dashboardUrl: string): string[] {
+  if (breakdown.sourceKind === "none") return ownReadLines(breakdown._id);
   if (breakdown.status === "failed") {
     return [
       `The breakdown failed: ${breakdown.error ?? "no reason was given."}`,
@@ -1166,6 +1249,7 @@ export async function swipeStatusFlow(breakdownId: string, opts: SwipeRunOptions
   if (!read) return failed("The server's answer about this breakdown could not be read.", opts.json);
   if (opts.json) return { code: 0, lines: [JSON.stringify(res.data)] };
   const { breakdown } = read;
+  if (breakdown.sourceKind === "none") return { code: 0, lines: ownReadLines(breakdown._id) };
   const width = Math.max(...breakdown.steps.map((step) => step.status.length));
   const lines = [
     `Breakdown ${breakdown._id}: ${STATUS_WORD[breakdown.status]}`,
@@ -1688,12 +1772,42 @@ function requestOf(ask: WriteAsk, memberScript: string | undefined): Record<stri
 
 /** What a try cost, written or refused: a refusal was paid for too. A row with no cost had no usage reported. */
 function costLine(swipe: SwipeView): string {
+  // COP-273 P1c fix 2: a swipe of the member's own words called no model (its mark, never a reported cost of 0).
+  if (swipe.ownWords === true) return "It cost nothing: no model was called.";
   return swipe.costUsd !== null
     ? `It cost ${usd(swipe.costUsd)} on the member's key.`
     : "What it cost is unknown: the provider reported no usage for it.";
 }
 
-function swipeLines(swipe: SwipeView, after: "write" | "show"): string[] {
+/**
+ * COP-273 S7 round 2: the closing line of a written swipe whose kind keeps a saved sheet (the server answers its rows)
+ * goes through the sheet and its price to a start held to the price's most; never the bare start line, which skips
+ * both. A kind with no sheet ends as before.
+ */
+function sheetStartLine(swipe: Pick<SwipeView, "_id" | "workflowRunId"> & { runHoldsStart?: boolean }): string {
+  const id = swipe._id;
+  const first = `read its saved sheet (free): exodus video swipe sheet ${id}, then its price (free): exodus video swipe sheet price ${id}`;
+  const start = (again: string) => `then, on the member's yes (paid), exodus video swipe start ${id}${again} --yes --max-usd <the at most>`;
+  if (swipe.workflowRunId && swipe.runHoldsStart === false) {
+    return `It started run ${swipe.workflowRunId}, which failed or was cancelled: exodus video status ${swipe.workflowRunId}. To start the swipe again, ${first}; ${start("")}.`;
+  }
+  if (swipe.workflowRunId) {
+    return `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. A second video from this swipe is paid on its own: ${first}; ${start(" --again")}.`;
+  }
+  return `Before the video, ${first}; ${start("")}.`;
+}
+
+/** Whether the swipe keeps a saved sheet: its sheet answers rows. A read that fails says no, as before the sheet. */
+async function holdsSheet(swipeId: string, deps: VideoDeps): Promise<boolean> {
+  try {
+    const res = await deps.get(`${SWIPE_SHEET_PATH}?id=${encodeURIComponent(swipeId)}`);
+    return res.ok && (sheetOf(res.data)?.sheet.sections.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function swipeLines(swipe: SwipeView, after: "write" | "show", sheet = false): string[] {
   if (swipe.outcome.kind === "refused") {
     return [
       `The writer refused: ${swipe.outcome.why}`,
@@ -1712,15 +1826,19 @@ function swipeLines(swipe: SwipeView, after: "write" | "show"): string[] {
     "",
     draft.script,
     "",
+    ...(swipe.scriptNote ? [swipe.scriptNote, ""] : []),
     ...(draft.direction.trim() ? [`Direction: ${draft.direction}`] : []),
     `Kept: ${draft.note.kept}`,
     `Changed: ${draft.note.changed}`,
     ...(draft.lengthGap ? [`Length: ours is about ${draft.lengthGap.ours} s, theirs about ${draft.lengthGap.theirs} s.`] : []),
+    ...(typeof draft.song?.sentence === "string" && draft.song.sentence.trim() ? [`Song: ${draft.song.sentence}`] : []),
     // COP-301: the server's sentence on how close a Mirror or Close script came to their ad, printed as it comes.
     ...(draft.howClose ? [draft.howClose.sentence] : []),
     costLine(swipe),
     "",
-    swipe.workflowRunId && swipe.runHoldsStart === false
+    sheet
+      ? sheetStartLine(swipe)
+      : swipe.workflowRunId && swipe.runHoldsStart === false
       ? `It started run ${swipe.workflowRunId}, which failed or was cancelled: exodus video status ${swipe.workflowRunId}. Starting the swipe again is paid (ask first): exodus video swipe start ${swipe._id} --yes`
       : swipe.workflowRunId
         ? `It started run ${swipe.workflowRunId}: exodus video status ${swipe.workflowRunId}. A second video from this swipe is paid on its own and needs --again (ask first): exodus video swipe start ${swipe._id} --again --yes`
@@ -1798,7 +1916,8 @@ export async function swipeWriteFlow(breakdownId: string, ask: WriteAsk, opts: S
     const answer = written ? { ok: true, swipe, ...(people ? { people: people.json } : {}) } : { ok: false, refused: true, swipe };
     return { code: written ? 0 : 1, lines: [JSON.stringify(answer)] };
   }
-  const lines = swipeLines(swipe, "write");
+  const sheet = written && (await holdsSheet(swipe._id, deps));
+  const lines = swipeLines(swipe, "write", sheet);
   // The people go before the start's line, the last one; after a refusal, at the end.
   const withPeople = !people ? lines : written ? [...lines.slice(0, -1), ...people.lines, "", ...lines.slice(-1)] : [...lines, ...people.lines];
   return { code: written ? 0 : 1, lines: [...out.kept, ...withPeople] };
@@ -2014,7 +2133,8 @@ export async function swipeShowFlow(swipeId: string, opts: SwipeOpts, deps: Vide
   const swipe = isRecord(res.data) && isRecord(res.data.swipe) ? (res.data.swipe as unknown as SwipeView) : null;
   if (!swipe) return failed("The server's answer about this swipe could not be read.", opts.json);
   if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, swipe })] };
-  return { code: 0, lines: swipeLines(swipe, "show") };
+  const sheet = swipe.outcome.kind === "written" && (await holdsSheet(swipe._id, deps));
+  return { code: 0, lines: swipeLines(swipe, "show", sheet) };
 }
 
 /** When a swipe was written, in UTC to the minute: two writes of one ad are told apart by it. */
@@ -2030,7 +2150,8 @@ export async function swipeListFlow(opts: SwipeOpts, deps: VideoDeps): Promise<F
   return {
     code: 0,
     lines: swipes.map((row) => {
-      const mode = modeOf(row.request.mode);
+      // COP-273 P1c: a swipe of the member's own words has no ad: its read is named so and holds no format of theirs.
+      const mode = row.source?.sourceKind === "none" ? { label: "your own words, no ad" } : modeOf(row.request.mode);
       const step = row.request.closeness !== undefined ? closenessOf(row.request.closeness) : undefined;
       const ad = row.source?.sourceUrl ?? row.source?.fileName ?? "an ad";
       return [
@@ -2101,12 +2222,33 @@ function sheetOf(data: unknown, own = ""): { sheet: SavedSheet; dashboardUrl: st
   return { sheet: data.sheet as unknown as SavedSheet, dashboardUrl: onOwnDashboard(typeof data.dashboardUrl === "string" ? data.dashboardUrl : "", own) };
 }
 
+/** More options than this are printed one a line, and a row's value with its option's name (COP-273: 46 to 67 sounds). */
+const LONG_LIST = 20;
+
+/**
+ * COP-273 P7 stage 3: a list printed one option a line, its value with its name: more than LONG_LIST options that are
+ * the row above's own (a kind of music's sounds). Any other list (One-take's 41 places) prints on one line, as at the
+ * base (video-swipe-sheet-look.test.ts records it).
+ */
+function isLongList(row: SavedSheetRow, above: SavedSheetRow | undefined): boolean {
+  return (row.options?.length ?? 0) > LONG_LIST && ownerOf(row.options ?? [], above) !== null;
+}
+
+/** The name of the row above's value when every option's code is that value and a dot (a kind of music's sounds). */
+function ownerOf(options: NonNullable<SavedSheetRow["options"]>, above: SavedSheetRow | undefined): string | null {
+  if (!above || typeof above.value !== "string" || above.value === "") return null;
+  const code = `${above.value}.`;
+  if (!options.every((option) => option.id.startsWith(code))) return null;
+  return above.options?.find((option) => option.id === above.value)?.label ?? above.value;
+}
+
 /**
  * COP-375: the swipe's page opened on its person section (COP-339's `&sheet=<section>`), where the people's faces are
  * seen and the voices' samples play; nothing when the server sent no page. The CLI prints this page, never a face's or
- * a sample's own address: those open for anyone who holds them, with no sign-in.
+ * a sample's own address: those open for anyone who holds them, with no sign-in. COP-273: a song sheet's own section
+ * the same way (`section`: "cast" for its characters' pictures, "song" for its sample takes); "person" by default.
  */
-export function personSectionPage(dashboardUrl: string): string {
+export function personSectionPage(dashboardUrl: string, section = "person"): string {
   if (!dashboardUrl) return "";
   // Before a fragment, and in place of a section the link already names; the rest kept as written (onOwnDashboard).
   const hash = dashboardUrl.indexOf("#");
@@ -2114,14 +2256,14 @@ export function personSectionPage(dashboardUrl: string): string {
   const fragment = hash === -1 ? "" : dashboardUrl.slice(hash);
   const query = link.indexOf("?");
   const params = query === -1 ? [] : link.slice(query + 1).split("&").filter((param) => param !== "" && !/^sheet(=|$)/.test(param));
-  return `${query === -1 ? link : link.slice(0, query)}?${[...params, "sheet=person"].join("&")}${fragment}`;
+  return `${query === -1 ? link : link.slice(0, query)}?${[...params, `sheet=${section}`].join("&")}${fragment}`;
 }
 
 /**
  * A row's options as the member reads them. A person made for them, a voice and the animal are one a line, by number
- * and name; plain options on one line. COP-265 part 7: and where the ask for them stands. COP-375: a picture's or a
- * sample's address is never printed; the swipe's page, at the sheet's end, shows them. A sheet read prints the rows
- * alone: the offers to make people or list voices are said only when the member asks.
+ * and name; plain options on one line, and a long list one a line (COP-273). COP-265 part 7: and where the ask for
+ * them stands. COP-375: a picture's or a sample's address is never printed; the swipe's page, at the sheet's end, shows
+ * them. A sheet read prints the rows alone: the offers to make people or list voices are said only when the member asks.
  */
 function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipeId: string): string[] {
   const lines: string[] = [];
@@ -2131,6 +2273,15 @@ function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipe
   if (pictured) {
     // People, voices and the animal made on the member's ask (COP-265 part 7): one a line, by number and name.
     for (const option of options) lines.push(`    ${option.id}: ${option.label}`);
+  } else if (isLongList(row, above)) {
+    // A long list that is the row above's own (each code its value and a dot: a kind of music's sounds): one option a
+    // line, so each can be read, with whose it is and that a new value there clears this row's pick (the follow rule).
+    const cost = row.optionsCostUsd ? `, showing them costs ${usd(row.optionsCostUsd)}` : "";
+    const owner = ownerOf(options, above);
+    lines.push(
+      `    options (${options.length}${cost} of ${owner}; they follow ${above!.id}, and a new ${above!.id} alone clears a ${row.label.toLowerCase()} you picked):`,
+      ...options.map((option) => `      ${option.id}: ${option.label}`),
+    );
   } else if (options.some((option) => option.line)) {
     // U13: options that say what choosing them does: one a line, with what it does (and a price, in the server's words).
     for (const option of options) lines.push(`    ${option.id} (${option.label})${option.line ? `: ${option.line}` : ""}`);
@@ -2147,6 +2298,12 @@ function optionLines(row: SavedSheetRow, above: SavedSheetRow | undefined, swipe
   // COP-289 review: also when no one was made (a write's people that could not be made) and an ask is left.
   const noneMade = row.optionsStatus && !row.optionsStatus.making && options.length === 0 && (row.optionsStatus.asksLeft ?? 0) > 0;
   if (row.id === "who" && (row.optionsStatus?.noneYet || noneMade)) lines.push(`    See the price (free): exodus video swipe sheet people ${swipeId}`);
+  // COP-273 P2: and before the first ask for samples of the song.
+  if (row.id === "songSample" && row.optionsStatus?.noneYet) lines.push(`    See the price (free): exodus video swipe sheet samples ${swipeId}`);
+  // COP-273 P4c: and before the first ask for characters to pick from.
+  if (row.id === "cast1" && row.optionsStatus?.noneYet) lines.push(`    See the price (free): exodus video swipe sheet cast ${swipeId}`);
+  // COP-273 P7: and, on the member's own lines, until a lyric is made from them (the row then offers `song`).
+  if (row.id === "lyric" && !options.some((option) => option.id === "song")) lines.push(`    See the price (free): exodus video swipe sheet lyric ${swipeId}`);
   // COP-285: a voice row with no voice (none picked, none recommended) says how to list the voices for the person.
   if (row.id === "voice" && row.value === null) lines.push(`    List the voices: exodus video swipe sheet voices ${swipeId}`);
   return lines;
@@ -2173,8 +2330,10 @@ export function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[] {
   for (const section of sheet.sections) {
     lines.push("", section.label);
     for (const row of section.rows) {
-      // A pick by number (a person or a voice made for the member) is shown with the name of what it picks.
-      const picked = typeof row.value === "number" ? row.options?.find((option) => option.id === String(row.value)) : undefined;
+      // A pick by number (a person or a voice made for the member) is shown with the name of what it picks, and so is a
+      // value from a long list, whose name is far from it below (a sound's code).
+      const long = isLongList(row, section.rows[section.rows.indexOf(row) - 1]);
+      const picked = typeof row.value === "number" || long ? row.options?.find((option) => option.id === String(row.value)) : undefined;
       // A row set to its none (U6) is shown with the server's words for it.
       const none = row.none && row.value === row.none.value ? row.none : undefined;
       // #4863: a value the server names in its own words (the card's none at the top) is shown with those words.
@@ -2290,8 +2449,19 @@ type PricedSwipe = Extract<SwipePrice, { priced: true }>;
 /** A line's dollars: whole cents as cents, a half cent kept (Kie bills a credit as half a cent). */
 const lineUsd = (value: number) => (Math.abs(value * 100 - Math.round(value * 100)) < 1e-6 ? usd(value) : `$${value.toFixed(3)}`);
 
-/** What one combination films, in the member's words. */
-function filmWords(row: { size: string; takes: "all" | "first" }, scriptTakes: number): string {
+/**
+ * What one combination films, in the member's words. A sung video counts clips, each filmed at most twice; a first part
+ * (COP-273 P3) counts the first part's clips only.
+ */
+function filmWords(row: { size: string; takes: "all" | "first" }, scriptTakes: number, song?: PricedSwipe["song"], part?: PricedSwipe["part"]): string {
+  const each = song ? (song.takesPerClip === 2 ? "twice" : `${song.takesPerClip} times`) : "";
+  // P7 stage 3 fix (M2): on the calls road the count is the calls' (the server's `song.calls`); a first part's calls are
+  // counted on its own price line only, so its head names them without a number.
+  const calls = filmsCalls(song);
+  if (song && part && calls) return `${row.size}, the first part only: the video calls of the song's first ${part.firstSec} s, each filmed at most ${each}`;
+  if (song && part) return `${row.size}, the first part only: up to ${part.mostScenes} of ${scriptTakes === 1 ? "1 clip" : `${scriptTakes} clips`}, each filmed at most ${each}`;
+  if (song && calls) return `${row.size}, about ${calls.about}, up to ${calls.most} video calls, each filmed at most ${each}`;
+  if (song) return `${row.size}, ${scriptTakes === 1 ? "1 clip" : `${scriptTakes} clips`}, each filmed at most ${each}`;
   if (row.takes === "first" && scriptTakes > 1) return `${row.size}, the first take only`;
   return `${row.size}, ${scriptTakes === 1 ? "its one take" : `all ${scriptTakes} takes`}`;
 }
@@ -2314,11 +2484,79 @@ function cheaperOption(price: PricedSwipe): boolean {
 
 /** The price at the sheet's rows, as the start's paid-step text and `sheet price` both say it. */
 function pickedPriceLine(price: PricedSwipe): string {
-  return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${filmWords(price.picked, price.scriptTakes)}, as the swipe's sheet stands)`;
+  if (price.part && price.song && !filmsCalls(price.song)) {
+    const each = price.song.takesPerClip === 2 ? "twice" : `${price.song.takesPerClip} times`;
+    return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${price.picked.size}, the first part only: about ${price.part.aboutScenes} of ${price.scriptTakes} clips, up to ${price.part.mostScenes}, each filmed at most ${each}, as the swipe's sheet stands)`;
+  }
+  return `about ${usd(price.picked.costUsd)}, at most ${usd(price.picked.maxUsd)} (${filmWords(price.picked, price.scriptTakes, price.song, price.part)}, as the swipe's sheet stands)`;
+}
+
+/**
+ * P7 stage 3 fix (M2): which road a sung price is on, from the server's own fields (lib/workflow/songRunPrice.ts), never
+ * from a kind's name: the video calls it counts (`song.calls`), whether it draws a picture for each scene and whether a
+ * scene has a Redo. A field an older server does not send reads as the one-clip-a-scene road.
+ */
+function filmsCalls(song?: PricedSwipe["song"]): { about: number; most: number } | null {
+  const calls = song?.calls;
+  return isRecord(calls) && typeof calls.about === "number" && typeof calls.most === "number" ? calls : null;
+}
+const drawsScenePictures = (song?: PricedSwipe["song"]) => song?.drawsScenePictures !== false;
+const hasSceneRedo = (song?: PricedSwipe["song"]) => song?.sceneRedo !== false;
+
+/**
+ * COP-273 P3: what the first part's price covers and what comes after it, said once: the run films the clips of the
+ * song's first seconds and waits; the rest is priced at that stop and made only on a second yes that carries its most.
+ */
+function partLines(price: PricedSwipe): string[] {
+  if (!price.part) return [];
+  // P7 stage 3 fix (M2): on the calls road no scene picture is drawn; the sheets and the places are, and calls are filmed.
+  const pictures = !drawsScenePictures(price.song) ? "the sheets, the places" : price.part.picturesBeforeStop === "all" ? "every scene's picture" : "the first part's pictures";
+  const filmed = filmsCalls(price.song) ? "the video calls" : "the clips";
+  // Fix round 2: the checks are the platform's and sit outside the first part's rule, so they are not named here; and
+  // a short song may be made whole, so the stop is never promised as a certainty.
+  return [
+    `First part only: this price is the whole song, the look and characters, ${pictures} and ${filmed} of the song's first ${price.part.firstSec} s.`,
+    `Then the video waits for your second yes: the rest is priced at that stop and made only when you say yes to it. The whole video at once: about ${usd(price.part.whole.costUsd)}, at most ${usd(price.part.whole.maxUsd)}.`,
+    // P7 stage 3: the run holds both parts to the whole's most its start froze (P6: video/lib/songCover.ts `whole`; the
+    // worker holds both parts' calls together), while the rest's figure is a bound priced again at the stop.
+    "This video in all never costs more than the whole video's at most, even when the first part's and the rest's figures add up to more.",
+    // Fix round 3: the worker's own rule, in the server's words, so a song that will still stop is never told it will not.
+    ...(price.part.wholeWhen ? [`If this is ${price.part.wholeWhen}, the first part is the whole video: it is made at this price, with no second yes.`] : []),
+  ];
+}
+
+/**
+ * Fix round 3: the first part on the free read, in one line: offered with its figures when the sheet does not pick it,
+ * the rest's most when it does, or why this member cannot start one (once: not when the start's refusals say it). A
+ * reason this CLI does not know is left to the server's other lines.
+ */
+function firstPartLine(price: PricedSwipe): string[] {
+  const offer = price.firstPart;
+  if (!offer) return [];
+  if (offer.canStart === "yes") {
+    if (price.part) return [`The rest, after your second yes: at most ${usd(offer.rest.maxUsd)}, priced again at that stop.`];
+    return [
+      // P7 stage 3: the first yes's checks beside it, apart (P6: never in the member's figure, never a most). Fix round
+      // (S1): the run holds both parts to the whole's most (video/lib/songCover.ts `whole`); with the first part not
+      // picked, the price above is the whole video's.
+      `Or film the first ${offer.firstSec} s first, free to pick with exodus video swipe sheet set ${price.swipeId} songPart=first: the first yes about ${usd(offer.first.costUsd)}, at most ${usd(offer.first.maxUsd)}${
+        offer.firstChecks ? `, plus about ${usd(offer.firstChecks.aboutUsd)} of checks on Exodus's key` : ""
+      }; the rest at most ${usd(offer.rest.maxUsd)}, priced again at that stop and made only on a second yes. The two yeses together never cost more than the whole video's at most, ${usd(price.picked.maxUsd)}.`,
+    ];
+  }
+  if (offer.canStart === "team-only" && !price.startRefusals.includes(offer.sentence)) {
+    return [`First part only, then the rest after a second yes: ${offer.sentence}`];
+  }
+  return [];
 }
 
 /** How to change the size and the takes, named from the answer's own options. */
 function changeLine(price: PricedSwipe): string {
+  if (price.song) {
+    if (!price.sizeChoices) return "This server offers the kind's own size and one pair of song takes for now: 480p and more pairs are not switched on.";
+    const sizes = [...new Set(price.options.map((row) => row.size))];
+    return `Change it (free): exodus video swipe sheet set ${price.swipeId} videoSize=<${sizes.join(" or ")}> songTakes=<1, 2 or 3>. The start makes what the sheet says then.`;
+  }
   if (!price.sizeChoices) return "This server offers the kind's own size and every take for now: 480p, 1080p and the first take only are not switched on.";
   const rows = distinctOptions(price);
   const sizes = [...new Set(rows.map((row) => row.size))];
@@ -2334,12 +2572,93 @@ function changeLine(price: PricedSwipe): string {
 const AT_MOST =
   "At most: every take and every picture ordered twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
 
+/**
+ * What "at most" means for a sung video (COP-273 S6): the budget its run is held to without a press. P7 stage 3 fix (M2):
+ * said of the road the price is on (the server's `song.calls`, `drawsScenePictures`, `sceneRedo`): the calls road films
+ * calls, draws no scene picture and has no Redo; an older server's price reads as the one-clip-a-scene road.
+ */
+function songAtMost(song: PricedSwipe["song"]): string {
+  const filmed = filmsCalls(song) ? "every video call" : "every clip";
+  const pictures = drawsScenePictures(song) ? ", every scene's picture redrawn once" : ", every picture drawn at most as its line says";
+  const redo = hasSceneRedo(song) ? " A Redo you press is priced on its own." : "";
+  return `At most: ${filmed} filmed twice${pictures} and the song at its caps, the most the run orders without you pressing anything.${redo}`;
+}
+
+/**
+ * COP-273 W2 song fix, S7: the server's two song refusals of a start are plain for both doors (the page shows them too);
+ * the CLI adds its own command for each way out the sentence names. Read by our own words, as the server says them
+ * (video/lib/songStartStop.ts), never by importing the file, so the CLI's bundle stays as it is.
+ */
+export function songStopCommand(why: string, swipeId: string): string | null {
+  const set = `exodus video swipe sheet set ${swipeId}`;
+  const ways: string[] = [];
+  if (why.startsWith("The song's sound is not chosen yet:")) {
+    if (why.includes("pick one of the samples")) ways.push(`${set} songSample=<n> picks a sample`);
+    if (why.includes("ask for samples")) ways.push(`exodus video swipe sheet samples ${swipeId} asks for samples (the price first)`);
+    ways.push(`${set} sound=<code> sets the sound`);
+  } else if (why.startsWith("Your lines are spoken lines and no lyric was made from them:")) {
+    if (why.includes("ask for a lyric")) ways.push(`exodus video swipe sheet lyric ${swipeId} asks for a lyric (the price first)`);
+    ways.push(`${set} lyric=yours has your lines sung as you wrote them`);
+  }
+  return ways.length > 0 ? `On the command line: ${ways.join("; ")}.` : null;
+}
+
+/** Each start refusal, then the CLI's own command where the server's sentence has one (W2 song fix, S7). */
+const startRefusalLines = (price: PricedSwipe): string[] =>
+  price.startRefusals.flatMap((why) => {
+    const command = songStopCommand(why, price.swipeId);
+    return [`The start would be refused now: ${why}`, ...(command ? [command] : [])];
+  });
+
 /** Why the start would be refused whatever the size, and the video the swipe already has (a fact, said once). */
 function refusalLines(price: PricedSwipe): string[] {
   return [
-    ...price.startRefusals.map((why) => `The start would be refused now: ${why}`),
+    ...startRefusalLines(price),
     ...(price.heldBy ? [`This swipe already has a video, run ${price.heldBy}: a start makes a second, paid video only with --again.`] : []),
   ];
+}
+
+/** COP-273 P7 stage 2: the keys a price line's shares name (lib/workflow/songRunPrice.ts SongPricePayer), in the CLI's words. */
+const PAYER_KEY = new Map([
+  ["kie", "your Kie key"],
+  ["elevenlabs", "your ElevenLabs key"],
+  ["model", "your model key"],
+  ["platform", "Exodus's key"],
+]);
+
+type PriceLine = PricedSwipe["picked"]["lines"][number];
+
+/**
+ * COP-273 P7 stage 2: who pays a line and when, from the line's own data (P6: print from the data, never match words). A
+ * payer this CLI does not know names no key; a line with neither says nothing more, as before.
+ */
+function linePaidWords(line: PriceLine): string {
+  const keys = Array.isArray(line.paidBy) ? [...new Set(line.paidBy.map((share) => PAYER_KEY.get(share?.payer)))] : [];
+  const on = keys.length > 0 && keys.every((key) => key !== undefined) ? `, on ${keys.join(" and ")}` : "";
+  const when = line.beforeStop === true ? ", paid before the storyboard stop" : line.beforeStop === false ? ", paid after the storyboard stop" : "";
+  return on + when;
+}
+
+function lineWords(line: PriceLine): string {
+  return `  ${line.what}: ${line.maxUsd !== undefined ? `about ${lineUsd(line.usd)}, at most ${lineUsd(line.maxUsd)}` : lineUsd(line.usd)}${linePaidWords(line)}`;
+}
+
+/** COP-273 P7 stage 2: the checks and the song's listens, on Exodus's key, said apart as one "about", never a ceiling. */
+function checksLines(price: PricedSwipe): string[] {
+  const checks = price.song?.checks;
+  return isRecord(checks) && typeof checks.what === "string" && typeof checks.aboutUsd === "number" ? [`${checks.what}: about ${usd(checks.aboutUsd)}.`] : [];
+}
+
+/** Each size's price: a sung video's in the server's one sentence when it sends one, else one line a size, as before. */
+function sizeLines(price: PricedSwipe): string[] {
+  if (!price.sizeChoices) return [];
+  const sizeLine = price.song?.sizeLine;
+  if (typeof sizeLine === "string" && sizeLine) {
+    // A size the sentence does not price (refused, or one the start refuses) keeps its own line.
+    const apart = distinctOptions(price).filter((row) => "why" in row || row.startRefusal);
+    return [sizeLine, ...apart.map((row) => `  ${filmWords(row, price.scriptTakes, price.song, price.part)}: ${priceWords(row)}`), ""];
+  }
+  return ["Each size:", ...distinctOptions(price).map((row) => `  ${filmWords(row, price.scriptTakes, price.song, price.part)}: ${priceWords(row)}`), ""];
 }
 
 /** A swipe's price as the member reads it. */
@@ -2349,13 +2668,16 @@ export function priceLines(price: SwipePrice, dashboardUrl: string): string[] {
   const lines = [
     `The video of swipe ${price.swipeId}${price.kind ? `, ${price.kind.label} (${price.kind.key})` : ""}, before the yes:`,
     `Price: ${pickedPriceLine(price)}.`,
+    ...partLines(price),
+    ...firstPartLine(price),
     ...(price.picked.startRefusal ? [`The start refuses it: ${price.picked.startRefusal}`] : []),
-    ...price.picked.lines.map((line) => `  ${line.what}: ${lineUsd(line.usd)}`),
+    ...price.picked.lines.map(lineWords),
+    ...checksLines(price),
     "",
-    ...(price.sizeChoices ? ["Each size:", ...distinctOptions(price).map((row) => `  ${filmWords(row, price.scriptTakes)}: ${priceWords(row)}`), ""] : []),
+    ...sizeLines(price),
     ...price.notes,
     price.leavesOut,
-    AT_MOST,
+    price.song ? songAtMost(price.song) : AT_MOST,
     ...refusalLines(price),
     changeLine(price),
     ...page,
@@ -2371,6 +2693,113 @@ export async function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps
   if (!read) return failed("The server's answer about this price could not be read.", opts.json);
   if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, ...read })] };
   return { code: 0, lines: priceLines(read.price, read.dashboardUrl) };
+}
+
+/**
+ * COP-273 S7: a sung video's start, said before its yes, read off the price's song counts (convex/videoSheet.ts
+ * songPriceOf), never off a kind's name; a price without them adds nothing. Round 2: what the start alone can spend
+ * before the storyboard, from the price's own lines (the song's, the scenes' pictures' and the look's most, added up:
+ * no other number is worked out here), and what waits for the approval. A price whose lines do not carry those mosts
+ * is said without a number.
+ */
+/**
+ * Round 2: who pays for a sung video, and what its price leaves out, said once. The keys are named as the CLI names
+ * them elsewhere (the Kie key for pictures and clips, the ElevenLabs key, the model key); the song is made through Kie
+ * and its takes are heard by ElevenLabs on the run's own keys. P7 stage 2: the checks and the listens are Exodus's and
+ * not in the member's figure (lib/workflow/songRunPrice.ts): the price's own sentence for them follows this one.
+ */
+export const SONG_WHO_PAYS =
+  "Who pays: the song, the pictures and the clips on your own Kie key, and the song's takes are heard on your ElevenLabs key. The text calls that plan the storyboard and write each picture and clip are on your model key: they are not in the price, and no number is shown for them.";
+
+/**
+ * P7 stage 2: the lines paid before the storyboard stop, by the line's own `beforeStop` (P6: never by its words), each
+ * named by its own words up to the colon; null when a line does not say, or one paid before the stop has no most.
+ */
+function beforeStopParts(price: PricedSwipe): Array<{ name: string; maxUsd: number }> | null {
+  const lines = price.picked.lines;
+  if (lines.length === 0 || !lines.every((line) => typeof line.beforeStop === "boolean")) return null;
+  const before = lines.filter((line) => line.beforeStop === true);
+  if (before.length === 0 || !before.every((line) => typeof line.maxUsd === "number")) return null;
+  return before.map((line) => ({ name: lineName(line.what), maxUsd: line.maxUsd as number }));
+}
+
+/** A price line named by its own words up to the colon, lower-cased: "the song", "the clips at 480p". */
+function lineName(what: string): string {
+  const head = what.split(":")[0];
+  return head.charAt(0).toLowerCase() + head.slice(1);
+}
+
+/** Said of a sung video's storyboard held for a review first (both the start's text and its started lines say it). */
+const SONG_REVIEW_FIRST = "A storyboard held for a review first gets its song after that approval instead.";
+
+/**
+ * P7 stage 3: what a sung video's started run buys before its storyboard stop and after its yes, by the price's own lines
+ * (`beforeStop`, never their words); a song is bought before the stop, so the stack's "The voices and clips are bought
+ * only after that yes." is not said of it. A price whose lines do not each say when they are paid says only the clips.
+ */
+function songStartedStopLines(price: PricedSwipe): string[] {
+  const lines = price.picked.lines;
+  const says = lines.length > 0 && lines.every((line) => typeof line.beforeStop === "boolean");
+  const before = says ? lines.filter((line) => line.beforeStop === true).map((line) => lineName(line.what)) : [];
+  const after = says ? lines.filter((line) => line.beforeStop === false).map((line) => lineName(line.what)) : [];
+  const stop = before.length > 0 && after.length > 0
+    ? `It stops at the storyboard for the member's yes. Bought before it: ${before.join("; ")}. Bought only after that yes: ${after.join("; ")}.`
+    : `It stops at the storyboard for the member's yes. ${filmsCalls(price.song) ? "The video calls are" : "The clips are"} bought only after that yes.`;
+  // P7 stage 3 fix (S4): a first part's run waits again after the first part, as the start's text without --yes says.
+  const second = price.part
+    ? [`After the first part's ${filmsCalls(price.song) ? "video calls" : "clips"} it waits again, for the member's second yes, which that stop prices, unless the song is short enough that the first part is the whole video.`]
+    : [];
+  return [stop, ...second, SONG_REVIEW_FIRST];
+}
+
+/**
+ * P7 stage 4: how the run checks its song (scout song-voice.ts makeSheetSongVoice, the W2 song block's C and its fix
+ * S1): a take sung with every line is kept, else the take that sang the most when it sang at least
+ * SONG_LINES_KEPT_PERCENT (85) of the lines, with a notice naming the lines it missed (the song step's warning, which
+ * status prints as a heads-up); under that the song step stops the run and no clip is made. The sheets and the places
+ * hang off the storyboard beside the song step (convex/lib/workflow/templates.ts), so pictures may be drawn by then.
+ */
+const SONG_CHECK = "(a take with every line sung, else the take that sang the most when it sang at least 85% of the lines)";
+const SONG_TOO_FEW_LINES = "When no take sang at least 85% of the lines, the run stops at its song and no clip is made; what was made by then is paid.";
+const SONG_STATUS_SAYS = "exodus video status says if the song came out as another kind of music than the sheet's, and which lines a kept take missed.";
+
+function songStartLines(price: PricedSwipe, step: PaidStep): string[] {
+  if (!isRecord((price as { song?: unknown }).song)) return [];
+  const most = usd(price.picked.maxUsd);
+  const known = beforeStopParts(price);
+  const firstMost = known ? Math.round(known.reduce((sum, part) => sum + part.maxUsd * 100, 0)) / 100 : null;
+  const detail = known && `${known.map((part) => `${part.name} ${usd(part.maxUsd)}`).join(", ")}, by the price's own lines; the checks are apart, on Exodus's key`;
+  const upTo = known ? `at most ${usd(firstMost!)} of the ${most}` : null;
+  // P7 stage 3 fix (M2): on the calls road (the server's `song.calls`, `drawsScenePictures: false`) the sheets and the
+  // places are drawn before the stop, no scene picture, and video calls are filmed after its yes.
+  const pictures = drawsScenePictures(price.song) ? "the scene pictures" : "the sheets and the places";
+  const ownLines = drawsScenePictures(price.song) ? "the song's, the scenes' pictures' and the look's" : "the song's, the look's, the sheets' and the places'";
+  const filmed = filmsCalls(price.song) ? "the video calls" : "the clips";
+  // COP-273 P3: a first part's yes buys the first part, and the run then waits for a second yes (one go is refused).
+  const lines = price.part
+    ? [`It buys: the first part only, ${pickedPriceLine(price)}.`, ...partLines(price)]
+    : [`It buys: the whole sung video, ${pickedPriceLine(price)}.`];
+  if (step === "start-one-shot") {
+    lines.push(
+      `With --one-shot nothing waits for you: the song, which the run checks by itself ${SONG_CHECK}, ${
+        drawsScenePictures(price.song) ? "the scene pictures" : "the sheets, the places"
+      } and ${filmed} follow with no stop, and the whole price can be spent.`,
+      `Leave it off to stop at the storyboard first: up to there the song and the pictures are made, ${
+        upTo ? `${upTo} (${detail})` : `for which the price's own lines are ${ownLines}`
+      }, and ${SONG_STATUS_SAYS}`,
+    );
+    return lines;
+  }
+  lines.push(
+    `Before you approve anything: the song, which the run checks by itself ${SONG_CHECK}, and ${pictures}; the run stops at the storyboard. ${
+      upTo ? `This part can cost ${upTo}: ${detail}.` : `For this part, the price's own lines are ${ownLines}.`
+    } ${SONG_TOO_FEW_LINES}`,
+    price.part
+      ? `Only after you approve the storyboard: the first part's ${filmsCalls(price.song) ? "video calls" : "clips"}. Then the run waits after the first part for your second yes, which the stop prices, unless the song is short enough that the first part is the whole video. At the storyboard, ${SONG_STATUS_SAYS}`
+      : `Only after you approve the storyboard: ${filmed} and their checks. At the storyboard, ${SONG_STATUS_SAYS}`,
+    SONG_REVIEW_FIRST,
+  );
+  return lines;
 }
 
 /**
@@ -2396,6 +2825,23 @@ async function startNeedsYes(
     price = null;
   }
   if (!price?.priced) return needsYesResult(step, json, choice);
+  // COP-273 P3: a first part in one go is refused by the start (convex/videoModule.ts): say that, with any other reason
+  // the price gives, and ask for no yes (fix round 2: in --json too).
+  if (price.part && step === "start-one-shot") {
+    const refused = "With --one-shot this start would be refused: a first part stops after its clips for your second yes, and a run in one go never stops.";
+    const wayOn = `Leave --one-shot off to make the first part and wait at its stop, or film the whole song in one go: exodus video swipe sheet set ${swipeId} songPart=whole.`;
+    if (json) return { code: 0, lines: [JSON.stringify({ ok: false, refused, wayOn, startRefusals: price.startRefusals })] };
+    return {
+      code: 0,
+      lines: [
+        "This step costs money, so nothing was sent.",
+        ...choice,
+        refused,
+        wayOn,
+        ...startRefusalLines(price),
+      ],
+    };
+  }
   const { buys, paidBy } = PAID[step];
   if (json) return { code: 0, lines: [JSON.stringify({ ok: false, needsYes: true, buys, paidBy, price })] };
   // COP-351: what the run buys before it stops there (One-take's picture of the place), named with its price.
@@ -2410,13 +2856,14 @@ async function startNeedsYes(
     lines: [
       "This step costs money, so nothing was sent.",
       ...choice,
-      `It buys: ${buys}`,
-      `Who pays: ${paidBy}`,
-      `The whole video's price: ${pickedPriceLine(price)}, ${when}.`,
+      ...(price.song
+        ? [...songStartLines(price, step), SONG_WHO_PAYS, ...checksLines(price)]
+        : [`It buys: ${buys}`, `Who pays: ${paidBy}`, `The whole video's price: ${pickedPriceLine(price)}, ${when}.`]),
       ...(price.picked.startRefusal ? [`The start refuses it: ${price.picked.startRefusal}`] : []),
-      price.leavesOut,
-      AT_MOST,
-      ...price.startRefusals.map((why) => `The start would be refused now: ${why}`),
+      // A sung video's who-pays line says what the price leaves out; every other kind says it here.
+      ...(price.song ? [] : [price.leavesOut]),
+      price.song ? songAtMost(price.song) : AT_MOST,
+      ...startRefusalLines(price),
       // With --again the second video is what was asked for, and the choice line above says so.
       ...(price.heldBy && !again ? [`This swipe already has a video, run ${price.heldBy}: this start is refused, and a second, paid video needs --again.`] : []),
       ...(cheaperOption(price) ? [`For less, set the sheet first (free): exodus video swipe sheet price ${swipeId} lists each size.`] : []),
@@ -2453,9 +2900,12 @@ function peopleLines(sheet: SavedSheet): string[] {
   return (row?.options ?? []).map((option) => `  ${option.id}: ${option.label}`);
 }
 
-/** COP-375: under the people or the voices, the swipe's page where they are seen and heard; nothing without the page. */
-function sectionPageLines(lead: string, dashboardUrl: string): string[] {
-  const page = personSectionPage(dashboardUrl);
+/**
+ * COP-375: under the people or the voices, the swipe's page where they are seen and heard; nothing without the page.
+ * COP-273: the song's characters and sample takes too, on their own section (`section`, personSectionPage).
+ */
+export function sectionPageLines(lead: string, dashboardUrl: string, section?: string): string[] {
+  const page = personSectionPage(dashboardUrl, section);
   return page ? [`${lead} ${page}`] : [];
 }
 
@@ -2558,13 +3008,15 @@ export async function swipeSheetPeopleFlow(
  * Why a start held to `maxUsd` cannot be sent: this server has no price before the yes (an older server, which ignores
  * maxUsd), or the CLI could not reach it to ask. Null when the server can hold the start to the price.
  */
-async function maxUsdUnsupported(swipeId: string, maxUsd: number, deps: VideoDeps): Promise<string | null> {
+async function maxUsdUnsupported(swipeId: string, maxUsd: number, deps: VideoDeps): Promise<{ unheld: string | null; price: SwipePrice | null }> {
   const cannot = `so it can't hold this start to ${usd(maxUsd)}, and nothing was started.`;
   try {
     const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
-    return missingRouteLine(res, "exodus video swipe start --max-usd") ? `This server has no price before the yes, ${cannot}` : null;
+    if (missingRouteLine(res, "exodus video swipe start --max-usd")) return { unheld: `This server has no price before the yes, ${cannot}`, price: null };
+    // P7 stage 3: the same read's price, kept for what a sung video's started run says it bought before its stop.
+    return { unheld: null, price: res.ok ? (priceOf(res.data)?.price ?? null) : null };
   } catch {
-    return `The server could not be asked whether it holds a start to a price, ${cannot}`;
+    return { unheld: `The server could not be asked whether it holds a start to a price, ${cannot}`, price: null };
   }
 }
 
@@ -2612,6 +3064,211 @@ export async function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, dep
       ...(voices.length > 0 ? [`Pick one (free): exodus video swipe sheet set ${swipeId} voice=<n>. The video is then filmed in that voice.`] : []),
     ],
   };
+}
+
+// ── The lyric asked for on the sheet (COP-273 P1b) ───────────────────────────────────────────────────────────────
+
+const SHEET_LYRIC_LINE = "exodus video swipe sheet lyric <swipeId> [--yes --max-usd <n>] [--json]";
+
+/** `swipe sheet lyric <swipeId> [--yes --max-usd <n>]`: as `people`, a paid step whose yes carries the price's most. */
+function planSheetLyric(
+  given: string[],
+  occurrences: FlagOccurrence[],
+  opts: SwipeOpts,
+  typedFlag: (names: readonly string[]) => string | undefined,
+): SwipePlan {
+  const usage = (line: string): SwipePlan => ({ kind: "usage", line });
+  const other = typedFlag([...FIND_PAID_FLAGS.filter((flag) => flag !== "yes"), ...FIND_OTHER_FLAGS.filter((flag) => flag !== "max-usd"), "brand", "limit", "count"]);
+  if (other) return usage(`video swipe sheet lyric takes no --${other}. Its flags: --yes, --max-usd, --json.`);
+  const [, swipeId, ...extra] = given;
+  if (!swipeId) return usage(`video swipe sheet lyric needs a swipe id: ${SHEET_LYRIC_LINE}`);
+  if (extra.length > 0) return usage(`video swipe sheet lyric takes one swipe id (got "${extra[0]}"): ${SHEET_LYRIC_LINE}`);
+  const most = occurrences.filter((o) => o.flag === "max-usd").at(-1);
+  const maxUsd = most?.value !== undefined && /^\d+(\.\d+)?$/.test(most.value.trim()) ? Number(most.value.trim()) : most ? Number.NaN : null;
+  if (maxUsd !== null && !Number.isFinite(maxUsd)) return usage(`video swipe sheet lyric --max-usd takes the price's most in dollars, such as 0.42 (got "${most?.value ?? ""}").`);
+  if (opts.yes && maxUsd === null) return usage("video swipe sheet lyric --yes needs --max-usd <n>, the most the price said. Run it without --yes first to read the price.");
+  if (maxUsd !== null && !opts.yes) return usage("video swipe sheet lyric --max-usd goes with --yes, after the price.");
+  return { kind: "sheet-lyric", swipeId, maxUsd, opts };
+}
+
+/** The server's answer to a lyric ask (convex/videoSheetLyric.ts LyricAskAnswer, with the sheet's page). */
+interface LyricAnswer {
+  asked: boolean;
+  price: { aboutUsd: number; mostUsd: number; sentence: string };
+  refusal: string | null;
+  /**
+   * COP-273 P10 F-A: `leftOutWhy`, the server's sentence of why it was left out (absent on lyrics made before). P10 offer
+   * line: `leftOut` holds the member's own lines the lyric does not say (the server's measure), `leftOutWhy` why for each.
+   */
+  made: { ask: number; shapeName: string; lines: string[]; parts: string; leftOut: string[]; leftOutWhy?: string; addedWhy?: string; longerWhy?: string } | null;
+  /** COP-273 P1b fix M2: the lyric that is the swipe's script now; null while the member's own lines are sung. */
+  sung: { ask: number } | null;
+  /** Which lyric is sung, in the server's one sentence. */
+  singing: string;
+  /** COP-273 P1b fix S11: what the swipe's lyric asks have cost so far; null when none was ever made. */
+  spent?: string | null;
+  sentence: string | null;
+  costUsd: number | null;
+  /** COP-273 P1b fix S1: the cost holds a call's cap whose cost was never reported, so it is a most. */
+  costIsBound?: boolean;
+  sheet: SavedSheet;
+  dashboardUrl: string;
+}
+
+function lyricAnswerOf(data: unknown): LyricAnswer | null {
+  const read = sheetOf(data);
+  if (!read || !isRecord(data) || data.row !== "lyric" || !isRecord(data.price) || typeof data.price.mostUsd !== "number") return null;
+  return { ...(data as unknown as LyricAnswer), sheet: read.sheet, dashboardUrl: read.dashboardUrl };
+}
+
+/** COP-273 P10 F-A: said under what was left out of a lyric made before the server kept why. */
+export const LYRIC_LEFT_OUT_WHY_UNKNOWN = "Why it was left out was not kept for this lyric, made before reasons were kept. Your own lines say it.";
+
+/** The lyric as the member reads it: its shape, each line numbered, its parts, what of their script it left out and why. */
+function lyricLines(made: NonNullable<LyricAnswer["made"]>): string[] {
+  return [
+    `The lyric, in the shape ${made.shapeName}:`,
+    ...made.lines.map((line, i) => `  ${String(i + 1).padStart(2)}  ${line}`),
+    `Its parts: ${made.parts}`,
+    // COP-273 P10 offer line, phase 3 (P6): the server's sentence of the member's lines it sang at the end, on the ask's
+    // own answer only.
+    ...(made.addedWhy ? [made.addedWhy] : []),
+    // COP-273 P10 finding 35 (P4): the server's sentence when this lyric counts a longer song in the price than the
+    // member's own lines would.
+    ...(made.longerWhy ? [made.longerWhy] : []),
+    ...(made.leftOut.length > 0 ? [`Left out of your script: ${made.leftOut.join("; ")}`, `  ${made.leftOutWhy ?? LYRIC_LEFT_OUT_WHY_UNKNOWN}`] : []),
+  ];
+}
+
+/**
+ * `exodus video swipe sheet lyric <swipeId> [--yes --max-usd <n>]`: the member's own lines written as a song, on their
+ * model key. Without --yes it says the price, and the lyric made so far; nothing is written or paid. With it the
+ * server writes and checks the lyric and answers it, or why none was kept. It is sung only once lyric=song is set.
+ */
+export async function swipeSheetLyricFlow(swipeId: string, maxUsd: number | null, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
+  let res: ApiResponse<unknown>;
+  try {
+    // P7 stage 2: the answer carries the sheet (convex/http.ts sheetAnswer), whose dials say "recommended" only to a
+    // caller that says it reads that word, as every other sheet call of this CLI does (SHEET_SOURCES_QUERY).
+    res = await deps.post(`${SWIPE_SHEET_LYRIC_PATH}?${SHEET_SOURCES_QUERY}`, { swipeId, ...(opts.yes ? { yes: true } : {}), ...(maxUsd !== null ? { mostUsd: maxUsd } : {}) });
+  } catch (err) {
+    const error = `The server could not be reached: ${describeFetchFailure(err)}.`;
+    const look = opts.yes ? `Whether a lyric was written is not known. Read it before asking again: exodus video swipe sheet lyric ${swipeId}` : "Nothing was written.";
+    return { code: 1, lines: opts.json ? [JSON.stringify({ ok: false, error, asked: opts.yes ? "unknown" : false })] : [error, look] };
+  }
+  if (!res.ok) return swipeError(res, opts.json);
+  const answer = lyricAnswerOf(res.data);
+  if (!answer) return failed(`The server's answer about the lyric could not be read. Read it again: exodus video swipe sheet lyric ${swipeId}`, opts.json);
+  if (opts.json) {
+    const { sheet, dashboardUrl, ...rest } = answer;
+    // Landing #5000: the sheet as every other sheet call prints it, a sample or a picture as whether, never its address.
+    return { code: answer.asked && !answer.made ? 1 : 0, lines: [JSON.stringify({ ok: !(answer.asked && !answer.made), ...rest, sheet: sheetForJson(sheet), dashboardUrl })] };
+  }
+  // COP-273 P1b fix M2: which lyric is sung, in the server's sentence, and the one set that changes it.
+  const set = `exodus video swipe sheet set ${swipeId}`;
+  const hint = !answer.made && !answer.sung
+    ? []
+    : !answer.sung
+      ? [`Sing it (free): ${set} lyric=song`]
+      : answer.made && answer.made.ask !== answer.sung.ask
+        ? [`Sing the newer one (free): ${set} lyric=song`]
+        : [`Sing your own lines again (free): ${set} lyric=yours`];
+  // COP-273 P1b fix S11: whose lines are sung is said with any lyric or any ask's end, as it stands now.
+  const sing = answer.made || answer.sung || answer.sentence ? [answer.singing, ...hint] : [];
+  if (!answer.asked) {
+    const most = mostShown(answer.price.mostUsd);
+    const next = answer.refusal ? [answer.refusal] : [`Write it (paid, on your model key, at most $${most}): exodus video swipe sheet lyric ${swipeId} --yes --max-usd ${most}`];
+    // "Nothing was written or paid yet" only when no ask was ever made; else what the asks cost, and this read nothing.
+    const paid = answer.spent ? [answer.spent, "This read wrote and paid nothing."] : ["Nothing was written or paid yet."];
+    return {
+      code: 0,
+      lines: [...(answer.made ? lyricLines(answer.made) : []), ...(answer.sentence ? [answer.sentence] : []), ...sing, answer.price.sentence, ...paid, ...next],
+    };
+  }
+  // The cost as every figure of the price is said: rounded up to the cent (the server's usd()).
+  const cost = answer.costUsd !== null ? [`It cost ${answer.costIsBound ? "at most " : ""}$${mostShown(answer.costUsd)} on your model key.`] : [];
+  if (!answer.made) return { code: 1, lines: [answer.sentence ?? "No lyric was kept.", ...cost, ...sing] };
+  return { code: 0, lines: [...lyricLines(answer.made), ...cost, ...sing] };
+}
+
+// ── A swipe of the member's own words, no ad (COP-273 P1c) ────────────────────────────────────────────────────────
+
+const OWN_LINE = "exodus video swipe new --kind <kind> --product <id> --script <file> [--yes] [--json]";
+
+/** What `swipe new` sends: the kind, the product and the script's file. */
+export interface OwnAsk {
+  kind: string;
+  productId: string;
+  scriptFile: string;
+}
+
+/** `swipe new --kind <kind> --product <id> --script <file>`: free, so --yes writes it; no id, no other verb's flag. */
+function planOwn(rest: string[], value: (name: string) => string | undefined | null, opts: SwipeOpts, occurrences: FlagOccurrence[]): SwipePlan {
+  const usage = (line: string): SwipePlan => ({ kind: "usage", line });
+  // COP-273 P1c fix: another verb's flag is refused, never quietly dropped.
+  const own = new Set(["kind", "product", "script", "yes", "json", "wait"]);
+  const other = occurrences.map((o) => o.flag.replace(/^no-/, "")).find((flag) => !own.has(flag) && ([...FIND_PAID_FLAGS, ...FIND_OTHER_FLAGS, "brand", "limit", "count"] as readonly string[]).includes(flag));
+  if (other) return usage(`video swipe new takes no --${other}. Its flags: --kind, --product, --script, --yes, --json.`);
+  if (rest[1] !== undefined) return usage(`video swipe new takes no id (got "${rest[1]}"): ${OWN_LINE}`);
+  const kind = value("kind");
+  const productId = value("product");
+  const scriptFile = value("script");
+  if (!kind || !productId || !scriptFile) {
+    const missing = [!kind ? "--kind <kind>" : null, !productId ? "--product <id>" : null, !scriptFile ? "--script <file>" : null].filter(Boolean).join(", ");
+    return usage(`video swipe new needs ${missing}: ${OWN_LINE}`);
+  }
+  if (opts.wait) return usage("video swipe new writes at once and takes no --wait.");
+  return { kind: "new", ask: { kind: kind.trim(), productId: productId.trim(), scriptFile: scriptFile.trim() }, opts };
+}
+
+/**
+ * `exodus video swipe new`: a swipe of the member's own words with no ad, for a kind that sings them. Free: no model
+ * call. Without --yes the server only checks the lines and says so; with it, the swipe is written, and the way on is
+ * its sheet, a lyric of its lines, and its start.
+ */
+export async function swipeOwnFlow(ask: OwnAsk, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult> {
+  let script: string;
+  try {
+    script = deps.readFile(ask.scriptFile);
+  } catch {
+    return failed(`Can't read --script ${ask.scriptFile}. Check the path.`, opts.json);
+  }
+  if (!script.trim()) return failed(`--script ${ask.scriptFile} is empty.`, opts.json);
+  const res = await deps.post(SWIPES_OWN_PATH, { kind: ask.kind, productId: ask.productId, script, ...(opts.yes ? { yes: true } : {}) });
+  if (!res.ok) return swipeError(res, opts.json);
+  const answer = isRecord(res.data) ? res.data : {};
+  if (opts.json) return { code: 0, lines: [JSON.stringify({ ok: true, ...answer })] };
+  if (answer.written !== true) {
+    const again = `exodus video swipe new --kind ${ask.kind} --product ${ask.productId} --script ${ask.scriptFile} --yes`;
+    return {
+      code: 0,
+      lines: [String(answer.free ?? "Writing your own words as a swipe is free."), ...(typeof answer.partsNote === "string" ? [answer.partsNote] : []), `Write it (free): ${again}`],
+    };
+  }
+  const id = String(answer.swipeId);
+  const count = typeof answer.lines === "number" ? answer.lines : 0;
+  // COP-273 P1c fix: the way on in the order the member needs it, the start as a paid step after the sheet and its
+  // price (the rule of a kind with a saved sheet); no dashboard link while the page cannot open such a swipe (M2).
+  const page = typeof answer.dashboardUrl === "string" ? ` On the dashboard: ${answer.dashboardUrl}` : " It is set and started from the CLI for now: the dashboard does not open a swipe of your own words yet.";
+  return {
+    code: 0,
+    lines: [
+      `${answer.again === true ? "Already written" : "Written"}: swipe ${id}, your own words (${count} ${count === 1 ? "line" : "lines"}), with no ad.${page}`,
+      `1. The song's shape (free): see the 26 on its sheet, exodus video swipe sheet ${id}, then pick one, exodus video swipe sheet set ${id} lyricShape=<shape>; or let the lyric ask pick it (one more call in its price).`,
+      `2. A lyric of your lines (paid, its price first): exodus video swipe sheet lyric ${id}`,
+      // A repeat answers the swipe already written, which may have started its run (fix 2).
+      `3. ${sheetStartLine({ _id: id, workflowRunId: typeof answer.workflowRunId === "string" ? answer.workflowRunId : null })}`,
+      ...(typeof answer.partsNote === "string" ? [answer.partsNote] : []),
+    ],
+  };
+}
+
+/** COP-273 P1c fix (S5): `swipe status` of a read that is no ad's: true lines only, never the template step. */
+function ownReadLines(breakdownId: string): string[] {
+  return [
+    `Breakdown ${breakdownId}: your own words, not an ad. No ad was read, so it has no steps and no template.`,
+    "Its swipe is listed as your own words: exodus video swipe list. Set it on its sheet: exodus video swipe sheet <swipeId>.",
+  ];
 }
 
 // ── The start ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -2808,9 +3465,11 @@ export async function swipeStartFlow(
   }
   // COP-265 part 6: a server without the price before the yes ignores maxUsd and would start the video unheld, so a
   // start held to a price first asks the price's route (a free read) and starts nothing where it is missing.
+  let price: SwipePrice | null = null;
   if (ask.maxUsd !== undefined) {
-    const unheld = await maxUsdUnsupported(swipeId, ask.maxUsd, deps);
-    if (unheld) return failed(unheld, json);
+    const held = await maxUsdUnsupported(swipeId, ask.maxUsd, deps);
+    if (held.unheld) return failed(held.unheld, json);
+    price = held.price;
   }
   const res = await deps.post(SWIPE_RUNS_PATH, {
     swipeId,
@@ -2839,7 +3498,15 @@ export async function swipeStartFlow(
       ],
     };
   }
-  if (!res.ok) return swipeError(res, json);
+  if (!res.ok) {
+    // P7 stage 4: a song refusal of the start (convex/videoModule.ts sheetStart.songStop, video/lib/songStartStop.ts) is
+    // the server's plain sentence; the CLI adds its own command after it, as the price's refusal lines do.
+    const error = isRecord(res.data) ? res.data.error : undefined;
+    const message = typeof error === "string" ? error : isRecord(error) && typeof error.message === "string" ? error.message : "";
+    const command = !json && res.status >= 400 && res.status < 500 ? songStopCommand(message, swipeId) : null;
+    const said = swipeError(res, json);
+    return command ? { ...said, lines: [...said.lines, command] } : said;
+  }
   const customer = customerAnswer<CustomerStart>(res.data);
   const data = isRecord(res.data) ? res.data : {};
   const runId = customer?.runId ?? (typeof data.runId === "string" ? data.runId : "");
@@ -2847,27 +3514,49 @@ export async function swipeStartFlow(
   const url = pageOf(runId);
   const card = isRecord(data.card) ? data.card : null;
   const label = (value: unknown) => (isRecord(value) && typeof value.label === "string" ? value.label : null);
+  // COP-273 P1b fix 2 (review A round 2, S-2): the server's one sentence when the song switch is off and the member's own
+  // lines are sung in place of the lyric approved on the sheet.
+  const scriptNote = typeof data.scriptNote === "string" && data.scriptNote ? data.scriptNote : null;
   const head = [
     `Started ad run ${runId} from swipe ${swipeId}`,
     ...(label(card?.conceit) ? [`Kind of ad: ${label(card?.conceit)}`] : []),
     ...(label(card?.style) ? [`Look: ${label(card?.style)}`] : []),
+    ...(scriptNote ? [scriptNote] : []),
     `Watch it: ${url}`,
   ];
-  if (opts.wait) return startedThenWait(runId, head, { json, url, onProgressLine: opts.onProgressLine }, deps);
-  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, url })] };
+  if (opts.wait) {
+    const waited = await startedThenWait(runId, head, { json, url, onProgressLine: opts.onProgressLine }, deps);
+    // P7 stage 2: --json keeps no line of the head, so the sentence that the member's own lines are sung rides in the answer.
+    return json && scriptNote ? withScriptNote(waited, scriptNote) : waited;
+  }
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, url, ...(scriptNote ? { scriptNote } : {}) })] };
   return {
     code: 0,
     lines: [
       ...head,
       "",
-      ask.oneShot
-        ? "The app approves the storyboard itself if its checks pass. It only stops for you if they find a problem."
-        // COP-351 review: true for every kind. What a run buys before the stop differs by kind (a kind that draws frames
-        // draws them; One-take draws one picture of the place), and the start's text without --yes names it.
-        : "It stops at the storyboard for the member's yes. The voices and clips are bought only after that yes.",
+      ...(ask.oneShot
+        ? ["The app approves the storyboard itself if its checks pass. It only stops for you if they find a problem."]
+        // P7 stage 3: a sung video (its price has the song's block) buys its song before the stop: its own lines say so.
+        : price?.priced && price.song
+          ? songStartedStopLines(price)
+          // COP-351 review: true for every kind. What a run buys before the stop differs by kind (a kind that draws frames
+          // draws them; One-take draws one picture of the place), and the start's text without --yes names it.
+          : ["It stops at the storyboard for the member's yes. The voices and clips are bought only after that yes."]),
       `Check in whenever: exodus video status ${runId}`,
     ],
   };
+}
+
+/** A --json answer of one object with the start's script note added; any other answer as it is. */
+function withScriptNote(result: FlowResult, scriptNote: string): FlowResult {
+  if (result.lines.length !== 1) return result;
+  try {
+    const answer: unknown = JSON.parse(result.lines[0]);
+    return isRecord(answer) ? { ...result, lines: [JSON.stringify({ ...answer, scriptNote })] } : result;
+  } catch {
+    return result;
+  }
 }
 
 // ── The sheet: the whole swipe from one file ──────────────────────────────────────────────────────────────────────
@@ -5028,6 +5717,14 @@ export async function runSwipePlan(
       return swipeSheetPeopleFlow(plan.swipeId, plan.count, plan.maxUsd, opts, deps);
     case "sheet-voices":
       return swipeSheetVoicesFlow(plan.swipeId, opts, deps);
+    case "sheet-samples":
+      return swipeSheetSamplesFlow(plan, opts, deps);
+    case "sheet-cast":
+      return swipeSheetCastFlow(plan, opts, deps);
+    case "sheet-lyric":
+      return swipeSheetLyricFlow(plan.swipeId, plan.maxUsd, opts, deps);
+    case "new":
+      return swipeOwnFlow(plan.ask, opts, deps);
     case "run":
       return swipeSheetFlow(plan.sheetFile, { ...opts, retryRefused: plan.retryRefused, status: plan.status, persona: plan.persona }, deps);
   }

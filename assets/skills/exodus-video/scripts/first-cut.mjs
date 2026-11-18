@@ -45,7 +45,7 @@ import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { planText, READOUT_INSET_BOX } from "./first-cut-text.mjs";
 import { createTextRenderer, measuredTextAss, textFrameWindow } from "./first-cut-text-render.mjs";
 import { isZeroDurationSpeech, parseAuthoredBeat, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC, DIALOGUE_BREATH_LEAD_SEC, DIALOGUE_BREATH_TAIL_SEC } from "./first-cut-speech.mjs";
@@ -57,6 +57,8 @@ const HEIGHT = 1920;
 const FPS = 24;
 /** The speed step's clock, in ticks a second: fine enough that a frame's faster time is not rounded to a whole frame. */
 const SPEED_TIME_BASE = 96000;
+/** The speed step (COP-300): on a fine clock, so `fps` puts each faster or slower frame on the 24 fps tick nearest its true time. */
+const speedStep = (speed) => `settb=1/${SPEED_TIME_BASE},setpts=PTS/${speed},fps=${FPS}:round=near`;
 const norm = (label) =>
   `[${label}]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,` +
   `pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},format=yuv420p`;
@@ -100,6 +102,12 @@ export function paceSpeedNote(finishing) {
 }
 const PACE_ZOOM =
   `scale=${even(WIDTH * PACE_PASS.zoom)}:${even(HEIGHT * PACE_PASS.zoom)},crop=${WIDTH}:${HEIGHT},setsar=1`;
+/**
+ * COP-382: under a headline at the top for the whole film (finishing.cardPlace "top-film"), every step closer keeps the
+ * frame's top edge where it is (`zoomTop` on a segment): the picture grows down and out, so a head below the headline's
+ * box on the plain framing stays below it, where a centred step would lift it into the box.
+ */
+const zoomedAtTop = (zoom) => `scale=${even(WIDTH * zoom)}:${even(HEIGHT * zoom)},crop=${WIDTH}:${HEIGHT}:(iw-ow)/2:0,setsar=1`;
 const floorFrame = (t) => Math.floor(t * FPS + 1e-6) / FPS;
 const ceilFrame = (t) => Math.ceil(t * FPS - 1e-6) / FPS;
 const stereo = "aresample=48000,aformat=channel_layouts=stereo";
@@ -282,6 +290,46 @@ const FRAMING_SAME_WITHIN = 0.03;
 const FRAMING_NEAR_CUTAWAY = 2;
 /** A name of `table`, as a string, or null; never one of an object's own words ("constructor"). */
 const nameIn = (table, value) => (typeof value === "string" && Object.prototype.hasOwnProperty.call(table, value) ? value : null);
+
+/**
+ * COP-273 W2 cut, songEnd (a sung run's saved finish, by name): Luke's end. The film ends SONG_END_AFTER_SEC after the
+ * last sung word ends, or at the song's own end if that comes sooner, the song fading over the film's last
+ * SONG_END_FADE_SEC; the end card is the film's last SONG_END_CARD_SEC (never more than half of it), fading in over
+ * SONG_END_CARD_FADE_SEC, and a sung word under it is no refusal: the song plays on under the card. His numbers (his dev
+ * pack, lab/story_build.py and lab/prepro_finish.py, read as text).
+ */
+export const SONG_END_AFTER_SEC = 3.5;
+export const SONG_END_FADE_SEC = 2.5;
+/**
+ * COP-273 W2 end order: the worker trims such a song at the same end already (its times kept to the ms), so a song that
+ * runs less than this past the last sung word plus SONG_END_AFTER_SEC is at its end: nothing is cut and no second fade.
+ */
+const SONG_END_SAME_SEC = 0.01;
+export const SONG_END_CARD_SEC = 4;
+export const SONG_END_CARD_FADE_SEC = 0.45;
+/**
+ * COP-273 W2 cut, songCaptions: the caption looks of a sung run's saved finish, by name, drawn on the sung words' own
+ * times (songCaptionScreens). `per` words of one line a screen (Infinity: the whole line); `size` and `y` (the screen's
+ * centre) as shares of the frame's height; `caps` in capitals; `colour` the words' (ASS, &HAABBGGRR), `lit` the word
+ * being sung (ASS, &HBBGGRR&), `outline` and `shadow` the edge. "lit" is Luke's look `lights_up` (white capitals, a
+ * black edge, the sung word yellow #FFE600, three words, at 64 % of the height for the line's top) and "word" his
+ * `one_word` (one orange #FF7A00 word at a time, mid frame), each in the cut's own font, sized to fit it; "line" is the
+ * look the kind's captions have today, a whole sung line a screen. His bounce is not drawn (his own finish does not
+ * draw it either).
+ */
+export const SONG_CAPTION_LOOKS = {
+  lit: { per: 3, size: 0.05, y: 0.665, caps: true, colour: "&H00FFFFFF", lit: "&H00E6FF&", outline: 7, shadow: 4 },
+  line: { per: Infinity, size: 0.034, y: 0.7, caps: false, colour: "&H00FFFFFF", lit: null, outline: 1.5, shadow: 2 },
+  word: { per: 1, size: 0.08, y: 0.46, caps: true, colour: "&H00007AFF", lit: null, outline: 8, shadow: 4 },
+};
+/** songCaptions: a line's last screen stays up at most this long after its last word starts, or until the next line. */
+export const SONG_CAPTION_HOLD_SEC = 1.4;
+/**
+ * COP-273 W2 cut, songEditing: light dips to black into the end card, as Luke's finish does: black comes in over
+ * `in` seconds from `lead` before the card, and goes out over `out` seconds from the card. His white flash at the turn
+ * is not drawn: his editor finds the turn with a model call, which no price holds yet.
+ */
+export const SONG_EDITING_LEVELS = { off: null, light: { lead: 0.35, in: 0.3, out: 0.35 } };
 /** addedCuts' `wholeLines`, the script line ids the worker marked, as finishingOf keeps them: none when there are none. */
 function wholeLinesOf(raw) {
   const ids = Array.isArray(raw) ? raw.filter((id) => typeof id === "string" && id !== "") : [];
@@ -565,10 +613,18 @@ export function finishingOf(manifest) {
     ...(f.fps30 === true ? { fps30: true } : {}),
     ...(f.lensSmudge === true ? { lensSmudge: true } : {}),
     ...(f.phonePass === true ? { phonePass: true } : {}),
-    // COP-356: the card as a headline at the top (headlineCards), a name only the worker writes from a run's sheet.
-    ...(on.cards && f.cardPlace === "top" ? { cardPlace: "top" } : {}),
+    // COP-356: the card as a headline at the top (headlineCards), a name only the worker writes from a run's sheet;
+    // COP-382: "top-film", the headline for the whole film.
+    ...(on.cards && (f.cardPlace === "top" || f.cardPlace === "top-film") ? { cardPlace: f.cardPlace } : {}),
     // COP-370: beside it, the take the board filmed with room above the head, by its number (headlineCards' band).
-    ...(on.cards && f.cardPlace === "top" && Number.isInteger(f.headRoom) && f.headRoom > 0 ? { headRoom: f.headRoom } : {}),
+    ...(on.cards && (f.cardPlace === "top" || f.cardPlace === "top-film") && Number.isInteger(f.headRoom) && f.headRoom > 0 ? { headRoom: f.headRoom } : {}),
+    // COP-382: a run's sheet's words over the last shot, which only the worker writes.
+    ...(endingWordsOf(f.endingWords) ? { endingWords: endingWordsOf(f.endingWords) } : {}),
+    // COP-273 W2 cut: a sung run's saved finish, names only the worker writes from the run's sheet. Each acts only on a
+    // song laid whole (songEndOf, songCaptionScreens, the dip into the end card).
+    ...(f.songEnd === true ? { songEnd: true } : {}),
+    ...(on.captions && nameIn(SONG_CAPTION_LOOKS, f.songCaptions) ? { songCaptions: f.songCaptions } : {}),
+    ...(nameIn(SONG_EDITING_LEVELS, f.songEditing) ? { songEditing: f.songEditing } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;
@@ -1207,6 +1263,35 @@ function alignTokens({ heardWords, heard, expected, matches }) {
 
 /** scriptTimes: sounds a speaker makes between words; one never stands in the place of a script word. */
 const FILLER_TOKENS = new Set(["um", "umm", "uhm", "uh", "uhh", "er", "erm", "ah", "hmm", "mm", "mhm"]);
+/**
+ * COP-382: the fillers Luke's finish takes out at his medium and hard levels (post3.py FILL), "like" with
+ * FILLER_LIKE_QUIET_SEC of quiet on both sides, and "you know" set off by a comma or that quiet (find_dead). Only a heard
+ * word the script does not have is ever one (sentenceGapCuts).
+ */
+const FILLER_WORDS = new Set(["um", "uh", "umm", "uhm", "erm", "er", "hmm"]);
+const FILLER_LIKE_QUIET_SEC = 0.15;
+/** Luke's word for comparing (post3.py norm): small letters, digits, % and the apostrophe. */
+const fillerNorm = (word) => String(word ?? "").toLowerCase().replace(/[‘’]/g, "'").replace(/[^a-z0-9%']/g, "");
+
+/** COP-382: of the heard words at `indexes` (the script has none of them), the ones that are fillers (FILLER_WORDS). */
+function fillerWords(words, indexes) {
+  const out = new Set();
+  const among = new Set(indexes);
+  const quietBefore = (i) => i === 0 || words[i].s - words[i - 1].e >= FILLER_LIKE_QUIET_SEC - 1e-9;
+  const quietAfter = (i) => i + 1 >= words.length || words[i + 1].s - words[i].e >= FILLER_LIKE_QUIET_SEC - 1e-9;
+  for (const i of indexes) {
+    const said = fillerNorm(words[i].w);
+    if (FILLER_WORDS.has(said)) out.add(i);
+    else if (said === "like" && i > 0 && i + 1 < words.length && quietBefore(i) && quietAfter(i)) out.add(i);
+    else if (said === "you" && among.has(i + 1) && fillerNorm(words[i + 1].w) === "know" &&
+      (/,$/.test(String(words[i + 1].w)) || quietAfter(i + 1)) && (i === 0 || /,$/.test(String(words[i - 1].w)) || quietBefore(i))) {
+      out.add(i);
+      out.add(i + 1);
+    }
+  }
+  return out;
+}
+
 /** scriptTimes: a take with fewer of its script's tokens heard as written than this share is not the script misheard. */
 const MIN_HEARD_SHARE = 0.5;
 
@@ -1338,6 +1423,8 @@ const SOUND_OVER_FLOOR_DB = 25;
 const PAUSE_EDGE_BRIDGE_SEC = 0.1;
 /** #4803 (a number of ours, for Daniel): a run past such a dip is the word's when it comes within this of the word's loudest. */
 const PAUSE_EDGE_WORD_DB = 12;
+/** COP-382: how much of a filler's own sound a cut that takes it out must take (takeOut in sentenceGapCuts). */
+const FILLER_COVER = 2 / 3;
 const FAINT_SOUND_DB = -45;
 /** The directions that ask for a pause (scout clip-qc.ts PAUSE_DIRECTION, NO_PAUSE_DIRECTION, lineWrittenPause). */
 const PAUSE_DIRECTION =
@@ -1451,6 +1538,63 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
       cuts.push(split !== null && m === merged.length - 1 ? { ...cut, atLine: split } : cut);
     });
   };
+  // COP-382: at Luke's medium and hard levels the heard fillers the script does not have come out, and at hard the first
+  // copy of a false start too (post_v2.py FILLER; post3.py find_dead): each with the air around it cut to the level.
+  const fillersOut = jump === PAUSE_TRIMS.medium || jump === PAUSE_TRIMS.hard;
+  const taken = new Set();
+  // As the plain pause cut (#4803), the span starts no earlier than the word before's heard end and ends no later than the
+  // word after's heard start (heardEdge), so neither neighbour loses any of itself. Inside those, a word list times an um
+  // loosely (Scribe once listed one 40 ms long inside 220 ms of its sound), so with the take's loudness the span is the
+  // filler's own sound, out to the quiet each side; where that runs on into the next word's heard start, the cut stops there.
+  // A span held in by a neighbour that way can be a frame or two of an um whose sound runs on into the word (a picture jump
+  // inside a still-heard um), so it is cut only when it takes at least FILLER_COVER (two thirds) of the filler's own sound:
+  // the run of sound it sits in, out to the quiet each side, or to a neighbour's listed edge where the sound runs on into it.
+  // The same holds for a false start's first copy.
+  const takeOut = (earlier, first, last, later, what) => {
+    const wordEnd = !earlier ? 0 : level ? heardEdge(levels, earlier.e, 1, first.s, peakDbOf(levels, earlier)) : earlier.e;
+    const wordStart = level ? heardEdge(levels, later.s, -1, last.e, peakDbOf(levels, later)) : later.s;
+    const from = levels ? soundRunEdge(levels, first.s, -1, wordEnd) : first.s;
+    const to = levels ? soundRunEdge(levels, last.e, 1, wordStart) : last.e;
+    const s = earlier ? Math.max(ceilFrame(wordEnd), Math.min(ceilFrame(wordEnd + jump.keepAfter), floorFrame(from))) : floorFrame(from);
+    const e = to >= wordStart - 1e-6 ? floorFrame(wordStart) : Math.min(floorFrame(wordStart), Math.max(floorFrame(wordStart - jump.keepBefore), ceilFrame(to)));
+    if (!(e > s + 1e-6)) return false;
+    if (levels) {
+      const ownFrom = soundRunEdge(levels, first.s, -1, earlier?.e ?? 0);
+      const ownTo = soundRunEdge(levels, last.e, 1, later.s);
+      const own = ownTo - ownFrom;
+      if (own > 1e-6 && Math.min(e, ownTo) - Math.max(s, ownFrom) < own * FILLER_COVER - 1e-6) return false;
+    }
+    const gap = later.s - (earlier?.e ?? first.s);
+    cuts.push({ s, e, after: earlier?.w ?? "", gap, kept: gap - (e - s), sound: false, ...what });
+    return true;
+  };
+  // At hard, Luke's false starts, read on the heard words: a run of one to five said twice in a row, never across a full
+  // stop, one word only when a comma follows it, and never a doubling the script writes itself ("very, very"), read in the
+  // aligner's own tokens (spokenTokens, then joinSplitWords against the script's: a digit is its number words, a hyphenated
+  // word is one token its heard halves join into), so "win-win" heard "win, win" and "5 5 5" heard "five, five five" are
+  // the script's.
+  if (jump === PAUSE_TRIMS.hard) {
+    const said = (words ?? []).map((w) => fillerNorm(w.w));
+    const scriptSide = spokenTokens(written);
+    const script = ` ${scriptSide.tokens.join(" ")} `;
+    const doubledOf = (from, to) => {
+      const run = (words ?? []).slice(from, to).map((w) => w.w);
+      return joinSplitWords(spokenTokens([...run, ...run]), scriptSide.tokens).tokens;
+    };
+    for (let i = 0; i < said.length; ) {
+      const size = [5, 4, 3, 2, 1].find((n) => {
+        if (i + 2 * n > said.length || said.slice(i, i + n).join(" ") !== said.slice(i + n, i + 2 * n).join(" ")) return false;
+        const end = String(words[i + n - 1].w);
+        if (/[.?!]["'”’)\]]*$/.test(end) || (n === 1 && !/,["'”’)\]]*$/.test(end))) return false;
+        const doubled = doubledOf(i, i + n);
+        return said.slice(i, i + n).every(Boolean) && doubled.length > 0 && !script.includes(` ${doubled.join(" ")} `);
+      });
+      if (size && takeOut(words[i - 1], words[i], words[i + size - 1], words[i + size], { start: words.slice(i, i + size).map((w) => w.w).join(" "), taken: words.slice(i, i + size) })) {
+        for (let k = i; k < i + size; k++) taken.add(k);
+        i += size;
+      } else i += 1;
+    }
+  }
   for (let t = 0; t + 1 < heardWordOf.length; t++) {
     const to = heardWordOf[t + 1];
     if (heardWordOf[t] === to) continue;
@@ -1465,7 +1609,20 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
       if (!PAUSE_LEVELS.has(jump) || keptWhole) continue;
       const from = heardTokens.lastSourceIndex[heardTokenOf[t]];
       const chain = [from, ...spoken.filter((w) => w > from && w < to), to];
+      // COP-382: at medium and hard, a run of fillers among them goes, from the air kept after the word before it to the
+      // air kept before the word after it; the pauses that touch no filler are cut at the level as before.
+      const filler = fillersOut ? fillerWords(words, chain.slice(1, -1)) : new Set();
       for (let k = 0; k + 1 < chain.length; k++) {
+        if (taken.has(chain[k]) || taken.has(chain[k + 1])) continue;
+        if (filler.has(chain[k + 1])) {
+          let j = k + 1;
+          while (filler.has(chain[j + 1])) j++;
+          const run = chain.slice(k + 1, j + 1);
+          if (!run.some((w) => taken.has(w)) && takeOut(words[chain[k]], words[run[0]], words[run.at(-1)], words[chain[j + 1]], { filler: run.map((w) => words[w].w).join(" "), taken: run.map((w) => words[w]) })) {
+            k = j;
+            continue;
+          }
+        }
         cutPause(words[chain[k]], words[chain[k + 1]], { sentenceBreak: false, newLine: false, nextLine: null });
       }
       continue;
@@ -1476,7 +1633,18 @@ export function sentenceGapCuts(words, lines, levels = null, lineGap = null, jum
     if (keptWhole) continue;
     cutPause(earlier, later, { sentenceBreak, newLine, nextLine: b.li });
   }
-  return cuts;
+  // COP-382: a false start's span can take in the pauses around its words; overlapping spans are one cut, and say both.
+  if (!cuts.some((c) => c.filler || c.start)) return cuts;
+  const merged = [];
+  for (const cut of [...cuts].sort((x, y) => x.s - y.s)) {
+    const prev = merged.at(-1);
+    if (prev && cut.s <= prev.e + 1e-6) {
+      Object.assign(prev, { e: Math.max(prev.e, cut.e), ...(cut.filler ? { filler: cut.filler } : {}), ...(cut.start ? { start: cut.start } : {}), ...(cut.atLine !== undefined ? { atLine: cut.atLine } : {}),
+        ...(cut.taken ? { taken: [...(prev.taken ?? []), ...cut.taken] } : {}) });
+      prev.kept = prev.gap - (prev.e - prev.s);
+    } else merged.push({ ...cut });
+  }
+  return merged;
 }
 
 /**
@@ -1506,6 +1674,20 @@ function soundBetween(levels, fromSec, toSec) {
     resumed = settled;
   }
   return resumed < 0 ? null : { s: quiet * windowSec, e: resumed * windowSec };
+}
+
+/**
+ * COP-382: from `from` in the take (`dir` 1 forward, -1 back), the edge of the run of sound windows (SOUND_DB or over) it
+ * sits in, where the quiet starts; `bound` when the sound runs on to it.
+ */
+function soundRunEdge(levels, from, dir, bound) {
+  const { db, windowSec } = levels;
+  for (let i = dir > 0 ? Math.floor(from / windowSec + 1e-9) : Math.ceil(from / windowSec - 1e-9) - 1; i >= 0 && i < db.length; i += dir) {
+    const t = dir > 0 ? i * windowSec : (i + 1) * windowSec;
+    if (dir > 0 ? t >= bound - 1e-9 : t <= bound + 1e-9) return bound;
+    if (db[i] < SOUND_DB) return t;
+  }
+  return bound;
 }
 
 /**
@@ -1776,7 +1958,10 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
     // cutPace: where the take is split, in its time once the gaps are out.
     const splits = cuts.filter((c) => c.atLine !== undefined).map((c) => ({ at: c.s - removedBefore(c.s), line: c.atLine }));
     if (splits.length > 0) seg.splits = splits;
-    seg.words = seg.words.map((w) => ({ ...w, s: w.s - removedBefore(w.s), e: w.e - removedBefore(w.s) }));
+    // COP-382: a word taken out (a filler, a false start's first copy) leaves the take's words with its sound: the very
+    // words its cut took (`taken`), never read off where its listed middle falls, which a cut can miss by a frame.
+    const takenOut = new Set(cuts.flatMap((c) => c.taken ?? []));
+    seg.words = seg.words.filter((w) => !takenOut.has(w)).map((w) => ({ ...w, s: w.s - removedBefore(w.s), e: w.e - removedBefore(w.s) }));
     seg.seconds -= removed;
     seg.clipSeconds -= removed;
     seg.note = withHow(
@@ -1784,9 +1969,13 @@ function tightenSentenceGaps(spine, reactionCues, scriptLines, readLevels, lineG
       [
         ...new Set(
           cuts.map((c) =>
-            c.sound
-              ? `sound after "${c.after}" cut, pause ${c.gap.toFixed(2)}s -> ${c.kept.toFixed(2)}s`
-              : `pause after "${c.after}" tightened ${c.gap.toFixed(2)}s -> ${c.kept.toFixed(2)}s`,
+            c.start
+              ? `false start "${c.start}" cut, said again after it`
+              : c.filler
+                ? `"${c.filler}" cut after "${c.after}", ${(c.e - c.s).toFixed(2)}s out`
+                : c.sound
+                  ? `sound after "${c.after}" cut, pause ${c.gap.toFixed(2)}s -> ${c.kept.toFixed(2)}s`
+                  : `pause after "${c.after}" tightened ${c.gap.toFixed(2)}s -> ${c.kept.toFixed(2)}s`,
           ),
         ),
       ],
@@ -2686,7 +2875,9 @@ export function pauseJoinTimes(spine, speed = 1) {
  */
 function framedPicture(head, i, seg, own) {
   const zoom = alternateZoom(seg);
-  const other = `scale=${even(WIDTH * zoom)}:${even(HEIGHT * zoom)},crop=${WIDTH}:${HEIGHT}:(iw-ow)/2:(ih-oh)*${ADDED_CUT.top},setsar=1`;
+  const other = seg.zoomTop
+    ? zoomedAtTop(zoom)
+    : `scale=${even(WIDTH * zoom)}:${even(HEIGHT * zoom)},crop=${WIDTH}:${HEIGHT}:(iw-ow)/2:(ih-oh)*${ADDED_CUT.top},setsar=1`;
   // A take with no change of its own that starts in its other framing (framingAtJoins) plays in it whole.
   if (seg.framing.length === 0) return [`${head},${other}[v${i}]`];
   const first = seg.otherFirst ? 1 : 0;
@@ -2943,6 +3134,33 @@ export function fitWholeVoice(spine, whole) {
     .map((seg) => ({ n: seg.sceneIndex, reason: `scene ${seg.sceneIndex}: no room left between two lines of the voice` }));
   for (let k = spine.length - 1; k >= 0; k--) if (gone.has(spine[k])) spine.splice(k, 1);
   return { startSec, dropped, ...(whole.measured ? { intervals, problems } : {}) };
+}
+
+/**
+ * COP-273 W2 cut, songEnd: where Luke's end cuts the song laid whole, before fitWholeVoice lays the spine on it. The
+ * last sung word is the latest word end of the scenes with a stretch of the song (each scene's words on its own
+ * stretch, as the song step heard them); the song then runs SONG_END_AFTER_SEC more, or to its own end if that is
+ * sooner. Null when no scene on the song has a word: the song is laid as it is.
+ *
+ * W2 cut fix (M2): null too when the scene laid LAST on the song has no word time (the listen missed its line, and the
+ * song step placed it in the tail): the song keeps its own end and the card the house rule, with one note in `notes`.
+ */
+export function songEndOf(spine, whole, notes = null) {
+  const last = spine.findLast((seg) => whole.starts.has(seg.sceneIndex));
+  if (last && !(last.words ?? []).some((w) => Number.isFinite(w.e))) {
+    notes?.push(`song-end: scene ${last.sceneIndex}, the last on the song, has no word times, so the song keeps its own end and the end card goes as before`);
+    return null;
+  }
+  const ends = spine.flatMap((seg) =>
+    whole.starts.has(seg.sceneIndex) && seg.words?.length
+      ? [whole.starts.get(seg.sceneIndex) + Math.max(...seg.words.map((w) => w.e).filter(Number.isFinite))]
+      : []).filter(Number.isFinite);
+  if (ends.length === 0) return null;
+  const lastSungSec = Math.max(...ends);
+  const seconds = Math.min(whole.seconds, lastSungSec + SONG_END_AFTER_SEC);
+  // W2 end order: a song the worker already ended this way (to the ms) keeps its own end.
+  if (whole.seconds - seconds < SONG_END_SAME_SEC) return { lastSungSec, seconds: whole.seconds, cutBySec: 0 };
+  return { lastSungSec, seconds, cutBySec: Math.max(0, whole.seconds - seconds) };
 }
 
 /**
@@ -4075,6 +4293,217 @@ export function buildTimeline(args) {
   return timeline;
 }
 
+/**
+ * COP-273 P4f cut: a run that filmed one video call for one to three sung lines gives every scene the call covers the
+ * call's one clip (the manifest's `songCall`). The cut plays each call's WHOLE clip as one piece, sped up or slowed
+ * down to last exactly the call's stretch of the song laid whole, with hard cuts between calls (Luke's guide 4.7). The
+ * pull says it asks for this cut (`songCallCut`); a cut script that does not fit the clips never sees that marker, and
+ * this script refuses a call run pulled without it. The server and the worker hold the same rule in
+ * video/lib/songCallFit.ts (a test keeps the two the same).
+ */
+export const SONG_CALL_CUT = "fit";
+/**
+ * The lead's ruling of Nov 15: no speed limit, as Luke's chosen cut (song_combo.py `cut`). A call played slower than
+ * this, or faster than SONG_CALL_NOTE_FASTER, gets a note for a person to look at; it is never refused or trimmed.
+ */
+export const SONG_CALL_NOTE_SLOWER = 0.75;
+export const SONG_CALL_NOTE_FASTER = 2;
+
+/**
+ * The fit of a clip of `clipSec` to a call's `callSec` of the song: `speed`, the clip's seconds played in a second of
+ * the song (over 1 sped up). Fitted from its probed length, the whole clip is shown; from the seconds it was ordered at
+ * (fix round 2, S3), a longer clip loses its end and a shorter one holds its last frame. Null only when a length is not
+ * there to divide.
+ */
+export function songCallFit(clipSec, callSec) {
+  if (!(clipSec > 0) || !(callSec > 0)) return null;
+  return { speed: clipSec / callSec };
+}
+
+const scenesWords = (scenes) => (scenes.length === 1
+  ? `scene ${scenes[0]}` : `scenes ${scenes.slice(0, -1).join(", ")} and ${scenes.at(-1)}`);
+
+/** Why a call run is not cut: a call's clip has no length to read (an empty or broken file), so it cannot be fitted. */
+export function songCallUnreadSentence(scenes) {
+  return `The clip of ${scenesWords(scenes)} has no length to read, so this video was not cut. Pull it again.`;
+}
+
+/** The note for a call played slower than SONG_CALL_NOTE_SLOWER or faster than SONG_CALL_NOTE_FASTER, or null. */
+export function songCallSpeedNote(scenes, speed) {
+  if (speed >= SONG_CALL_NOTE_SLOWER && speed <= SONG_CALL_NOTE_FASTER) return null;
+  // Fix round 2 (S7): two places, so 2.04 never reads as "2.0", inside the range.
+  return `song-call-speed: the clip of ${scenesWords(scenes)} plays at ${speed.toFixed(2)} times its filmed speed`;
+}
+
+/**
+ * P4f cut fix 2 (S3, the lead's ruling): a call is fitted from the seconds its clip was ORDERED at, as Luke's chosen
+ * cut divides them by the call's stretch (the prompt's shot times were scaled by the same number). A clip whose real
+ * length is further than this from its order gets one note.
+ */
+export const SONG_CALL_ORDER_GAP_SEC = 0.5;
+
+/**
+ * W2 cut fix (M1): what a clip played from its start at `speed` for `callSec` of the song leaves: its last seconds not
+ * shown, or its last frame held.
+ */
+export function songCallShownTail(probedSec, callSec, speed) {
+  const shownSec = callSec * speed;
+  return probedSec >= shownSec
+    ? `its last ${(probedSec - shownSec).toFixed(2)}s not shown`
+    : `its last frame held ${(callSec - probedSec / speed).toFixed(2)}s`;
+}
+
+/**
+ * The note for a clip more than SONG_CALL_ORDER_GAP_SEC off the seconds it was ordered at, or null. `cutSec` (W2 cut
+ * fix, M1): the seconds of the call's stretch songEnd cut off; the clip is still fitted at its order's speed.
+ */
+export function songCallLengthNote(scenes, probedSec, orderedSec, speed, cutSec = 0) {
+  if (!(probedSec > 0) || !(orderedSec > 0) || Math.abs(probedSec - orderedSec) <= SONG_CALL_ORDER_GAP_SEC) return null;
+  const tail = cutSec > 0 ? songCallShownTail(probedSec, orderedSec / speed - cutSec, speed)
+    : probedSec > orderedSec
+    ? `its last ${(probedSec - orderedSec).toFixed(2)}s not shown`
+    : `its last frame held ${((orderedSec - probedSec) / speed).toFixed(2)}s`;
+  return `song-call-length: the clip of ${scenesWords(scenes)} is ${probedSec.toFixed(2)}s long, ordered at ${orderedSec.toFixed(2)}s; the cut fits the ordered ${orderedSec.toFixed(2)}s, ${tail}`;
+}
+
+/** Why a call run is not cut when `--skip` names some of a call's scenes and not all of them. */
+export function songCallPartSkippedSentence(scenes) {
+  return `${scenesWords(scenes).replace(/^s/, "S")} share one clip, so they are cut together or left out together: name all of them in --skip, or none.`;
+}
+
+/**
+ * P4f cut fix 2 (M1): why a call run is not cut when only some of a call's scenes hold its clip in the cut (a scene's
+ * copy did not land, and --still-fill held its keyframe instead): the whole clip fitted to the part left would play
+ * one line's picture under another. `pullAgain`: a scene left out has no copy in the folder, so a new pull mends it.
+ */
+export function songCallPartMissingSentence(scenes, absent, pullAgain, runId) {
+  const head = `${scenesWords(scenes).replace(/^s/, "S")} share one clip, and ${scenesWords(absent)}`;
+  const one = absent.length === 1;
+  return pullAgain
+    ? `${head} ${one ? "has" : "have"} no copy of it in this folder, so the clip cannot be fitted to its lines and this video was not cut. Pull it again: exodus video pull ${runId}`
+    : `${head} ${one ? "is" : "are"} not in the cut, so the clip cannot be fitted to its lines and this video was not cut.`;
+}
+
+/**
+ * P4f cut fix 2 (M1): refuses when a call is only partly on the spine as its clip. A call wholly off it (all skipped)
+ * is left out together, as --skip asks.
+ */
+function refusePartCalls(songCalls, spine, manifest, exists) {
+  const listed = new Map((manifest?.scenes ?? []).map((scene) => [scene.sceneIndex, scene]));
+  for (const call of songCalls) {
+    const on = new Set(spine.filter((seg) => seg.source === "clip" && seg.songCallOf === call.first).map((seg) => seg.sceneIndex));
+    if (on.size === 0 || on.size === call.scenes.length) continue;
+    const absent = call.scenes.filter((n) => !on.has(n));
+    const pullAgain = absent.some((n) => !exists(listed.get(n)?.clip));
+    throw new FirstCutError(1, songCallPartMissingSentence(call.scenes, absent, pullAgain, manifest.runId ?? "<runId>"));
+  }
+}
+
+/** COP-273 P4f: why a run of video calls is not cut without its song laid whole. */
+export const SONG_CALL_NO_WHOLE_SONG =
+  "This video films one to three sung lines in each clip, and its song is not in this folder to lay under them whole, so it was not cut. Pull it again: exodus video pull <runId>";
+
+/** P4f cut: why a call run pulled by an exodus that does not ask for the fitted cut is not cut (version skew). */
+export const SONG_CALL_OLD_PULL =
+  "This folder was pulled by an older exodus, which does not say that this video's clips are fitted to their lines, so it was not cut. Update exodus, then pull it again: exodus video pull <runId>";
+
+/**
+ * P4f cut fix 2 (S1): a member's own pull of a call run (its scenes keyed `index`; exodus video.ts planCustomerPull)
+ * holds each scene's slice of the song and no song laid whole, so its clips cannot be fitted here. The app cuts every
+ * such video itself (convex lib/video/autoCut.ts isCustomerVideoRun); the folder is for an editor.
+ */
+export const SONG_CALL_MEMBER_FOLDER =
+  "The app cuts this video itself, each clip fitted to its lines over the song laid whole, and this folder holds the pieces for an editor, not the whole song in one file, so it was not cut here. See where the app's cut is: exodus video status <runId>";
+
+/** P4f cut: why a call run is not cut on the measured map, which never retimes a picture. */
+export const SONG_CALL_NO_MEASURED_MAP =
+  "This video's clips are fitted to their lines by speed, which the measured cut never does, so it was not cut.";
+
+/**
+ * The calls of a pulled call run, in scene order: each call's first scene, its scenes, and its clip's file (every
+ * scene's file is a copy of the call's one clip). Scenes with no `songCall` are no call's.
+ */
+function songCallsOfManifest(manifest) {
+  const calls = new Map();
+  for (const scene of manifest?.scenes ?? []) {
+    const first = scene?.songCall?.sceneIndex;
+    if (!Number.isInteger(first)) continue;
+    const call = calls.get(first) ?? { first, scenes: [] };
+    call.scenes.push(scene.sceneIndex);
+    calls.set(first, call);
+  }
+  return [...calls.values()].map((c) => ({ ...c, scenes: c.scenes.sort((a, b) => a - b) })).sort((a, b) => a.scenes[0] - b.scenes[0]);
+}
+
+/**
+ * Fits each call of the spine (P4f cut): its scenes keep their own stretches of the song laid whole (for the words,
+ * the captions and the reports), and the call's first scene carries the one piece the render plays: the call's whole
+ * clip, at `speed`, for the frames its scenes take together, whatever the speed; a call under 0.75x or over 2x gets a
+ * note (the cut's notes and the scene's), never a refusal.
+ *
+ * W2 cut fix (M1): `songCutSec` is what songEnd cut off the song laid whole (on the frame clock). The call that holds
+ * the last scene on the song was ordered for the longer stretch, so it is fitted at the speed of that order (its
+ * stretch plus `songCutSec`): every shot inside it stays on its line, and its last part is not shown.
+ */
+function fitSongCalls(spine, notes, songCutSec = 0) {
+  const groups = new Map();
+  for (const seg of spine) {
+    if (!seg.songCallOf) continue;
+    const group = groups.get(seg.songCallOf) ?? [];
+    group.push(seg);
+    groups.set(seg.songCallOf, group);
+  }
+  const lastOnSong = songCutSec > 0 ? spine.findLast((seg) => seg.wholeVoice) : null;
+  for (const group of groups.values()) {
+    const scenes = group.map((seg) => seg.sceneIndex);
+    const frames = group.reduce((n, seg) => n + Math.round(seg.seconds * FPS), 0);
+    const callSec = frames / FPS;
+    const cutSec = lastOnSong && group.includes(lastOnSong) ? songCutSec : 0;
+    // Fix round 2 (S3): the seconds the clip was ordered at, when the pull hands them on; else its probed length.
+    const probedSec = group[0].clipSeconds;
+    const orderedSec = probedSec > 0 ? group[0].songCallOrderedSec ?? null : null;
+    const fit = songCallFit(orderedSec ?? probedSec, cutSec > 0 ? callSec + cutSec : callSec);
+    if (!fit) throw new FirstCutError(1, songCallUnreadSentence(scenes));
+    // A clip shorter than its order ends before its stretch does: its last frame holds for the rest, so the piece is
+    // still exactly its frames and nothing after it moves. The last call's cut-off part needs no frame held.
+    const padSec = orderedSec ? Math.max(0, (orderedSec - probedSec) / fit.speed - cutSec) : 0;
+    // Fix round 2 (S7): each scene's place in the call's stretch (`atSec`) and the clip the render reads (`clip`), so the
+    // reports read a later scene at its real place in the clip and at the call's speed, not from 0 at 1x.
+    let atSec = 0;
+    group.forEach((seg, k) => {
+      seg.holdSec = 0;
+      // Fix round 2 (found by the real render): the scene's own fit before the call's (a trim, a held last frame) is
+      // not what plays: the call plays its whole clip.
+      seg.note = seg.note.replace(/clip trimmed [\d.]+s -> [\d.]+s(, )?/, "").replace(/last frame held [\d.]+s(, )?/, "").replace(/ \(\)$/, "");
+      seg.callFit = { speed: fit.speed, scenes, atSec, clip: group[0].file, ...(k === 0 ? { frames, ...(padSec > 0 ? { padSec } : {}) } : {}) };
+      atSec += seg.seconds;
+    });
+    const note = songCallSpeedNote(scenes, fit.speed);
+    if (note) notes.push(note);
+    const lengthNote = orderedSec ? songCallLengthNote(scenes, probedSec, orderedSec, fit.speed, cutSec) : null;
+    if (lengthNote) notes.push(lengthNote);
+    // W2 cut fix (M1): the last call at the speed of its order shows only its stretch's worth of its clip.
+    const endTail = cutSec > 0 ? songCallShownTail(probedSec, callSec, fit.speed) : null;
+    if (endTail) notes.push(`song-end: the clip of ${scenesWords(scenes)} keeps the speed of its order, ${roundMs(fit.speed)}x; ${endTail.replace(/ not shown$/, " are not shown").replace(/ held /, " is held ")}`);
+    // Fix round 3 (review R1): fitted from its order, a longer clip loses its end and a shorter one holds its last
+    // frame; the line says which, with the seconds, under the half second that makes a note as well.
+    const gapTail = cutSec > 0 ? (lengthNote ? null : endTail) : !orderedSec || lengthNote ? null
+      : probedSec > orderedSec ? `its last ${(probedSec - orderedSec).toFixed(2)}s not shown`
+      : `its last frame held ${((orderedSec - probedSec) / fit.speed).toFixed(2)}s`;
+    group[0].note = withHow(group[0].note, [
+      cutSec > 0
+        ? `the clip of ${scenesWords(scenes)} played from its start at ${roundMs(fit.speed)}x, the speed of its ${(orderedSec ?? probedSec).toFixed(2)}s on the ${(callSec + cutSec).toFixed(2)}s it was ordered for; the song's end was cut, so the film keeps ${callSec.toFixed(2)}s of it`
+        : orderedSec
+        ? `the clip of ${scenesWords(scenes)} played from its start at ${roundMs(fit.speed)}x, its ordered ${orderedSec.toFixed(2)}s fitted to its ${callSec.toFixed(2)}s of the song`
+        : `the clip of ${scenesWords(scenes)} played whole at ${roundMs(fit.speed)}x to last its ${callSec.toFixed(2)}s of the song`,
+      ...(gapTail && !/ 0\.00s/.test(gapTail) ? [gapTail] : []),
+      ...(note ? [note.replace(/^song-call-speed: the clip of .+? plays/, "it plays")] : []),
+      ...(lengthNote ? [lengthNote.replace(/^song-call-length: the clip of .+? is/, "it is")] : []),
+    ]);
+    for (const seg of group.slice(1)) seg.note = withHow(seg.note, [`inside the clip of ${scenesWords(scenes)}, played as one piece`]);
+  }
+}
+
 function assembleTimeline({
   manifest, storyboard, skip, probe, exists, readWords, readLevels = () => null, stillFill = false, finish = null,
   wholeVoice = null, sourceAd = null, measure = null, readJumps = () => [],
@@ -4106,6 +4535,18 @@ function assembleTimeline({
   // Reuse the pulled per-scene slices of that same approved take, placing each
   // at its picture start and leaving the remaining picture air to the music bed.
   const reservedNarration = Boolean(wholeVoice && selectedJobs && manifest?.templateMotion?.narratedShotList === true);
+  // COP-273 P4f cut: each call's whole clip is fitted to its stretch of the song laid whole, and played as one piece.
+  const songCalls = songCallsOfManifest(manifest);
+  if (songCalls.length) {
+    const runId = manifest.runId ?? "<runId>";
+    const memberFolder = manifest.scenes.some((scene) => scene?.songCall && !Number.isInteger(scene.sceneIndex) && Number.isInteger(scene.index));
+    if (memberFolder) throw new FirstCutError(1, SONG_CALL_MEMBER_FOLDER.replace("<runId>", runId));
+    if (manifest.songCallCut !== SONG_CALL_CUT) throw new FirstCutError(1, SONG_CALL_OLD_PULL.replace("<runId>", runId));
+    if (!wholeVoice || reservedNarration) throw new FirstCutError(1, SONG_CALL_NO_WHOLE_SONG.replace("<runId>", runId));
+    if (measure) throw new FirstCutError(1, SONG_CALL_NO_MEASURED_MAP);
+    const part = songCalls.find((call) => call.scenes.some((n) => skip.has(n)) && !call.scenes.every((n) => skip.has(n)));
+    if (part) throw new FirstCutError(1, songCallPartSkippedSentence(part.scenes));
+  }
   const nativeBudget = !measure && manifest?.templateMotion?.enabled === true ? manifest.planningBudget : null;
   const plans = scenePlans(storyboard, measure || selectedJobs ? manifest.planningBudget : nativeBudget, selectedJobs, { template });
   const counts = lineWordCounts(storyboard);
@@ -4234,6 +4675,8 @@ function assembleTimeline({
         fitFinding?.code === "template-audio-source-reservation";
       const base = {
         sceneIndex: n, source: "clip", file: scene.clip, clipSeconds: pictureSec, inSec: 0,
+        ...(Number.isInteger(scene.songCall?.sceneIndex) ? { songCallOf: scene.songCall.sceneIndex } : {}),
+        ...(scene.songCall?.orderedSec > 0 ? { songCallOrderedSec: scene.songCall.orderedSec } : {}),
         ...(m ? { map: m } : {}),
         ...(scene.actionEvidence ? { actionEvidence: scene.actionEvidence } : {}),
         lineIds: plan.lineIds, firstSpeaker: plan.firstSpeaker, lastSpeaker: plan.lastSpeaker,
@@ -4345,7 +4788,11 @@ function assembleTimeline({
   const laid = wholeClock
     ? { ...wholeVoice, declaredSec: wholeVoice.seconds, seconds: wholeClock.audio ? wholeClock.audio.decodedSec : wholeVoice.seconds, measured: true }
     : wholeVoice;
-  const whole = laid && !reservedNarration ? fitWholeVoice(spine, laid) : null;
+  // COP-273 W2 cut, songEnd: the song laid whole ends SONG_END_AFTER_SEC after its last sung word. Never on the
+  // measured map, whose song keeps its own decoded end.
+  const songEnd = finish?.songEnd === true && laid && !laid.measured && !reservedNarration ? songEndOf(spine, laid, notes) : null;
+  if (finish?.songEnd === true && laid?.measured) notes.push(songEndMeasuredNote(finish.songEditing));
+  const whole = laid && !reservedNarration ? fitWholeVoice(spine, songEnd ? { ...laid, seconds: songEnd.seconds } : laid) : null;
   if (whole) dropped.push(...whole.dropped);
   if (whole && (manifest?.templateMotion?.narratedShotList === true ||
     (manifest?.templateMotion?.enabled === true && laid.measured))) {
@@ -4468,6 +4915,10 @@ function assembleTimeline({
         : placeAddedCuts(spine, scriptLines, ADDED_CUTS[finish.addedCuts], finish.wholeLines, readJumps,
           finish.cards && finish.cardPlace === "top" ? HEADLINE_MAX_SEC * (finish.pacePass ? finish.paceSpeed ?? PACE_PASS.speed : 1) : 0));
   }
+  // COP-382: a headline for the whole film takes every step closer from the top edge (zoomTop), so the head stays below it.
+  if (finish?.cards && finish.cardPlace === "top-film") {
+    for (const seg of spine) seg.zoomTop = true;
+  }
   // A copied shot no voice runs in lasts its shot's length, its clip trimmed or its last frame held.
   const shotOf = (n) => plans.get(n)?.sourceShot ?? null;
   const shotSec = (n) => {
@@ -4549,6 +5000,11 @@ function assembleTimeline({
     refusePictureHolds(short);
   }
   if (measure) snapToFrames(spine);
+  if (songCalls.length) {
+    refusePartCalls(songCalls, spine, manifest, exists);
+    // W2 cut fix (M1): what songEnd cut off the last scene's stretch, on the frame clock fitWholeVoice lays it on.
+    fitSongCalls(spine, notes, songEnd ? ceilFrame(laid.seconds) - ceilFrame(songEnd.seconds) : 0);
+  }
   let total = 0;
   for (const seg of spine) {
     seg.startSec = total;
@@ -4766,6 +5222,11 @@ function assembleTimeline({
     cutaways,
     notes,
     left: dropped.sort((a, b) => a.n - b.n).map((d) => d.reason),
+    // COP-273 W2 cut: where the last sung word ends and whether the song was cut short, on the cut's clock.
+    ...(whole && songEnd ? { songEnd: {
+      lastSungSec: roundMs(whole.startSec + songEnd.lastSungSec),
+      cutBySec: roundMs(songEnd.cutBySec),
+    } } : {}),
     ...(whole ? { wholeVoice: {
       file: wholeVoice.file, startSec: wholeStartSec, ...(wholeClock ? { clock: wholeClock } : {}),
       ...(manifest?.templateMotion?.enabled === true && manifest.templateMotion.narratedShotList !== true ? { songOnly: true } : {}),
@@ -4991,7 +5452,10 @@ export function speedUpSlowBroll(timeline, motionOf, clipSeconds) {
   const shots = [
     ...timeline.spine
       .filter((seg) => seg.source === "clip")
-      .map((seg) => ({ n: seg.sceneIndex, role: roleOf(seg), file: seg.file, from: seg.inSec ?? 0, sec: seg.seconds - (seg.holdSec ?? 0) })),
+      .map((seg) => (seg.callFit
+        // P4f cut fix 2 (S7): a call's scene is its stretch of the call's clip, at the call's speed.
+        ? { n: seg.sceneIndex, role: roleOf(seg), file: seg.file, from: seg.callFit.atSec * seg.callFit.speed, sec: seg.seconds * seg.callFit.speed }
+        : { n: seg.sceneIndex, role: roleOf(seg), file: seg.file, from: seg.inSec ?? 0, sec: seg.seconds - (seg.holdSec ?? 0) })),
     ...timeline.cutaways
       .filter((c) => c.source === "clip")
       .map((c) => ({ n: c.sceneIndex, role: "b-roll", file: c.file, from: 0, sec: c.seconds - cutawayLeadHold(c), cutaway: c })),
@@ -5137,12 +5601,26 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   const mapped = timeline.mapped === true;
 
   for (const seg of timeline.spine) {
+    // COP-273 P4f cut: a call's later scenes play inside the one piece its first scene carries.
+    if (seg.callFit && !seg.callFit.frames) continue;
     const i =
       seg.source === "clip"
         ? addInput("-i", resolve(seg.file))
         : addInput("-loop", "1", "-t", String(seg.seconds), "-i", resolve(seg.file));
     if (mapped) {
       pairs.push(mappedPiece(seg, i, { addInput, filters, tails, level, resolve }));
+      continue;
+    }
+    if (seg.callFit) {
+      // The call's whole clip from its start, at its speed, on exactly the frames its scenes take; the song laid
+      // whole is its only sound. The pad covers a frame lost to rounding, and (fix round 2, S3) a clip shorter than
+      // the seconds it was ordered at, whose last frame then holds to the end of its stretch.
+      const { speed, frames, padSec = 0 } = seg.callFit;
+      const pad = padSec > 0 ? Math.ceil(padSec) + 1 : 1;
+      filters.push(`${norm(`${i}:v`)},setpts=PTS-STARTPTS,${speedStep(speed.toFixed(6))},` +
+        `tpad=stop_mode=clone:stop_duration=${pad},trim=end_frame=${frames},setpts=PTS-STARTPTS[v${i}]`);
+      filters.push(`anullsrc=r=48000:cl=stereo,atrim=0:${sec(frames / FPS)}[a${i}]`);
+      pairs.push(`[v${i}][a${i}]`);
       continue;
     }
     const fit = [];
@@ -5184,7 +5662,9 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     }
     if (seg.holdSec > 0.01) fit.push(`tpad=stop_mode=clone:stop_duration=${sec(seg.holdSec)}`);
     // addedCuts (COP-355): a segment with framing changes is split by frame into pieces, every other one in its other framing.
-    const own = [...(seg.punchIn ? [PUNCH_IN] : []), ...(seg.paceZoom ? [PACE_ZOOM] : [])];
+    const own = seg.zoomTop
+      ? [...(seg.punchIn ? [zoomedAtTop(PUNCH_IN_SCALE)] : []), ...(seg.paceZoom ? [zoomedAtTop(PACE_PASS.zoom)] : [])]
+      : [...(seg.punchIn ? [PUNCH_IN] : []), ...(seg.paceZoom ? [PACE_ZOOM] : [])];
     // voiceOnly (COP-353): the voice-alone pass draws no picture.
     if (!voiceOnly) {
       if (seg.framing?.length > 0 || (seg.framing && seg.otherFirst)) filters.push(...framedPicture(`${norm(`${i}:v`)}${fit.length ? `,${fit.join(",")}` : ""}`, i, seg, own));
@@ -5254,9 +5734,13 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
           `asetpts=PTS-STARTPTS,${level}${delay > 0 ? `,adelay=delays=${delay}S:all=1` : ""}[whole]`,
       );
     } else {
+      // COP-273 W2 cut, songEnd: a song cut short of its own end fades over the film's last SONG_END_FADE_SEC.
+      const fadeOut = timeline.songEnd?.cutBySec > 0
+        ? `,afade=t=out:st=${Math.max(0, pictureSec - SONG_END_FADE_SEC).toFixed(6)}:d=${SONG_END_FADE_SEC}`
+        : "";
       filters.push(
         `[${k}:a]${stereo},${level},adelay=delays=${Math.round(timeline.wholeVoice.startSec * 1000)}:all=1,` +
-          `apad,atrim=end=${pictureSec.toFixed(6)}[whole]`,
+          `apad,atrim=end=${pictureSec.toFixed(6)}${fadeOut}[whole]`,
       );
     }
     filters.push("[spoken][whole]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[voice]");
@@ -5354,8 +5838,19 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     );
     filters.push(
       `[ecground][ecpic]overlay=x=${Math.round(box[0] * WIDTH)}:y=${Math.round(box[1] * HEIGHT)},` +
-        `format=yuva420p,fade=t=in:st=0:d=${END_CARD_FADE_SEC}:alpha=1,setpts=PTS-STARTPTS+${sec(e.in)}/TB[ecbody]`,
+        `format=yuva420p,fade=t=in:st=0:d=${e.fadeSec ?? END_CARD_FADE_SEC}:alpha=1,setpts=PTS-STARTPTS+${sec(e.in)}/TB[ecbody]`,
     );
+    // COP-273 W2 cut, light editing (songEndCardOf): the picture dips to black into the card, under it.
+    if (e.dip) {
+      const d = e.dip;
+      const length = roundMs(d.lead + d.out);
+      filters.push(
+        `color=c=black:s=${WIDTH}x${HEIGHT}:r=${FPS}:d=${length},format=yuva420p,fade=t=in:st=0:d=${d.in}:alpha=1,` +
+          `fade=t=out:st=${d.lead}:d=${d.out}:alpha=1,setpts=PTS-STARTPTS+${sec(d.from)}/TB[ecdip]`,
+      );
+      filters.push(`[${videoLabel}][ecdip]overlay=enable=between(t\\,${sec(d.from)}\\,${sec(d.from + length)}):eof_action=pass[ecdipped]`);
+      videoLabel = "ecdipped";
+    }
     filters.push(`[${videoLabel}][ecbody]overlay=enable=between(t\\,${sec(e.in)}\\,${sec(e.out)}):eof_action=pass[ecard]`);
     videoLabel = "ecard";
   }
@@ -5363,13 +5858,14 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   if (speed) {
     // COP-300: on the frames' own 1/24 clock, setpts rounds each faster time to a whole tick and `-r` then shows the
     // picture about 1.5 frames late; on a fine clock, `fps` puts each frame on the 24 fps tick nearest its true time.
-    filters.push(`[${videoLabel}]settb=1/${SPEED_TIME_BASE},setpts=PTS/${speed},fps=${FPS}:round=near[faster]`);
+    filters.push(`[${videoLabel}]${speedStep(speed)}[faster]`);
     videoLabel = "faster";
   }
   // COP-300: burned after the speed step, on the finished cut's own frames, so no speed step can move the captions
   // off the voice. The ASS file is timed on that clock (editAss `speed`).
   if (finish?.ass) {
-    filters.push(`[${videoLabel}]subtitles=filename=${finish.ass}[burned]`);
+    // COP-382: the fonts the cut carries (captionFontsDir), only when the file names one of them.
+    filters.push(`[${videoLabel}]subtitles=filename=${finish.ass}${finish.fontsDir ? `:fontsdir=${filterPath(finish.fontsDir)}` : ""}[burned]`);
     videoLabel = "burned";
   }
   // COP-357, fps30: the finished picture, words and all, at the delivered rate by repeated frames; the clock above is FPS.
@@ -5528,6 +6024,8 @@ export function finalSetupAdjacency(timeline, board, graphics = []) {
   const setupSegments = [];
   const sourceAt = (seg, local, isEnd) => {
     if (seg.source !== "clip" || seg.editorialHold || seg.holdSec > 0) return null;
+    // P4f cut fix 2 (S7): a call's scene sits at its place in the call's one clip, at the call's speed.
+    if (seg.callFit) return (seg.callFit.atSec + local) * seg.callFit.speed;
     if (!seg.map?.picture || !Number.isInteger(seg.map.slot)) return sourceTimeOf(seg, local, isEnd);
     const post = seg.map.slot + Math.round(local * FPS);
     let removed = 0;
@@ -5561,7 +6059,7 @@ export function finalSetupAdjacency(timeline, board, graphics = []) {
         : [{ from: span.from, to: start }, { from: end, to: span.to }].filter((piece) => piece.to > piece.from));
     }
     for (const span of visible) setupSegments.push({
-      sceneIndex: seg.sceneIndex, file: seg.file ?? null,
+      sceneIndex: seg.sceneIndex, file: seg.callFit?.clip ?? seg.file ?? null,
       setId: hasText(scene?.setId) ? scene.setId.trim() : null,
       anchorEditEpoch: hasText(scene?.anchorEditEpoch) ? scene.anchorEditEpoch.trim() : null,
       baseShotId: hasText(scene?.baseShotId) ? scene.baseShotId.trim() : null,
@@ -5877,6 +6375,41 @@ export const captionStartCs = (t) => Math.floor((Math.floor(Math.max(0, t) * FPS
 export const captionSeenSec = (cs) => Math.ceil((cs / 100) * FPS - 1e-6) / FPS;
 const assText = (s) => String(s).replace(/[{}\\]/g, "").replace(/\s*[\r\n]+\s*/g, " ").trim();
 
+/**
+ * COP-382: the fonts the cut carries, for the looks of Luke's lock (his own were Apple fonts with no server licence):
+ * Montserrat ExtraBold and Black and Anton, static TTFs from their upstreams, each under the SIL Open Font License 1.1,
+ * whose text sits beside them (fonts/*-OFL.txt). They sit in `fonts` beside this script, so the CLI's copy of the skill
+ * has them; the Trigger worker bundles this script, and scout/trigger.config.ts's additionalFiles copies the folder under
+ * the build root at the same path from the repo's root (its `..` dropped), where captionFontsDir finds it by walking up
+ * from the bundle, as scout's reaction-laugh.ts finds its asset. libass loads every font in the folder beside the
+ * image's own (the subtitles filter's `fontsdir`) and picks one by its family name, the style's Fontname.
+ */
+const FONTS_FOLDER = "fonts";
+const FONTS_FROM_ROOT = path.join("workspace", ".claude", "skills", "exodus-video", "scripts", FONTS_FOLDER);
+export const CAPTION_FONT_FILES = ["Montserrat-ExtraBold.ttf", "Montserrat-Black.ttf", "Anton-Regular.ttf"];
+
+/** COP-382: the folder that holds every one of CAPTION_FONT_FILES, beside this script or under a root above it, or null. */
+export function captionFontsDir(from = import.meta.url, cwd = process.cwd()) {
+  const holds = (dir) => CAPTION_FONT_FILES.every((file) => existsSync(path.join(dir, file)));
+  let dir = path.dirname(fileURLToPath(from));
+  if (holds(path.join(dir, FONTS_FOLDER))) return path.join(dir, FONTS_FOLDER);
+  for (;;) {
+    if (holds(path.join(dir, FONTS_FROM_ROOT))) return path.join(dir, FONTS_FROM_ROOT);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return holds(path.resolve(cwd, FONTS_FROM_ROOT)) ? path.resolve(cwd, FONTS_FROM_ROOT) : null;
+}
+
+/**
+ * COP-382: a path as a value of a filter's option inside a filter graph: escaped once for the option (its `:`, `'` and
+ * `\`) and once for the graph (`\`, `'`, `[`, `]`, `,` and `;`), as ffmpeg's filter docs ask, so a folder with any of
+ * them still names itself.
+ */
+export const filterPath = (value) =>
+  String(value).replace(/[\\':]/g, (c) => `\\${c}`).replace(/[\\'[\],;]/g, (c) => `\\${c}`);
+
 /** A caption screen never holds words across a pause longer than this, so a silent beat shows none. */
 export const CAPTION_BREAK_SEC = 0.8;
 
@@ -5988,6 +6521,87 @@ export function lineCaptionScreens(words, cap = null) {
 }
 
 /**
+ * COP-273 W2 cut, songCaptions: caption screens on the sung words, as Luke's finish lays them (his dev pack,
+ * lab/prepro_finish.py, read as text): each sung line on its own, `look.per` of its words a screen in order (the whole
+ * line for "line"), a screen up from its first word's start to the next screen's of the line; a line's last screen up
+ * SONG_CAPTION_HOLD_SEC after its last word starts (never before that word ends) and never past the next line's first
+ * word. Each screen keeps its words' own starts (`words`) for the lit word (songLitScreens). `words`: lineWords' rows.
+ */
+export function songCaptionScreens(words, look) {
+  const lines = [];
+  // COP-273 P10 finding 28: a look that shows or lights words apart takes them one at a time (songWordTurns).
+  for (const w of Number.isFinite(look.per) ? songWordTurns(words) : words) {
+    if (lines.length && lines.at(-1)[0].line === w.line) lines.at(-1).push(w);
+    else lines.push([w]);
+  }
+  const cased = (text) => (look.caps ? text.toUpperCase() : text);
+  const screens = [];
+  lines.forEach((ws, i) => {
+    const per = Number.isFinite(look.per) ? Math.max(1, look.per) : ws.length;
+    const nextLine = lines[i + 1]?.[0]?.start ?? Infinity;
+    for (let k = 0; k < ws.length; k += per) {
+      const chunk = ws.slice(k, k + per);
+      const last = chunk.at(-1);
+      const next = ws[k + per];
+      const e = next
+        ? next.start
+        : Math.min(nextLine - CAPTION_CLEAR_SEC, Math.max(last.start + SONG_CAPTION_HOLD_SEC, last.end + CAPTION_TAIL_SEC));
+      const tokens = chunk.map((w) => cased(assText(w.text)));
+      tokens[tokens.length - 1] = tokens.at(-1).replace(/[.,;:]+$/, "");
+      if (!(e > chunk[0].start)) continue;
+      screens.push({
+        text: tokens.join(" "),
+        s: roundMs(chunk[0].start),
+        e: roundMs(e),
+        line: chunk[0].line,
+        words: chunk.map((w, j) => ({ text: tokens[j], start: roundMs(w.start) })),
+      });
+    }
+  });
+  return screens;
+}
+
+/**
+ * COP-273 P10 finding 28, songCaptionScreens only: the script words one heard word says ("sixty" and "day" for a heard
+ * "sixty-day") come from lineWords on that word's whole time, as the talking kinds' captions keep them on one screen. A
+ * song look that shows or lights words apart gives each an equal share of that time in their order, the first from its
+ * start and the last to its end, as the song step reads a heard word with a hyphen (scout song-voice.ts heardParts).
+ * Words one heard word says are those lineWords gives the same line, start and end.
+ */
+function songWordTurns(words) {
+  const out = [];
+  for (let i = 0; i < words.length; ) {
+    const { line, start, end } = words[i];
+    let j = i + 1;
+    while (j < words.length && words[j].line === line && words[j].start === start && words[j].end === end) j++;
+    const k = j - i;
+    const at = (u) => (u === 0 ? start : u === k ? end : roundMs(start + ((end - start) * u) / k));
+    for (let u = 0; u < k; u++) out.push(k === 1 ? words[i] : { ...words[i + u], start: at(u), end: at(u + 1) });
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * COP-273 W2 cut, songCaptions "lit": each screen once for each of its words, that word in the look's lit colour, from
+ * its start (the screen's start for the first) to the next word's start (the screen's end for the last), as Luke's
+ * finish lights the word being sung. A look with no lit colour keeps its screens as they are.
+ */
+export function songLitScreens(screens, look) {
+  if (!look?.lit) return screens;
+  return screens.flatMap((c) => {
+    const words = c.words ?? [];
+    return words.flatMap((w, j) => {
+      const s = j === 0 ? c.s : Math.max(c.s, w.start);
+      const e = Math.min(c.e, j + 1 < words.length ? words[j + 1].start : c.e);
+      if (!(e > s)) return [];
+      const text = words.map((x, k) => (k === j ? `{\\1c${look.lit}}${x.text}{\\1c&HFFFFFF&}` : x.text)).join(" ");
+      return [{ text, s: roundMs(s), e: roundMs(e), line: c.line }];
+    });
+  });
+}
+
+/**
  * captionsByLine: the cut's words in its own time, each with the script line
  * it belongs to. They are the script's words as written, never a heard word
  * the script does not have (COP-311). Where a segment's script is heard in
@@ -6060,6 +6674,387 @@ function sharedHeardWords(rows) {
   return out;
 }
 
+// ---- COP-382: the three caption looks of Luke's lock, in the fonts the cut carries ----
+
+/**
+ * Each font's numbers, from its own tables: its family name (the style's Fontname, which libass matches), its units a
+ * em, the OS/2 win ascent and ascent plus descent (libass sizes a font so these are the font size, and lays a line's
+ * baseline the ascent below its top), the hhea ascent and descent Luke's drawing laid each line by (PIL's getmetrics),
+ * and the advance widths of printable ASCII from the space, then the curly quotes, the dashes and the ellipsis. libass
+ * sets no kerning by default, so a word is as wide as its advances (measured: 1 to 2 px over 660 px, libass 0.17.5).
+ * Any other character counts as the font's widest ASCII one, so a box is never narrower than its words; a mark as none.
+ */
+const LOOK_FONTS = {
+  extraBold: {
+    name: "Montserrat ExtraBold", upm: 1000, winAscent: 1109, winUnits: 1562, ascent: 968, descent: 251, widest: 1184, bold: true,
+    advance: [
+      291, 301, 462, 730, 647, 897, 752, 242, 369, 369, 453, 609, 283, 388, 283, 415, 685, 405, 599, 603, 700, 607, 649, 632, 669,
+      649, 283, 283, 609, 609, 609, 597, 1036, 786, 769, 730, 826, 672, 642, 770, 806, 339, 557, 752, 610, 954, 806, 846, 737, 846,
+      740, 647, 635, 786, 766, 1184, 737, 693, 679, 389, 415, 389, 610, 500, 600, 628, 695, 603, 698, 642, 406, 705, 696, 313, 320,
+      677, 313, 1045, 696, 666, 695, 695, 443, 547, 447, 692, 620, 956, 619, 620, 556, 414, 314, 414, 609,
+    ],
+    more: { "‘": 283, "’": 283, "“": 545, "”": 545, "–": 500, "—": 1000, "…": 858 },
+  },
+  black: {
+    name: "Montserrat Black", upm: 1000, winAscent: 1109, winUnits: 1562, ascent: 968, descent: 251, widest: 1206, bold: true,
+    advance: [
+      300, 314, 489, 740, 657, 917, 777, 254, 381, 381, 473, 620, 304, 390, 304, 440, 692, 418, 608, 614, 712, 619, 661, 645, 678,
+      661, 304, 304, 620, 620, 620, 606, 1037, 806, 773, 737, 826, 673, 644, 769, 804, 350, 574, 765, 617, 954, 804, 848, 743, 848,
+      745, 657, 654, 784, 786, 1206, 762, 710, 687, 410, 440, 410, 620, 500, 600, 639, 700, 615, 705, 653, 426, 711, 702, 326, 334,
+      701, 326, 1040, 702, 678, 700, 700, 456, 565, 460, 698, 644, 977, 645, 644, 570, 438, 320, 438, 620,
+    ],
+    more: { "‘": 304, "’": 304, "“": 594, "”": 594, "–": 500, "—": 1000, "…": 922 },
+  },
+  // Anton has one weight, Regular: asked for bold, libass would thicken it, so its styles never ask.
+  anton: {
+    name: "Anton", upm: 2048, winAscent: 2876, winUnits: 3550, ascent: 2409, descent: 674, widest: 2164, bold: false,
+    advance: [
+      480, 469, 878, 1119, 946, 2164, 1065, 438, 596, 596, 926, 728, 484, 637, 468, 830, 1012, 677, 1012, 1012, 1012, 1012, 1012, 1012,
+      1012, 1012, 495, 502, 658, 637, 658, 1008, 1770, 994, 980, 971, 1010, 843, 817, 993, 1022, 464, 955, 967, 814, 1528, 1020, 996,
+      967, 1011, 976, 945, 810, 970, 961, 1458, 991, 914, 840, 651, 830, 651, 970, 748, 650, 990, 1027, 1006, 1020, 1000, 574, 1032,
+      1035, 498, 538, 1005, 508, 1553, 1021, 1017, 1027, 1020, 710, 972, 625, 1022, 944, 1426, 940, 944, 790, 696, 443, 697, 1009,
+    ],
+    more: { "‘": 481, "’": 475, "“": 950, "”": 948, "–": 637, "—": 1153, "…": 1450 },
+  },
+};
+
+/** COP-382: words' width in pixels in one of the cut's fonts at `emPx` pixels a em (LOOK_FONTS). */
+export function lookWordsPx(fontId, text, emPx) {
+  const font = LOOK_FONTS[fontId];
+  let units = 0;
+  for (const char of String(text).normalize("NFD")) {
+    if (/\p{M}/u.test(char)) continue;
+    const code = char.codePointAt(0);
+    units += (code >= 32 && code <= 126 ? font.advance[code - 32] : font.more[char]) ?? font.widest;
+  }
+  return (units * emPx) / font.upm;
+}
+
+/** The ASS font size that draws a font at `emPx` pixels a em. */
+const lookFontSize = (font, emPx) => round2((emPx * font.winUnits) / font.upm);
+
+/**
+ * COP-382: the three looks of Luke's lock (lab/post_lock.json "looks", drawn by lab/post3.py cap_items), by the name the
+ * worker writes into the manifest's `sheetCaptions.look` (video/lib/sheetFinish.ts). His numbers are for a frame 720
+ * wide, so each is 1.5 times his at the cut's 1080 (and scaled again for another width); his Avenir Next and Impact are
+ * Apple's, so Montserrat and Anton stand in at his sizes (`em`, pixels a em):
+ * - bubble: Avenir Next Bold 44 as Montserrat ExtraBold, words #111111 on a white box a line (alpha 250 of 255), its
+ *   corners 16 px round, 16 px each side of the words and 7 above and below, lines 2 px closer, wrapped at 478 px.
+ * - yellow: Impact 66, capitals, as Anton: white with a 7 px black edge, the key word #FFE400, wrapped at 504 px, lines
+ *   6 px apart (keyWord).
+ * - purple-box: Avenir Next Heavy 46 as Montserrat Black: white with a 5 px black edge, a line of words stays up and the
+ *   word being said sits in a #8B3DFF box with no edge, its corners 10 px round, 9 px each side of the word and 2 above and
+ *   below its line, the box moving word to word; lines 2 px apart, balanced, wrapped at 488 px.
+ * `words` is the most words a screen holds when the sheet gives no number (his: 3, 2, a line of 5).
+ */
+export const CAPTION_LOOKS_DRAWN = {
+  bubble: { font: "extraBold", em: 66, words: 3, wrapPx: 717, padY: 10.5, lineGap: -3, text: "&H111111&", outline: 0, box: { colour: "&HFFFFFF&", alpha: "&H05&", padX: 24, radius: 24 } },
+  yellow: { font: "anton", em: 99, words: 2, wrapPx: 756, padY: 10.5, lineGap: 9, text: "&HFFFFFF&", outline: 10.5, caps: true, key: "&H00E4FF&" },
+  "purple-box": { font: "black", em: 69, words: 5, wrapPx: 732, padY: 10.5, lineGap: 3, text: "&HFFFFFF&", outline: 7.5, balanced: true, said: { colour: "&HFF3D8B&", padX: 13.5, padY: 3, radius: 15 } },
+};
+
+/** COP-382: the look a caption style asks for by name (the sheet's `look`), or null for today's looks. */
+export const drawnLookOf = (cap) => nameIn(CAPTION_LOOKS_DRAWN, cap?.look);
+
+/**
+ * Luke's look timing (post3.py cap_items timed), in seconds of the finished film (his edit applied it after the speed-up,
+ * so the cut's clock is these times the speed): a screen stays to its last word's end and this long...
+ */
+export const LOOK_TAIL_SEC = 0.35;
+/** ...or runs on to the next screen when that one starts within this of its last word's end. */
+export const LOOK_SNAP_SEC = 0.7;
+/** post3.py lines_of: a short sentence joins the purple box's line before it when said within this of it (the film's seconds). */
+export const LOOK_LINE_JOIN_SEC = 0.6;
+
+/** Luke's stop words and number words for the key word (post3.py STOP, NUMW), and his word for comparing (norm). */
+const KEY_STOP = new Set("a an the and or but so to of in on at it is i i'm she he her my me you they they're we this that had has have was be being just not right now make sure get oh for with its it's your their do if".split(" "));
+const KEY_NUMBERS = new Set("one two three four five six seven eight nine ten twenty thirty forty fifty hundred half double free".split(" "));
+const keyNorm = (word) => String(word).toLowerCase().replace(/[‘’]/g, "'").replace(/[^a-z0-9%']/g, "");
+
+/**
+ * COP-382, the yellow look's key word (post3.py key_word): the first word with a digit, else the first number word,
+ * else the longest word of 4 letters or more that is no stop word, the later one on a tie; null when none is.
+ */
+export function keyWord(words) {
+  const said = words.map(keyNorm);
+  const digit = said.findIndex((w) => /\d/.test(w));
+  if (digit >= 0) return digit;
+  const number = said.findIndex((w) => KEY_NUMBERS.has(w));
+  if (number >= 0) return number;
+  let best = null;
+  said.forEach((w, i) => {
+    if (KEY_STOP.has(w) || w.length < 4) return;
+    if (best === null || w.length >= said[best].length) best = i;
+  });
+  return best;
+}
+
+/** A word that ends a sentence (post3.py sentences); a closing quote or bracket may follow its mark. */
+const LOOK_SENTENCE_END = /[.?!]["'”’)\]]*$/;
+const LOOK_COMMA = /,["'”’)\]]*$/;
+
+/** The cut's words as Luke's sentences, [first, last] indexes: a sentence also ends where the script's line changes. */
+function lookSentences(words) {
+  const out = [];
+  let a = 0;
+  words.forEach((w, i) => {
+    const next = words[i + 1];
+    if (!next || LOOK_SENTENCE_END.test(w.text) || (w.line !== undefined && next.line !== w.line)) {
+      out.push([a, i]);
+      a = i + 1;
+    }
+  });
+  return out;
+}
+
+/** `n` items in `k` runs as even as can be, the first ones one longer (post3.py chunks, lines_of). */
+const evenRuns = (items, k) => {
+  const runs = [];
+  let i = 0;
+  for (let q = 0; q < k; q++) {
+    const size = Math.floor(items.length / k) + (q < items.length % k ? 1 : 0);
+    runs.push(items.slice(i, i + size));
+    i += size;
+  }
+  return runs;
+};
+
+/**
+ * post3.py chunks: groups of at most `n` words, never across a sentence's end, broken after a comma, a one-word clause
+ * given to a neighbour with room, each clause split as evenly as can be.
+ */
+function lookChunks(words, n) {
+  const out = [];
+  for (const [a, b] of lookSentences(words)) {
+    const clauses = [[]];
+    for (let i = a; i <= b; i++) {
+      clauses.at(-1).push(i);
+      if (LOOK_COMMA.test(words[i].text) && i < b) clauses.push([]);
+    }
+    for (let q = 0; n > 1 && q < clauses.length && clauses.length > 1; ) {
+      if (clauses[q].length === 1) {
+        if (q + 1 < clauses.length && clauses[q + 1].length < n) {
+          clauses[q + 1] = [...clauses[q], ...clauses[q + 1]];
+          clauses.splice(q, 1);
+          continue;
+        }
+        if (q > 0 && clauses[q - 1].length < n) {
+          clauses[q - 1].push(...clauses[q]);
+          clauses.splice(q, 1);
+          continue;
+        }
+      }
+      q++;
+    }
+    for (const clause of clauses) out.push(...evenRuns(clause, Math.ceil(clause.length / n)));
+  }
+  return out;
+}
+
+/**
+ * post3.py lines_of: lines of up to `hi` words; short sentences of one script line said within `joinSec` share one, long
+ * ones split evenly. Two script lines never share a screen, as the cut's captions by line never do, and words with no
+ * script line never join across a sentence's end.
+ */
+function lookLines(words, hi, joinSec = LOOK_LINE_JOIN_SEC) {
+  const out = [];
+  let buf = [];
+  for (const [a, b] of lookSentences(words)) {
+    const s = Array.from({ length: b - a + 1 }, (_, k) => a + k);
+    // A word with no script line (the cut's heard words, with captions not by line) is no line known: never joined.
+    const sameLine = buf.length > 0 && words[s[0]].line !== undefined && words[s[0]].line === words[buf.at(-1)].line;
+    if (buf.length && sameLine && buf.length + s.length <= hi && words[s[0]].start - words[buf.at(-1)].end < joinSec) {
+      buf.push(...s);
+      continue;
+    }
+    if (buf.length) out.push(buf);
+    out.push(...evenRuns(s, Math.ceil(s.length / hi)));
+    buf = out.pop();
+  }
+  if (buf.length) out.push(buf);
+  return out;
+}
+
+/** A word as a look shows it: no full stop or comma at its end (post3.py clean), and ours add the semicolon and the colon. */
+const lookClean = (text) => assText(text).replace(/[.,;:]+$/, "");
+
+/**
+ * COP-382: caption screens in one of Luke's looks, from the cut's words ([{ text, start, end, line }]; `line` optional):
+ * grouped as his look groups them (lookChunks, or lookLines for the purple box), at most the sheet's words a screen
+ * (`cap.wordsPerLine.median`, else the look's own), each from its first word (on that word's frame, as every caption of
+ * the cut, which its caption check reads) to its last word's end and LOOK_TAIL_SEC, or to the next screen when that one
+ * starts within LOOK_SNAP_SEC. Each screen keeps its words, as shown, with their times, and the yellow look its key word.
+ * The words are on the cut's clock, before the speed-up (`speed`), so Luke's numbers are the film's seconds times it.
+ */
+export function lookCaptionScreens(words, cap, speed = 1) {
+  const name = drawnLookOf(cap);
+  const look = CAPTION_LOOKS_DRAWN[name];
+  const per = Math.max(1, Math.round(cap?.wordsPerLine?.median ?? look.words));
+  // Script words timed by one heard word ("twenty five" for "25") stay on one screen, as lineCaptionScreens keeps them:
+  // apart, the first would last no time at all and never show.
+  const oneHeard = (a, b) => a.start === b.start && a.end === b.end && a.line === b.line;
+  const groups = (look.said ? lookLines(words, per, LOOK_LINE_JOIN_SEC * speed) : lookChunks(words, per)).reduce((out, g) => {
+    const prev = out.at(-1);
+    if (prev && oneHeard(words[prev.at(-1)], words[g[0]])) prev.push(...g);
+    else out.push([...g]);
+    return out;
+  }, []);
+  return groups.map((g, k) => {
+    const last = words[g.at(-1)];
+    const next = groups[k + 1] ? words[groups[k + 1][0]] : null;
+    const e = next && next.start - last.end < LOOK_SNAP_SEC * speed ? next.start : last.end + LOOK_TAIL_SEC * speed;
+    const shown = g.map((i, n) => {
+      const text = look.said ? (n === g.length - 1 ? lookClean(words[i].text) : assText(words[i].text)) : lookClean(words[i].text);
+      return { text: look.caps ? text.toUpperCase() : text, s: roundMs(words[i].start), e: roundMs(words[i].end) };
+    }).filter((w) => w.text !== "");
+    const key = look.key ? keyWord(shown.map((w) => w.text)) : null;
+    return {
+      text: shown.map((w) => w.text).join(" "),
+      s: roundMs(words[g[0]].start),
+      e: roundMs(e),
+      ...(words[g[0]].line !== undefined ? { line: words[g[0]].line } : {}),
+      look: name,
+      words: shown,
+      ...(key !== null ? { key } : {}),
+    };
+  }).filter((c) => c.words.length > 0);
+}
+
+/** post3.py wrap: word indexes in lines no wider than `maxPx`, a word to a line at least. */
+function lookWrap(widths, space, maxPx) {
+  const lines = [[]];
+  let w = 0;
+  widths.forEach((width, i) => {
+    if (lines.at(-1).length && w + space + width > maxPx) {
+      lines.push([]);
+      w = 0;
+    }
+    w += (lines.at(-1).length ? space : 0) + width;
+    lines.at(-1).push(i);
+  });
+  return lines;
+}
+
+/** post3.py wrap_bal: wrapped, then narrowed in his 16 px steps (24 at 1080) while the count of lines stays, so they come out even. */
+function lookWrapBalanced(widths, space, maxPx, scale) {
+  let best = lookWrap(widths, space, maxPx);
+  for (let w = maxPx - 24 * scale; w > 180 * scale; w -= 24 * scale) {
+    const next = lookWrap(widths, space, w);
+    if (next.length !== best.length) break;
+    best = next;
+  }
+  return best;
+}
+
+/** Ours (COP-382 landing): the share of the frame's height a look's block keeps clear of the top and bottom edges. */
+const LOOK_EDGE_SHARE = 0.03;
+
+/**
+ * COP-382: where a screen's words sit in a look, centred left to right and their block centred on `y`: lines of
+ * { x, w, slotTop, textTop, words: [{ i, x, w }] } (pixels, the word's left edge), each line's slot as his drawing lays it
+ * (its ascent and descent, and padY above and below), lineGap between slots, the words' top for an \an7 event so their
+ * baseline lands where his did. `lh` is the height of a line's words.
+ *
+ * Ours: a word wider than the look's wrap (a web address, "supercalifragilistic...") or a block too tall for the frame
+ * around `y` (many long words a screen) draws the screen smaller, as Luke's pill fits its words (ENDING_PILL), so no
+ * caption runs off the frame. `fit` is the share of the look's size the screen is drawn at (1 for nearly every screen).
+ */
+export function lookLayout(name, words, W = WIDTH, H = HEIGHT, y = Math.round(H * 0.7)) {
+  const look = CAPTION_LOOKS_DRAWN[name];
+  const font = LOOK_FONTS[look.font];
+  const scale = W / WIDTH;
+  const wrap = look.wrapPx * scale;
+  const padY = look.padY * scale;
+  const gap = look.lineGap * scale;
+  const tallest = 2 * (Math.min(y, H - y) - LOOK_EDGE_SHARE * H);
+  const laid = (em) => {
+    const widths = words.map((w) => lookWordsPx(look.font, w.text, em));
+    const space = lookWordsPx(look.font, " ", em);
+    const lines = look.balanced ? lookWrapBalanced(widths, space, wrap, scale) : lookWrap(widths, space, wrap);
+    const lh = ((font.ascent + font.descent) / font.upm) * em;
+    return { em, widths, space, lines, lh, height: lines.length * (lh + 2 * padY) + (lines.length - 1) * gap };
+  };
+  let at = laid(look.em * scale);
+  for (let k = 0; k < 4; k++) {
+    const shrink = Math.min(1, wrap / Math.max(1, ...at.widths), tallest / at.height);
+    if (shrink >= 1 - 1e-9) break;
+    at = laid(at.em * shrink);
+  }
+  const { em, widths, space, lines, lh } = at;
+  const slot = lh + 2 * padY;
+  const top = y - (lines.length * slot + (lines.length - 1) * gap) / 2;
+  const lift = ((font.ascent - font.winAscent) / font.upm) * em;
+  return {
+    lh,
+    size: lookFontSize(font, em),
+    fit: round2(em / (look.em * scale)),
+    lines: lines.map((line, k) => {
+      const w = line.reduce((sum, i) => sum + widths[i], 0) + space * (line.length - 1);
+      const x = W / 2 - w / 2;
+      let at = x;
+      const placed = line.map((i) => {
+        const word = { i, x: at, w: widths[i] };
+        at += widths[i] + space;
+        return word;
+      });
+      const slotTop = top + k * (slot + gap);
+      return { x, w, slotTop, textTop: slotTop + padY + lift, words: placed };
+    }),
+  };
+}
+
+/** COP-382: a look's style: its font at its size, its colour and edge, no shadow, placed by its events (\an7). */
+function lookStyle(name, H) {
+  const look = CAPTION_LOOKS_DRAWN[name];
+  const font = LOOK_FONTS[look.font];
+  const colour = `&H00${look.text.slice(2, 8)}`;
+  const size = lookFontSize(font, look.em * (H / HEIGHT));
+  return `Style: Look,${font.name},${size},${colour},${colour},&H00000000,&H00000000,${font.bold ? -1 : 0},0,0,0,100,100,0,0,1,${round2(look.outline * (H / HEIGHT))},0,7,0,0,0,1`;
+}
+
+const px = (n) => Math.round(n);
+
+/**
+ * COP-382: a look screen's events, from `from` to `to` (centiseconds of the finished cut), its words laid by lookLayout
+ * around `y`: the bubble's white box a line under its words; the yellow look's lines, the key word in yellow; the purple
+ * box's words each on its own, the word being said (from its own frame, `startCs`, to the next one's) without its edge
+ * over the purple box.
+ */
+function lookDialogues(c, W, H, y, from, to, startCs) {
+  const name = c.look;
+  const look = CAPTION_LOOKS_DRAWN[name];
+  const scale = W / WIDTH;
+  const layout = lookLayout(name, c.words, W, H, y);
+  // A screen drawn smaller (lookLayout's `fit`) says its size; every other one is drawn at its style's.
+  const size = layout.fit < 1 ? `\\fs${layout.size}` : "";
+  const text = (i) => assText(c.words[i].text);
+  const event = (layer, a, b, body) => `Dialogue: ${layer},${csTime(a)},${csTime(b)},Look,,0,0,0,,${body}`;
+  if (look.box) {
+    const { padX, radius, colour, alpha } = look.box;
+    return layout.lines.flatMap((line) => [
+      event(1, from, to, `{\\an7\\pos(${px(line.x - padX * scale)},${px(line.slotTop)})\\bord0\\shad0\\1c${colour}\\1a${alpha}\\p1}` +
+        roundedBoxPath(px(line.w + 2 * padX * scale), px(layout.lh + 2 * look.padY * scale), px(radius * scale))),
+      event(2, from, to, `{\\an7\\pos(${px(line.x)},${px(line.textTop)})${size}}${line.words.map((w) => text(w.i)).join(" ")}`),
+    ]);
+  }
+  if (look.key) {
+    return layout.lines.map((line) => event(2, from, to, `{\\an7\\pos(${px(line.x)},${px(line.textTop)})${size}}` +
+      line.words.map((w) => (w.i === c.key ? `{\\c${look.key}}${text(w.i)}{\\c${look.text}}` : text(w.i))).join(" ")));
+  }
+  const { colour, padX, padY, radius } = look.said;
+  const placed = layout.lines.flatMap((line) => line.words.map((w) => ({ ...w, line })));
+  return placed.flatMap((said, q) => {
+    const a = q === 0 ? from : Math.max(from, startCs(c.words[said.i].s));
+    const b = q === placed.length - 1 ? to : Math.min(to, startCs(c.words[placed[q + 1].i].s));
+    if (!(b > a)) return [];
+    return [
+      event(1, a, b, `{\\an7\\pos(${px(said.x - padX * scale)},${px(said.line.slotTop + (look.padY - padY) * scale)})\\bord0\\shad0\\1c${colour}\\p1}` +
+        roundedBoxPath(px(said.w + 2 * padX * scale), px(layout.lh + 2 * padY * scale), px(radius * scale))),
+      ...placed.map((w) => event(2, a, b, `{\\an7\\pos(${px(w.x)},${px(w.line.textTop)})${size}${w.i === said.i ? "\\bord0" : ""}}${text(w.i)}`)),
+    ];
+  });
+}
+
 /**
  * One ASS file for the burn: the caption screens in their band, the cards in
  * their boxes, the hook box and the end card. Boxes are [x0, y0, x1, y1] as
@@ -6067,32 +7062,48 @@ function sharedHeardWords(rows) {
  * Every time given is on the cut's clock before its speed-up; the file is on
  * the finished cut's (each time over `speed`), since it is burned after the speed step.
  */
-export function editAss({ captions = [], cap = null, cards = [], hook = null, endCard = null, endLayers = null, capMaxShare = null, speed = 1 }, W = WIDTH, H = HEIGHT) {
+export function editAss({ captions = [], cap = null, cards = [], hook = null, endCard = null, endLayers = null, capMaxShare = null, speed = 1, songLook = null, ending = null }, W = WIDTH, H = HEIGHT) {
   const at = (t) => assTime(t / speed);
   // Each caption from the frame of its first word, and off by the time the next one comes up.
   const starts = captions.map((c) => captionStartCs(c.s / speed));
-  const end = (c, k) => csTime(Math.min(Math.round(Math.max(0, c.e / speed) * 100), starts[k + 1] ?? Infinity));
+  const endCs = (c, k) => Math.min(Math.round(Math.max(0, c.e / speed) * 100), starts[k + 1] ?? Infinity);
+  const end = (c, k) => csTime(endCs(c, k));
   const thick = /thick black outline/i.test(cap?.style ?? "");
-  const y = cap?.place ? Math.round(((cap.place[0] + cap.place[1]) / 2) * H) : Math.round(H * 0.7);
-  const capSize = Math.min(Math.round(H * (thick ? 0.05 : 0.034)), capMaxShare ? Math.round(H * capMaxShare) : Infinity);
+  // COP-273 W2 cut: a sung run's saved look (SONG_CAPTION_LOOKS) sets the caption's place, size, colour and edge.
+  const y = songLook ? Math.round(H * songLook.y) : cap?.place ? Math.round(((cap.place[0] + cap.place[1]) / 2) * H) : Math.round(H * 0.7);
+  const capSize = songLook
+    ? Math.round(H * songLook.size)
+    : Math.min(Math.round(H * (thick ? 0.05 : 0.034)), capMaxShare ? Math.round(H * capMaxShare) : Infinity);
+  const capStyle = songLook
+    ? `Style: Cap,Helvetica,${capSize},${songLook.colour},${songLook.colour},&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,${songLook.outline},${songLook.shadow},5,60,60,0,1`
+    : `Style: Cap,Helvetica,${capSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,${thick ? 7 : 1.5},${thick ? 4 : 2},5,60,60,0,1`;
   const box = (b) => `\\pos(${Math.round(((b[0] + b[2]) / 2) * W)},${Math.round(((b[1] + b[3]) / 2) * H)})`;
+  // COP-382: a look of Luke's lock draws its screens (lookCaptionScreens) in its own style; any other screen as today.
+  const look = songLook ? null : drawnLookOf(cap);
+  const capLine = (c, k) => `Dialogue: 1,${csTime(starts[k])},${end(c, k)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`;
   return [
     "[Script Info]", "ScriptType: v4.00+", `PlayResX: ${W}`, `PlayResY: ${H}`, "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Cap,Helvetica,${capSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,${thick ? 7 : 1.5},${thick ? 4 : 2},5,60,60,0,1`,
+    capStyle,
     "Style: Card,Helvetica,60,&H00141414,&H00141414,&H00FFFFFF,&H50000000,-1,0,0,0,100,100,0,0,3,18,4,5,0,0,0,1",
     `Style: End,Helvetica,${Math.round(H * 0.045)},&H00FFFFFF,&H00FFFFFF,&H20101010,&H00000000,-1,0,0,0,100,100,2,0,3,40,0,5,0,0,0,1`,
+    ...(look ? [lookStyle(look, H)] : []),
+    ...(ending ? [endingStyle(H)] : []),
     ...(endLayers ? endCardStyles(endLayers.colors, H) : []),
     ...(cards.some((c) => c.label && c.headline) ? [headlineStyle(H)] : []), "",
     "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ...captions.map((c, k) => `Dialogue: 1,${csTime(starts[k])},${end(c, k)},Cap,,0,0,0,,{\\pos(${W / 2},${y})${c.colour ? `\\c${c.colour}${thick ? "" : `\\bord${CAPTION_COLOUR_MIN_OUTLINE}`}` : ""}}${c.text}`),
+    ...captions.flatMap((c, k) => (look && c.look === look && c.words?.length
+      ? lookDialogues(c, W, H, y, starts[k], endCs(c, k), (t) => captionStartCs(t / speed))
+      : [capLine(c, k)])),
     ...cards.filter((c) => c.label).flatMap((c) => (c.headline
       ? headlineDialogues(c, W, H, at)
       : [`Dialogue: 2,${at(c.in)},${at(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`])),
     ...(hook?.text ? [`Dialogue: 3,${at(hook.in)},${at(hook.out)},Card,,0,0,0,,{${box(hook.box)}\\fs${Math.round(H * 0.026)}}${assText(hook.text)}`] : []),
     ...(endCard ? [`Dialogue: 4,${at(endCard.in)},${at(endCard.out)},End,,0,0,0,,{\\pos(${W / 2},${H / 2})\\fad(120,0)}${assText(endCard.text)}`] : []),
     ...(endLayers ? endCardDialogues(endLayers, W, H, at) : []),
+    // COP-382: a run's sheet's words over the last shot.
+    ...(ending ? endingDialogues(ending, W, H, at, speed) : []),
   ].join("\n") + "\n";
 }
 
@@ -6204,14 +7215,17 @@ export function headlineWordsPx(text, fontPx) {
 /**
  * The cards as storyboardCards places them, the first as the headline (cardPlace "top"): from the first frame to the end
  * of its line, HEADLINE_MIN_SEC to HEADLINE_MAX_SEC of the film at `speed`, in HEADLINE_BOX when the take its line is
- * in is `headRoom` (COP-370), else in HEADLINE_BOX_NO_ROOM.
+ * in is `headRoom` (COP-370), else in HEADLINE_BOX_NO_ROOM. COP-382, cardPlace "top-film": with `untilSec` (the cut's
+ * clock), the film's end or where its ending starts, the headline stays to it (as Luke's pinned banner, post3.py
+ * banner_item, to the ending), every take filmed with room above the head when the take it opens on was (the board asks it
+ * of every take then).
  */
-export function headlineCards(storyboard, timeline, { speed = 1, headRoom = null } = {}) {
+export function headlineCards(storyboard, timeline, { speed = 1, headRoom = null, untilSec = null } = {}) {
   return cardsOnLines(storyboard, timeline).map(({ card, lineEnd, sceneIndex }, k) => (k > 0 ? card : {
     ...card,
     box: headRoom !== null && sceneIndex === headRoom ? HEADLINE_BOX : HEADLINE_BOX_NO_ROOM,
     in: 0,
-    out: roundMs(Math.min(Math.max(lineEnd, HEADLINE_MIN_SEC * speed), HEADLINE_MAX_SEC * speed)),
+    out: Number.isFinite(untilSec) ? roundMs(untilSec) : roundMs(Math.min(Math.max(lineEnd, HEADLINE_MIN_SEC * speed), HEADLINE_MAX_SEC * speed)),
     headline: true,
   }));
 }
@@ -6419,7 +7433,8 @@ export function voiceUnderEndCard(rows, endCard) {
  * cannot run on past its picture, so its card keeps the ad's last seconds. A card that would cover a heard word refuses
  * the cut (VoiceUnderEndCardRefusal). What it did goes in `notes`.
  */
-export function placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes) {
+export function placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes, songEditing = null) {
+  if (timeline.songEnd) return placeSongEndCard(timeline, brand, storyboard, pictureSec, notes, songEditing);
   const rows = wordRows(timeline);
   const voiceEndSec = timeline.mapped ? null : Math.max(...rows.map((r) => r.end));
   const card = endCardLayersOf(brand, storyboard, pictureSec, speed, voiceEndSec);
@@ -6433,6 +7448,78 @@ export function placeEndCard(timeline, brand, storyboard, pictureSec, speed, not
   const covered = voiceUnderEndCard(rows, card);
   if (covered.length > 0) throw new VoiceUnderEndCardRefusal(covered);
   if (card) timeline.endCard = { in: card.in, out: card.out };
+  return card;
+}
+
+/**
+ * COP-273 W2 cut, songEnd: Luke's end card on a sung run. The film's last SONG_END_CARD_SEC (never more than half of
+ * it), fading in over SONG_END_CARD_FADE_SEC. It never waits and is never refused for a sung word under it: the song
+ * plays on under the card, as in his finish (the song is the sound, not a speaker whose picture the card would hide).
+ * With light editing (`finish.songEditing`, SONG_EDITING_LEVELS) the picture dips to black into it.
+ */
+export function songEndCardOf(brand, storyboard, pictureSec, editing = null) {
+  if (!brand?.packPhoto) return null;
+  const seconds = Math.min(SONG_END_CARD_SEC, pictureSec / 2);
+  if (!(seconds > 0)) return null;
+  const at = roundMs(Math.max(0, pictureSec - seconds));
+  const dip = SONG_EDITING_LEVELS[editing] ?? null;
+  return {
+    file: brand.packPhoto,
+    in: at,
+    out: roundMs(pictureSec + 1),
+    seconds: roundMs(pictureSec - at),
+    fadeSec: SONG_END_CARD_FADE_SEC,
+    ...(dip ? { dip: { from: roundMs(Math.max(0, at - dip.lead)), lead: dip.lead, in: dip.in, out: dip.out } } : {}),
+    words: endCardWords(storyboard, brand.productName),
+    colors: brand.colors,
+  };
+}
+
+/**
+ * W2 cut fix (S2): a song laid on its measured map keeps its own end, so the cut keeps today's end card there; the dip
+ * is drawn only into the sung run's own card, so light editing draws none, and the note says so.
+ */
+export function songEndMeasuredNote(songEditing) {
+  return SONG_EDITING_LEVELS[songEditing]
+    ? "song-end: a song laid on its measured map keeps its own end and today's end card, so light editing draws no dip into it"
+    : "song-end: a song laid on its measured map keeps its own end";
+}
+
+/** COP-273 W2 cut, songEnd: where the film ends against the last sung word, for the pace record's notes. */
+export function songEndNote(songEnd, pictureSec) {
+  if (songEnd.cutBySec > 0) {
+    return `song-end: the film ends ${SONG_END_AFTER_SEC.toFixed(2)}s after the last sung word, at ${pictureSec.toFixed(2)}s; the song's last ${songEnd.cutBySec.toFixed(2)}s are not used`;
+  }
+  // W2 cut fix (S1): the song was not cut; say which of the three is true.
+  const gapSec = pictureSec - songEnd.lastSungSec;
+  if (!(gapSec > 0)) {
+    return `song-end: the last sung word's times run to ${songEnd.lastSungSec.toFixed(2)}s, at or past the song's own end, so the film ends with the song, at ${pictureSec.toFixed(2)}s`;
+  }
+  if (Number(gapSec.toFixed(2)) >= SONG_END_AFTER_SEC) {
+    return `song-end: the song ends ${gapSec.toFixed(2)}s after the last sung word, at its own end, so the film ends with it, at ${pictureSec.toFixed(2)}s; nothing of the song is cut`;
+  }
+  return `song-end: the song ends ${gapSec.toFixed(2)}s after the last sung word, sooner than ${SONG_END_AFTER_SEC.toFixed(2)}s, so the film ends with it, at ${pictureSec.toFixed(2)}s`;
+}
+
+function placeSongEndCard(timeline, brand, storyboard, pictureSec, notes, songEditing) {
+  const card = songEndCardOf(brand, storyboard, pictureSec, songEditing);
+  const { lastSungSec } = timeline.songEnd;
+  if (!card) return null;
+  const under = lastSungSec - card.in;
+  notes.push(`song-end: the end card is the film's last ${card.seconds.toFixed(2)}s, from ${card.in.toFixed(2)}s; ` +
+    (under > 1e-3 ? `the song plays on under it, over the last ${under.toFixed(2)}s of its singing` : "the song plays on under it"));
+  // W2 cut fix (S3): a song that ends soon after its last word can put a whole sung line under the card (his end
+  // does the same); the note names the line and its seconds of singing.
+  const byScene = new Map();
+  for (const r of wordRows(timeline)) byScene.set(r.scene, [...(byScene.get(r.scene) ?? []), r]);
+  const covered = [...byScene].filter(([, rows]) => Math.min(...rows.map((r) => r.start)) >= card.in - 1e-3)
+    .sort(([a], [b]) => a - b);
+  if (covered.length > 0) {
+    const singingSec = covered.reduce((t, [, rows]) => t + Math.max(...rows.map((r) => r.end)) - Math.min(...rows.map((r) => r.start)), 0);
+    const scenes = covered.map(([n]) => n);
+    notes.push(`song-end: the end card covers the whole of ${scenesWords(scenes)}'s sung line${scenes.length > 1 ? "s" : ""}, ${singingSec.toFixed(2)}s of singing`);
+  }
+  timeline.endCard = { in: card.in, out: card.out };
   return card;
 }
 
@@ -6467,7 +7554,7 @@ function endCardDialogues(e, W, H, at = assTime) {
     ["EndCta", e.words.cta, 0.82],
   ].filter(([, words]) => hasText(words));
   return rows.map(([style, words, y], k) => {
-    const from = roundMs(e.in + END_CARD_FADE_SEC + k * END_CARD_WORD_STEP_SEC);
+    const from = roundMs(e.in + (e.fadeSec ?? END_CARD_FADE_SEC) + k * END_CARD_WORD_STEP_SEC);
     return `Dialogue: 5,${at(from)},${at(e.out)},${style},,0,0,0,,{\\pos(${W / 2},${Math.round(H * y)})\\fad(${END_CARD_WORD_FADE_MS},0)}${assText(words)}`;
   });
 }
@@ -6476,6 +7563,121 @@ function endCardDialogues(e, W, H, at = assTime) {
 export function captionsBeforeEndCard(screens, e) {
   if (!e) return screens;
   return screens.filter((c) => c.s < e.in).map((c) => (c.e > e.in ? { ...c, e: e.in } : c));
+}
+
+// ---- COP-382: a run's sheet's ending, words over the last shot (Luke's LINK BELOW pill) ----
+
+/**
+ * Luke's ending (lab/post3.py, step 5 "ending"), in seconds of the finished film: the words come in on the word "link"
+ * when it is said in the film's last `linkWithinSec`, else on the last sentence but no earlier than `lastSentenceSec`
+ * before the last word ends; the film runs on `runOnSec` after the last word; the words pop in over three frames of
+ * `popSec` at `pop` of their size (post3.py pop_in), centred at `y` of the height; the captions stop `captionsClearSec`
+ * before they come in (post3.py t_stop). The cut's clock is these times the speed.
+ */
+export const ENDING = { linkWithinSec: 3, lastSentenceSec: 1.2, runOnSec: 1.6, popSec: 0.045, pop: [0.6, 0.86, 1.07], y: 0.8, captionsClearSec: 0.05 };
+/**
+ * Luke's pill (post3.py ask_pill), 1.5 times his 720-wide numbers: Avenir Next Heavy 48 as Montserrat Black, #111111 on
+ * a white pill (alpha 250) 92 high with round ends, the words 34 in from its left and 12 down, a red (#E62430) arrow
+ * pointing down 16 after them, the pill 120 wider than the words, and his soft shadow under it (6 down, blur 9, alpha
+ * 110). Words too wide for `maxShare` of the frame's width get smaller, as his fit() makes them.
+ */
+const ENDING_PILL = {
+  em: 72, height: 138, textLeft: 51, textTop: 18, arrowGap: 24, extra: 180, maxShare: 0.86,
+  ink: "&H111111&", white: "&HFFFFFF&", whiteAlpha: "&H05&", red: "&H3024E6&", shadow: { down: 9, blur: 13.5, alpha: "&H91&" },
+};
+
+/** COP-382: the sheet's words for the ending as the cut takes them: one line of drawable words, 1 to 40 characters; else null. */
+export function endingWordsOf(raw) {
+  const text = typeof raw === "string" ? assText(raw) : "";
+  return text.length >= 1 && text.length <= 40 && /[\p{L}\p{N}]/u.test(text) ? text : null;
+}
+
+/**
+ * COP-382: words over the last shot, on the cut's clock before the speed-up (`speed`): where they come in (`in`), on the
+ * heard word "link" in the last ENDING.linkWithinSec, else the last sentence's first word but no earlier than
+ * ENDING.lastSentenceSec before the last word ends; and the film's end, ENDING.runOnSec after the last word.
+ *
+ * The run-on holds the last frame, on whole frames, with no sound of the take's (its sound fades out where the cut ends,
+ * as under the end card: `endCardHoldSec`); the room bed runs on under it. It never plays on into the clip: the take
+ * past the cut is what trimJoins cut away, which can be speech after the last line ("Thanks guys") or a mouth still
+ * moving, and a held frame cannot bring either back. Luke's finish holds the last frame too (post3.py: "the last frame
+ * is held with silence"). `heldFrom` is where the held frames start, for the freeze check. Null with no heard word.
+ */
+export function placeEndingWords(timeline, text, speed, notes) {
+  const rows = wordRows(timeline).filter((r) => r.end > r.start);
+  if (rows.length === 0) {
+    notes.push("ending: no heard word to time the ending's words by, so they were not drawn");
+    return null;
+  }
+  const lastEnd = Math.max(...rows.map((r) => r.end));
+  const link = rows.findLast((r) => /^links?$/i.test(String(r.text).replace(/[^\p{L}]/gu, "")) && lastEnd - r.start < ENDING.linkWithinSec * speed);
+  const stop = rows.slice(0, -1).findLastIndex((r) => /[.?!]["'”’)\]]*$/.test(String(r.text)));
+  const at = link ? link.start : Math.max(rows[stop + 1].start, lastEnd - ENDING.lastSentenceSec * speed);
+  const end = lastEnd + ENDING.runOnSec * speed;
+  const filmSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
+  const more = Math.max(0, ceilFrame(end - filmSec));
+  if (more > 0) {
+    const last = timeline.spine.at(-1);
+    last.seconds += more;
+    last.holdSec = (last.holdSec ?? 0) + more;
+    last.endCardHoldSec = (last.endCardHoldSec ?? 0) + more;
+    notes.push(`ending: the last take's last frame is held ${more.toFixed(2)}s with no sound of its own, to ${ENDING.runOnSec}s after the last word`);
+  }
+  notes.push(`ending: "${text}" over the last shot from ${roundMs(at / speed)}s${link ? ', on the word "link"' : ""}`);
+  return { text, in: roundMs(at), out: roundMs(end + 1), ...(more > 0 ? { heldFrom: roundMs(filmSec) } : {}) };
+}
+
+/** COP-382: the pill's events at one size (`s` of its own), centred at (cx, cy), from `a` to `b` (ASS times). */
+function endingPillEvents(text, s, W, H, a, b) {
+  const scale = W / WIDTH;
+  const p = ENDING_PILL;
+  let em = p.em * scale;
+  const fitsIn = p.maxShare * W;
+  let wide = lookWordsPx("black", text, em);
+  if (wide + p.extra * scale > fitsIn) {
+    em *= (fitsIn - p.extra * scale) / wide;
+    wide = lookWordsPx("black", text, em);
+  }
+  const k = scale * s;
+  const font = LOOK_FONTS.black;
+  const w = (wide + p.extra * scale) * s;
+  const h = p.height * k;
+  const cx = W / 2;
+  const cy = Math.round(H * ENDING.y);
+  const x0 = cx - w / 2;
+  const y0 = cy - h / 2;
+  const arrow = x0 + (p.textLeft * scale + wide + p.arrowGap * scale) * s;
+  const pts = (list) => list.map(([x, y]) => `${px(x)} ${px(y)}`).join(" ");
+  const arrowPath = [
+    `m ${pts([[arrow + 13.5 * k, y0 + 33 * k]])} l ${pts([[arrow + 34.5 * k, y0 + 33 * k], [arrow + 34.5 * k, y0 + 72 * k], [arrow + 13.5 * k, y0 + 72 * k]])}`,
+    `m ${pts([[arrow - 3 * k, y0 + 69 * k]])} l ${pts([[arrow + 51 * k, y0 + 69 * k], [arrow + 24 * k, y0 + 108 * k]])}`,
+  ].join(" ");
+  const box = roundedBoxPath(px(w), px(h), px(h / 2));
+  const size = lookFontSize(font, em * s);
+  const textTop = y0 + p.textTop * k + ((font.ascent - font.winAscent) / font.upm) * em * s;
+  return [
+    `Dialogue: 6,${a},${b},Ending,,0,0,0,,{\\an7\\pos(${px(x0)},${px(y0 + p.shadow.down * k)})\\bord0\\shad0\\1c&H000000&\\1a${p.shadow.alpha}\\blur${round2(p.shadow.blur * k)}\\p1}${box}`,
+    `Dialogue: 7,${a},${b},Ending,,0,0,0,,{\\an7\\pos(${px(x0)},${px(y0)})\\bord0\\shad0\\1c${p.white}\\1a${p.whiteAlpha}\\p1}${box}`,
+    `Dialogue: 8,${a},${b},Ending,,0,0,0,,{\\an7\\pos(${px(x0 + p.textLeft * k)},${px(textTop)})\\fs${size}}${assText(text)}`,
+    `Dialogue: 8,${a},${b},Ending,,0,0,0,,{\\an7\\pos(0,0)\\bord0\\shad0\\1c${p.red}\\p1}${arrowPath}`,
+  ];
+}
+
+/** COP-382: the ending's style: Montserrat Black in #111111, no edge, placed by its events. */
+function endingStyle(H) {
+  return `Style: Ending,${LOOK_FONTS.black.name},${lookFontSize(LOOK_FONTS.black, ENDING_PILL.em * (H / HEIGHT))},&H00111111,&H00111111,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1`;
+}
+
+/**
+ * COP-382: the ending's events: the pill popping in over three frames at Luke's sizes, then at its own to the film's end.
+ * `at` writes a time of the cut's clock; the pop's frames are ENDING.popSec of the finished film each.
+ */
+function endingDialogues(e, W, H, at, speed = 1) {
+  const step = ENDING.popSec * speed;
+  return [
+    ...ENDING.pop.flatMap((s, k) => endingPillEvents(e.text, s, W, H, at(e.in + k * step), at(e.in + (k + 1) * step))),
+    ...endingPillEvents(e.text, 1, W, H, at(e.in + ENDING.pop.length * step), at(e.out)),
+  ];
 }
 
 /** Whether every word of `name`, in order, is among the heard words (case, accents and punctuation aside). */
@@ -8588,7 +9790,10 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const unusedSpeed = paceSpeedNote(manifest.finishing);
   if (unusedSpeed) notes.push(unusedSpeed);
   if (finish?.captionColours && stagedText) notes.push("captionColours: the text stage draws these captions, so they stay one colour");
-  const pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
+  // COP-382: a run's sheet's words over the last shot lengthen the film (placeEndingWords), so it is read again then.
+  let pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
+  // COP-273 W2 cut, songEnd: where the film ends against the last sung word.
+  if (timeline.songEnd) notes.push(songEndNote(timeline.songEnd, pictureSec));
   // Template clocks are always real time, including runs with no action windows.
   // Preserve the legacy Door 1 pace policy only for unstamped runs.
   const template = manifest.templateMotion?.enabled === true;
@@ -8677,6 +9882,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     notes.push(...speedUpSlowBroll(timeline, motionOf, (file) => probe(file).seconds));
   }
   let ass = null;
+  // COP-382: the folder of the cut's own fonts, when the burn names one of them (captionFontsDir).
+  let fontsDir = null;
   // The caption screens and text cards burned in, which cutChecks reads.
   let burned = null;
   let burnedCards = [];
@@ -8700,38 +9907,86 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const packPhoto = Boolean(brand?.packPhoto) && exists(brand.packPhoto);
   let endLayers = null;
   if (finish?.endCardLayers) {
-    endLayers = packPhoto ? placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes) : null;
+    endLayers = packPhoto ? placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes, finish.songEditing ?? null) : null;
     if (!endLayers) notes.push("the pull has no pack photo of the product, so the end card was not drawn");
   }
-  if (finish && (finish.captions || finish.cards || endLayers) && !stagedText) {
+  // COP-382: a run's sheet's words over the last shot, on a cut of its own clock with no end card.
+  let ending = null;
+  if (finish?.endingWords) {
+    const why = endLayers ? "the kind's end card closes this video"
+      : stagedText ? "the text stage draws this cut's words"
+        : timeline.mapped ? "this cut is laid on its measured map"
+          : template ? "a template launch's clock is its own"
+            : !hasFilter("subtitles") ? "this ffmpeg has no subtitles filter (libass) to draw them, so the film ends as it was"
+              // The pill is sized to Montserrat Black's own widths: in another font its words could run past it.
+              : !captionFontsDir() ? "the cut's fonts were not found beside it, so the film ends as it was" : null;
+    if (why) notes.push(`ending: "${finish.endingWords}" was not drawn over the last shot: ${why}`);
+    else {
+      ending = placeEndingWords(timeline, finish.endingWords, speed, notes);
+      if (ending) pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
+    }
+  }
+  if (finish && (finish.captions || finish.cards || endLayers || ending) && !stagedText) {
     if (hasFilter("subtitles")) {
       ass = "edit.ass";
       const cap = sourceAd?.captions ?? manifest.sheetCaptions ?? null;
       // COP-300: a cut made again after its caption check failed times its captions by the finished film's heard words.
       const timed = (words) => (heardWords?.length ? retimeWords(words, heardWords, speed) : words);
+      // COP-273 W2 cut, songCaptions: a sung run's saved look, on a song laid whole only.
+      const songLook = finish.captions && finish.songCaptions && timeline.wholeVoice ? SONG_CAPTION_LOOKS[finish.songCaptions] : null;
+      // COP-382: a look of Luke's lock (the sheet's `look`) groups and times its screens as his finish does. Its boxes are
+      // laid by its own fonts' widths, so with those fonts not found the captions are drawn as today's, never a box laid
+      // for one font around words drawn in another. A sung run's own look comes first.
+      const lookWanted = finish.captions && !songLook ? drawnLookOf(cap) : null;
+      if (lookWanted || ending) fontsDir = captionFontsDir();
+      const look = lookWanted && fontsDir ? lookWanted : null;
+      // The captions stop before the end card (at its dip, on a sung run), or, COP-382, ENDING.captionsClearSec of the film
+      // before words over the last shot (post3.py t_stop).
+      const stop = endLayers
+        ? (endLayers.dip ? { in: endLayers.dip.from } : endLayers)
+        : ending ? { in: roundMs(ending.in - ENDING.captionsClearSec * speed) } : endLayers;
       const screens = captionsBeforeEndCard(!finish.captions
         ? []
-        : finish.captionsByLine
-          ? lineCaptionScreens(timed(lineWords(timeline, storyboard)), cap)
-          : captionScreens(timed(wordRows(timeline)), cap), endLayers);
+        : songLook
+          ? songCaptionScreens(timed(lineWords(timeline, storyboard)), songLook)
+          : look
+            ? lookCaptionScreens(timed(finish.captionsByLine ? lineWords(timeline, storyboard) : wordRows(timeline)), cap, speed)
+            : finish.captionsByLine
+              ? lineCaptionScreens(timed(lineWords(timeline, storyboard)), cap)
+              : captionScreens(timed(wordRows(timeline)), cap), stop);
+      if (lookWanted) {
+        notes.push(look
+          ? `captions: the ${look} look of Luke's lock, in the cut's own fonts`
+          : `captions: the ${lookWanted} look of Luke's lock was not drawn: its fonts were not found beside the cut, so the captions are white letters as before`);
+        if (look && finish.captionColours) notes.push("captionColours: a look of Luke's lock keeps its own colours");
+      }
       if (finish.captions) burned = screens;
       // COP-356: a run's sheet may put its card at the top, as a headline for the opening.
-      const headline = finish.cards && !copied && finish.cardPlace === "top";
+      const headline = finish.cards && !copied && (finish.cardPlace === "top" || finish.cardPlace === "top-film");
       burnedCards = finish.cards
-        ? (copied ? copied.cards : headline ? headlineCards(storyboard, timeline, { speed, headRoom: finish.headRoom ?? null }) : storyboardCards(storyboard, timeline))
+        ? (copied
+          ? copied.cards
+          : headline
+            ? headlineCards(storyboard, timeline, { speed, headRoom: finish.headRoom ?? null, ...(finish.cardPlace === "top-film" ? { untilSec: stop?.in ?? pictureSec + 1 } : {}) })
+            : storyboardCards(storyboard, timeline))
         : [];
       const drawn = burnedCards.find((c) => c.headline && c.label);
-      if (drawn) notes.push(`cardPlace: the card is a headline at the top, from the first frame to ${roundMs(drawn.out / speed)} s`);
+      if (drawn) {
+        notes.push(finish.cardPlace === "top-film"
+          ? "cardPlace: the card is a headline at the top for the whole video; every step closer keeps the frame's top edge"
+          : `cardPlace: the card is a headline at the top, from the first frame to ${roundMs(drawn.out / speed)} s`);
+      }
       writeFileSync(here(ass), editAss({
-        captions: finish.captionColours ? colourScreens(screens, storyboard) : screens,
+        captions: songLook ? songLitScreens(screens, songLook) : finish.captionColours ? colourScreens(screens, storyboard) : screens,
         cap,
-        ...(finish.captionsByLine ? { capMaxShare: CAPTION_MAX_SHARE } : {}),
+        ...(songLook ? { songLook } : finish.captionsByLine ? { capMaxShare: CAPTION_MAX_SHARE } : {}),
         cards: burnedCards,
         hook: copied?.hook ?? null,
         // A copied ad has an end card only where its source does. The pack-photo end card takes the CTA words' place.
         endCard: !endLayers && finish.cards && (!sourceAd || sourceAd.endCard) ? endCardOf(storyboard, pictureSec) : null,
         endLayers,
         speed,
+        ending,
       }));
     } else {
       notes.push(
@@ -8956,6 +10211,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       ? {
         finish: {
           levelSegments: !finish.finishLoudness, ass, speed, ...(finish.finishLoudness ? { pcmMix: true } : {}),
+          ...(ass && fontsDir ? { fontsDir } : {}),
           ...(room ? { room } : {}),
           ...(pictures.length ? { pictures } : {}), ...(clean ? { clean } : {}), ...(meters ? { meters } : {}),
           ...(endLayers ? { endCard: endLayers } : {}),
@@ -9129,7 +10385,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   const checks = finish.cutChecks
     ? checkCut({
         timeline, storyboard, screens: burned, rows, scenes, out, loudness, levels: meterLevels,
-        finish, sourceAd, shotOf: (n) => plans?.get(n)?.sourceShot ?? null, cards: burnedCards, speed, endCard: endLayers,
+        finish, sourceAd, shotOf: (n) => plans?.get(n)?.sourceShot ?? null, cards: burnedCards, speed,
+        // COP-382: under words over the last shot the freeze check skips only the frames held on purpose.
+        endCard: endLayers ?? (ending?.heldFrom !== undefined ? { in: ending.heldFrom } : null),
         ...(lookProbe ? { lookRows: lookProbe.rows } : {}), ...(deliverFps ? { readFps: FPS } : {}),
       })
     : null;

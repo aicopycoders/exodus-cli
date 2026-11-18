@@ -130,7 +130,14 @@ export interface CustomerRun {
         look: string;
         imageUrl: string | null;
     };
+    songCalls?: unknown;
+    songNotice?: string[];
 }
+export declare const SONG_CALL_NEW_VIDEO = "A new video makes the whole ad again, at its own price, shown before you start.";
+export declare const SONG_CALL_NO_SCENE_PICTURES = "This video is filmed from the pictures of its people and places, one clip for every one to three sung lines, so no picture of a scene was drawn.";
+export declare const SONG_CALL_NO_ONE_SCENE = "One scene's clip or picture can't be made again on its own. A new video makes the whole ad again, at its own price, shown before you start.";
+export declare function songCallsProblem(songCalls: unknown): boolean;
+export declare function songCallStopLines(songCalls: unknown, page?: string): string[];
 export declare function spendAskLines(run: {
     spendAsk?: {
         sentence: string;
@@ -171,10 +178,20 @@ export interface CustomerStoryboard {
     stage: CustomerRunStage;
     scenes: CustomerRunScene[] | null;
     noPictureBeforeApproval?: true;
+    filmsCalls?: true;
+    songNotice?: string[];
     beforePictures?: true;
     findings?: CustomerPlanFinding[];
     hardWords?: string[];
+    openings?: StoryboardOpening[];
+    openingsDigest?: string;
 }
+export interface StoryboardOpening {
+    name: string;
+    seen: string;
+    words: string | null;
+}
+export declare function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string): string[];
 export interface CustomerPlanFinding {
     text: string;
     scenes: number[];
@@ -185,6 +202,11 @@ export interface CustomerItem {
     status: "ready" | "working" | "failed";
     url: string | null;
     speech?: SpeechSummary;
+    songCall?: {
+        sceneIndex: number;
+        fromSec: number;
+        seconds: number;
+    };
 }
 export interface CustomerItems {
     view: "customer";
@@ -229,5 +251,5 @@ export declare function finalApproveLines(template: boolean): string[];
 export declare function finalApprovedLines(template: boolean): string[];
 export declare function customerStageLines(run: CustomerRun, page: string): string[];
 export declare function customerStatusLines(run: CustomerRun, dashboardUrl: string): string[];
-export declare function customerStoryboardLines(board: CustomerStoryboard, page: string): string[];
+export declare function customerStoryboardLines(board: CustomerStoryboard, page: string, songCalls?: unknown): string[];
 export declare function customerVoicesLines(voices: CustomerVoices): string[];

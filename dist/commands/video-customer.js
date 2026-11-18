@@ -7,6 +7,53 @@ export function speechSummaryLines(speech) {
         "speech-issue": "Speech issue — review required", unverified: "Speech not verified" };
     return [labels[speech.status], ...speech.issues.map(speechIssueText)];
 }
+function songNoticeLines(notice) {
+    return Array.isArray(notice) ? notice.filter((s) => typeof s === "string" && s.trim() !== "").map((s) => `Heads-up: ${s}`) : [];
+}
+export const SONG_CALL_NEW_VIDEO = "A new video makes the whole ad again, at its own price, shown before you start.";
+export const SONG_CALL_NO_SCENE_PICTURES = "This video is filmed from the pictures of its people and places, one clip for every one to three sung lines, so no picture of a scene was drawn.";
+export const SONG_CALL_NO_ONE_SCENE = `One scene's clip or picture can't be made again on its own. ${SONG_CALL_NEW_VIDEO}`;
+const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+function callPictureWords(picture) {
+    const who = typeof picture.characterId === "string" ? picture.characterId : "a person";
+    switch (picture.kind) {
+        case "character-sheet": return `the sheet of ${who}`;
+        case "character-picture": return `the picture of ${who}`;
+        case "product-sheet": return "the product's sheet";
+        case "product-plate": return "the product's picture";
+        case "props-sheet": return "the props' sheet";
+        case "place-view":
+            return `${typeof picture.place === "string" ? picture.place : "a place"}${typeof picture.view === "string" ? `, view ${picture.view}` : ""}${picture.lit === true ? ", lit" : ""}`;
+        default: return typeof picture.kind === "string" ? picture.kind : "a picture";
+    }
+}
+export function songCallsProblem(songCalls) {
+    return isObject(songCalls) && typeof songCalls.problem === "string";
+}
+export function songCallStopLines(songCalls, page = "") {
+    if (!isObject(songCalls))
+        return [];
+    if (typeof songCalls.problem === "string")
+        return [songCalls.problem];
+    if (typeof songCalls.notYet === "string")
+        return [songCalls.notYet];
+    if (!Array.isArray(songCalls.calls))
+        return [];
+    const lines = [SONG_CALL_NO_SCENE_PICTURES, "The pictures each video call is filmed from:"];
+    let drawn = false;
+    for (const call of songCalls.calls.filter(isObject)) {
+        const scenes = Array.isArray(call.scenes) ? call.scenes : [];
+        const pictures = Array.isArray(call.pictures) ? call.pictures.filter(isObject) : [];
+        lines.push(`  Call ${String(call.n)} (${scenes.length === 1 ? "scene" : "scenes"} ${scenes.join(", ")}): ${pictures.length === 1 ? "1 picture" : `${pictures.length} pictures`}`);
+        for (const picture of pictures)
+            lines.push(`    ${callPictureWords(picture)}`);
+        drawn = drawn || pictures.length > 0;
+    }
+    if (drawn && page)
+        lines.push(`See the pictures: ${page}`);
+    const notes = Array.isArray(songCalls.notes) ? songCalls.notes.filter((note) => typeof note === "string" && note.trim() !== "") : [];
+    return [...lines, ...notes, SONG_CALL_NO_ONE_SCENE];
+}
 function noPictureBeforeApproval(run) {
     return run.stage === "review" && run.planHold?.atBoard === true && run.planHold.beforePictures !== true;
 }
@@ -34,6 +81,9 @@ function heldLines(run, page) {
     const one = (scenes?.length ?? holds.length) === 1;
     const head = `Held: the final video wasn't made yet. ${one ? "This scene needs" : "These scenes need"} you first:`;
     if (!scenes?.length) {
+        if (run.songCalls !== undefined) {
+            return [head, ...holds.map((hold) => `  ${hold}`), SONG_CALL_NO_ONE_SCENE, `${one ? "Keep it" : "Keep each one"} as it is on the video's page: ${page}`];
+        }
         return [head, ...holds.map((hold) => `  ${hold}`), `${one ? "Make it again" : "Make each one again"}, or keep it as it is, on the video's page: ${page}`];
     }
     return [head, ...heldSceneChoiceLines(run, scenes, page)];
@@ -77,12 +127,14 @@ function heldSceneChoiceLines(run, scenes, page) {
     const voices = scenes.filter((s) => s.voice && !s.take && !s.unfilmed);
     const faults = scenes.filter((s) => !s.take && !s.unfilmed && !s.voice);
     const keepable = faults.filter((s) => !s.voiceLocked);
+    const calls = run.songCalls !== undefined;
     const inParens = (price) => (price ? ` (${price})` : "");
     const unfilmedPrice = inParens(tryAgainPrice(run, unfilmed.map((s) => s.sceneIndex)));
     const faultPrice = inParens(tryAgainPrice(run, faults.map((s) => s.sceneIndex)));
     return [
         ...scenes.map((s) => `  Scene ${s.sceneIndex}: ${s.sentence}`),
-        ...(unfilmed.length > 0
+        ...(calls && (unfilmed.length > 0 || faults.length > 0) ? [SONG_CALL_NO_ONE_SCENE] : []),
+        ...(unfilmed.length > 0 && !calls
             ? [`${unfilmed.length === 1 ? "Film it" : "Film each one"} with Try again on the video's page, which shows the price first${unfilmedPrice}: ${page}`]
             : []),
         ...takes.map((s) => takes.length === 1
@@ -96,13 +148,27 @@ function heldSceneChoiceLines(run, scenes, page) {
         ]),
         ...(faults.length > 0
             ? [
-                `${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again${keepable.length > 0 ? ", or keep it as it is," : ""} on the video's page. Try again shows the price first${faultPrice}: ${page}`,
+                ...(calls ? [] : [`${faults.length === 1 ? "Make it again" : "Make each one again"} with Try again${keepable.length > 0 ? ", or keep it as it is," : ""} on the video's page. Try again shows the price first${faultPrice}: ${page}`]),
                 ...keepable.map((s) => `Or keep ${faults.length === 1 ? "it" : `scene ${s.sceneIndex}`} as it is from here: exodus video keep ${run.runId} --scene ${s.sceneIndex}`),
             ]
             : []),
         ...(takes.length > 0 && faults.length === 0 && unfilmed.length === 0
             ? [`${takes.length === 1 ? "Watch it first:  " : "Watch them first:"} ${page}`]
             : []),
+    ];
+}
+export function openingLines(openings, id, digest) {
+    if (!openings || openings.length < 2)
+        return [];
+    return [
+        "",
+        `Take 1's opening, its first 2 seconds: pick 1 of ${openings.length}. Opening 1 is picked.`,
+        ...openings.flatMap((opening, i) => [
+            `  ${i + 1}. ${opening.name}`,
+            `     ${opening.seen}`,
+            ...(opening.words ? [`     Words on screen: "${opening.words}"`] : []),
+        ]),
+        `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
     ];
 }
 function hardWordLines(words) {
@@ -298,8 +364,10 @@ export function customerStageLines(run, page) {
             }
             return [
                 "Your storyboard is ready for your review.",
+                ...songNoticeLines(run.songNotice),
                 `See it:      exodus video storyboard ${id}`,
-                `Approve it:  exodus video approve ${id}`,
+                ...(songCallsProblem(run.songCalls) ? [] : [`Approve it:  exodus video approve ${id}`]),
+                ...songCallStopLines(run.songCalls, page),
             ];
         case "ready":
             return [
@@ -354,8 +422,9 @@ function sceneLines(scene) {
         lines.push(`    ${scene.productNote}`);
     return lines;
 }
-export function customerStoryboardLines(board, page) {
+export function customerStoryboardLines(board, page, songCalls) {
     const id = board.runId;
+    const notice = songNoticeLines(board.songNotice);
     if (board.stage !== "review" || !board.scenes) {
         return [
             "This video isn't waiting for you to review its storyboard right now.",
@@ -371,6 +440,7 @@ export function customerStoryboardLines(board, page) {
             ...scriptLines(board.scenes),
             ...found,
             ...hardWordLines(board.hardWords),
+            ...openingLines(board.openings, id, board.openingsDigest),
             "",
             "No take gets a picture before you approve.",
             approve,
@@ -386,7 +456,23 @@ export function customerStoryboardLines(board, page) {
             "",
             "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
             approve,
-            `pick voices: exodus video voices ${id}`,
+            ...(board.filmsCalls ? [] : [`pick voices: exodus video voices ${id}`]),
+        ];
+    }
+    if (board.filmsCalls) {
+        const listed = isObject(songCalls) && Array.isArray(songCalls.calls);
+        const problem = isObject(songCalls) && typeof songCalls.problem === "string" ? songCalls.problem : null;
+        return [
+            "Storyboard",
+            ...board.scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]),
+            "",
+            ...notice,
+            SONG_CALL_NO_SCENE_PICTURES,
+            listed
+                ? `See the pictures each video call is filmed from: exodus video status ${id}`
+                : problem ?? "No picture a video call is filmed from is listed yet.",
+            SONG_CALL_NO_ONE_SCENE,
+            `approve with: exodus video approve ${id}`,
         ];
     }
     const stillDrawing = board.scenes.some((s) => s.frameStatus === "pending" || s.frameStatus === "drawing");
@@ -395,6 +481,7 @@ export function customerStoryboardLines(board, page) {
         ...board.scenes.flatMap(sceneLines),
         ...hardWordLines(board.hardWords),
         "",
+        ...notice,
         stillDrawing
             ? "Waiting for every scene to finish drawing before you can approve."
             : `approve with: exodus video approve ${id}`,

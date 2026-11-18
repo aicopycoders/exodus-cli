@@ -7,12 +7,13 @@ import { displayRunStatus, formatApiError } from "../lib/format.js";
 import { isWorkerStoppedPark } from "../lib/runStatus.js";
 import { missingRouteLine } from "../lib/route-support.js";
 import { probeDurationSec } from "../lib/preflight.js";
+import { findWorkspaceRoot } from "../lib/state.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
 import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, VOICE_RETRY_COST, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
@@ -84,7 +85,8 @@ The whole loop, in order:
 
   4. exodus video storyboard <runId>
      The scene cards: what each scene says and whether its picture is drawn.
-     The pictures are on the run's page, which it names.
+     The pictures are on the run's page, which it names. On a One-take run
+     with the hook on, it also lists take 1's openings, numbered.
 
   5. exodus video voices <runId>
      Who is in the ad, which voice each one has, how the voices get applied
@@ -93,6 +95,10 @@ The whole loop, in order:
   6. exodus video approve <runId>          (looks right — keep going)
      Guided runs only. A One-shot run approves its own storyboard and stops
      here only when its checks find a problem.
+     exodus video approve <runId> --opening <n> --openings <code>
+       A One-take storyboard that lists openings: take 1 starts with
+       opening n. Copy the line the storyboard prints, code and all.
+       Without --opening, opening 1.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
      exodus video broll <runId>
@@ -200,7 +206,8 @@ Usage:
   exodus video storyboard <runId> [--json]
   exodus video map <runId> [--place <place>] [--json]
   exodus video move <runId> --move <who>=<x>,<y> [--move ...] [--place <place>] [--note "..."] [--json]
-  exodus video approve <runId> [--approve-stale-cut] [--json]
+  exodus video approve <runId> [--opening <n> --openings <code>] [--approve-stale-cut] [--json]
+  exodus video approve <runId> --max-usd <n> [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
   exodus video broll <runId> [--json]
   exodus video broll add <runId> --line <id> [--note "..."] [--json]
@@ -236,6 +243,10 @@ Usage:
   exodus video swipe sheet price <swipeId> [--json]
   exodus video swipe sheet people <swipeId> [--count <n>] [--yes --max-usd <n>] [--wait] [--json]
   exodus video swipe sheet voices <swipeId> [--json]
+  exodus video swipe sheet samples <swipeId> [--sounds <code,...> | --count <n>] [--yes --max-usd <n>] [--wait] [--json]
+  exodus video swipe sheet cast <swipeId> [--yes --max-usd <n>] [--wait] [--json]
+  exodus video swipe sheet lyric <swipeId> [--yes --max-usd <n>] [--json]
+  exodus video swipe new --kind <kind> --product <id> --script <file> [--yes] [--json]
 
 Door 2 template sheets (not the separate top-level exodus template pipeline):
   exodus video template list [--json]
@@ -298,6 +309,17 @@ Options:
   --accept-findings    Go on past the check's findings on a storyboard it
                        stopped (approve). Without it, approving that
                        storyboard stops and says why
+  --max-usd <n>        The most a price showed, which a yes is held to: on
+                       swipe start, on swipe sheet people, samples, cast and
+                       lyric with --yes, and on approve at the stop after a
+                       sung video's first part. A yes that would now cost
+                       more is refused
+  --opening <n>        Which opening take 1 starts with, by its number in
+                       exodus video storyboard (approve, a One-take
+                       storyboard that lists openings). Without it, opening 1
+  --openings <code>    With --opening: the code exodus video storyboard prints
+                       with the openings, so the pick is of those openings. If
+                       the storyboard was made again since, nothing is approved
   --set <who>=<voice>  Give a character a voice (voices). The voice is a
                        catalog voice's name, like George, or an ElevenLabs
                        voice ID. Name the character by its ID or by the name
@@ -551,11 +573,18 @@ one.
                        camera and description; the script with who says each
                        line; the cast; and how it is filmed. No pictures
   --look <slug>        The new look (swipe write --mode new-look)
-  --script <file>      Your own script (swipe write --mode their-format)
+  --script <file>      Your own script (swipe write --mode their-format). Its
+                       words stay as they are; the write adds the direction.
+                       For a kind that sings (pixar-song), one plain line for
+                       each sung line, naming no speaker and with no CAST: block
   --kind <kind>        A kind of ad in place of the one the template picked
-                       (swipe write), by its key. A kind this ad can't be made
-                       as is refused, with the kinds it can be made as, before
-                       the write is paid. Every other swipe verb refuses it
+                       (swipe write), by its key; swipe template prints the
+                       key it picked. pixar-song is a story one voice sings over
+                       animated pictures, in the Pixar look: name it for a song
+                       ad, since the template may read a song as spoken. A kind
+                       this ad can't be made as is refused, with the kinds it
+                       can be made as, before the write is paid. Every other
+                       swipe verb refuses it
   --style <look>       A look other than the swipe's own (swipe start)
   --title "<name>"     The ad's name (swipe start). Admin-only
   --again              A second, paid video from a swipe that already has one
@@ -611,6 +640,29 @@ read of the voice list on the member's ElevenLabs key, and no speech: the
 voices that fit the person, best fit first, each with its age and accent when
 known, the one the voice row recommends, and the swipe's page where the
 samples play; voice=<n> picks one, and the video is filmed in it.
+swipe sheet samples is paid (a Suno Pixar Song swipe): the song's opening sung in
+up to 4 sounds, four takes a sound in two pairs (two more for a sound when all
+its takes but at most one were heard as another kind of music), each heard
+once, each sound's opening reworded the way its kind of music sings it;
+--sounds names them by code,
+else --count of them (4 by default) are chosen for the member. Without --yes it
+says the price and makes nothing; --yes --max-usd <the price's most> makes them.
+songSample=<n> picks a take, and sets the kind of music, the sound and the
+singer with it; the full song is then sung in its style.
+swipe sheet cast is paid (a Suno Pixar Song swipe): one text call finds the
+song's 1 to 3 main characters, and each is drawn 10 ways (5 regular, 5
+caricature). Without --yes it says the price and makes nothing; --yes
+--max-usd <the price's most> makes them. cast1=<n> (cast2, cast3) picks a
+picture, and the video draws that character from it, never as a new figure.
+swipe sheet lyric is paid, on the member's model key, for a swipe of their own
+script of a sung kind: their lines written as a song. Without --yes it says the
+price and the lyric made so far; --yes --max-usd <the price's most> writes it.
+lyric=song sings it in the video; lyric=yours brings their own lines back.
+swipe new is free: a swipe of the member's own words with no ad, for a kind of ad
+that sings them, while the server's song sheet is on. Without --yes it only checks
+the lines; --yes writes it. Then the song's shape, a lyric of the lines (paid, its
+price first), the sheet and its price, and the start, as for any swipe with a sheet.
+It is set and started from the CLI for now: the dashboard does not open it yet.
 swipe write also makes people to pick from for a kind whose sheet has a person,
 when the server offers them: without --yes it says their price too, and the
 yes line carries their most (--people-max-usd <n>). The write then makes 4 on
@@ -623,7 +675,9 @@ without them. swipe start waits while people or the animal are being made,
 until 5 minutes after they were asked for.
 The template picks the kind of ad: swipe template prints it and its look, so
 ask the member before the write. A swipe run has no picks stop and no pilot
-clip; it stops at the storyboard unless --one-shot. --wait on swipe and swipe
+clip, but for a sung video's first part (songPart=first): it stops after its
+clips for the rest's price and a second yes (approve --max-usd). It stops at
+the storyboard unless --one-shot. --wait on swipe and swipe
 status waits for the breakdown; on swipe start, for the run; on swipe run, for
 each run once every ad is started.
 
@@ -757,6 +811,50 @@ function printDisplacedHistory(lines, lastRedo) {
     for (const line of history.lines)
         lines.push(`         ${line}`);
 }
+export const SONG_MISSING_PULL_LINE = "This video's voice is one song, but the run holds no song, so a cut made from these files uses the lines as they were read.";
+export const SONG_CALL_CUT = "fit";
+export function songCallsOfPull(scenes) {
+    const calls = new Map();
+    for (const scene of [...scenes].sort((a, b) => a.index - b.index)) {
+        if (!scene.songCall)
+            continue;
+        const call = calls.get(scene.songCall.sceneIndex) ?? { scenes: [], clip: null, seconds: 0 };
+        if (call.scenes.length === 0 && scene.songCall.orderedSec !== undefined)
+            call.orderedSec = scene.songCall.orderedSec;
+        call.scenes.push(scene.index);
+        call.clip ??= scene.clip;
+        call.seconds += scene.songCall.seconds;
+        calls.set(scene.songCall.sceneIndex, call);
+    }
+    return [...calls.values()].flatMap((c) => (c.clip
+        ? [{ scenes: c.scenes, clip: c.clip, seconds: Math.round(c.seconds * 1000) / 1000, ...(c.orderedSec !== undefined ? { orderedSec: c.orderedSec } : {}) }]
+        : []));
+}
+export const SONG_CALL_FIT_LINE = "Each clip listed under calls in manifest.json is played whole, sped up or slowed down to last exactly its lines' stretch of the song (its seconds).";
+export const SONG_CALL_ORDERED_FIT_LINE = "Each clip listed under calls in manifest.json with an orderedSec (the seconds it was ordered at) is played from its start at orderedSec divided by seconds times its filmed speed, so those seconds last exactly its lines' stretch of the song (its seconds): a clip longer than its order loses its end, and a shorter one holds its last frame.";
+export const SONG_CALL_UNORDERED_FIT_LINE = "A clip listed there with no orderedSec is played whole, sped up or slowed down to last exactly its lines' stretch of the song (its seconds).";
+export const SONG_CALL_SHARED_LINE = "Some scenes share one clip: each says where its line starts in that clip's stretch (songCall.fromSec) and how long it lasts (songCall.seconds).";
+export function songCallPullLines(calls) {
+    if (calls.length === 0)
+        return [];
+    const ordered = calls.filter((call) => call.orderedSec !== undefined).length;
+    const fit = ordered === 0
+        ? [SONG_CALL_FIT_LINE]
+        : [SONG_CALL_ORDERED_FIT_LINE, ...(ordered < calls.length ? [SONG_CALL_UNORDERED_FIT_LINE] : [])];
+    return [...fit, ...(calls.some((call) => call.scenes.length > 1) ? [SONG_CALL_SHARED_LINE] : [])];
+}
+export const SONG_CALL_OLD_CUT_SCRIPT = "This video fits each clip to its lines, and this workspace's first-cut is older and would cut it another way, so nothing was pulled. Refresh the workspace, which is free and makes nothing again: exodus update. Then pull it again: exodus video pull <runId>";
+export function cutScriptFitsSongCalls(script) {
+    return script === null || script.includes(`export const SONG_CALL_CUT = "${SONG_CALL_CUT}"`);
+}
+function workspaceCutScript() {
+    try {
+        return fs.readFileSync(path.join(findWorkspaceRoot(), ".claude", "skills", "exodus-video", "scripts", "first-cut.mjs"), "utf-8");
+    }
+    catch {
+        return null;
+    }
+}
 export function asVideoRun(data) {
     const run = (data ?? {});
     return { ...run, nodes: Array.isArray(run.nodes) ? run.nodes : [] };
@@ -823,6 +921,7 @@ export const defaultDeps = {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     dashboardUrl: getDashboardUrl(),
+    cutScriptOf: workspaceCutScript,
 };
 function runNotYoursMessage(res) {
     if (res.status !== 404)
@@ -965,6 +1064,8 @@ export function classifyRun(run) {
                 ...(run.pausedNodeId ? { nodeId: run.pausedNodeId } : {}),
                 sceneIndexes,
                 ...(silentScenes.length ? { silentScenes } : {}),
+                ...(run.songPartStop ? { songPart: songPartWithoutAddress(run.songPartStop) } : {}),
+                ...(run.songCalls ? { songCalls: true } : {}),
             };
         }
         if (run.requestQuotePending === true)
@@ -987,6 +1088,7 @@ export function classifyRun(run) {
                 ...(held ? { heldReason: held } : {}),
                 ...(run.blockingMap === true ? { blockingMap: true } : {}),
                 ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true } : {}),
+                ...(run.songCalls ? { songCalls: run.songCalls } : {}),
             };
         }
         if (parkedAtFinalWatch(run)) {
@@ -1014,6 +1116,7 @@ export function classifyRun(run) {
                 ...(run.appCut === "making" ? { appMakesCut: true } : {}),
                 ...(appCutOutdates(run) ? { appOutdatesCut: true } : {}),
                 ...(run.launchDoor === "template" ? { fromTemplate: true } : {}),
+                ...(run.songCalls ? { songCalls: true } : {}),
             };
         }
         return { at: "paused", nodeId: run.pausedNodeId, reason: run.pauseReason };
@@ -1177,12 +1280,14 @@ function scenesPhrase(scenes) {
         return `scene ${scenes[0]}`;
     return `scenes ${scenes.slice(0, -1).join(", ")} and ${scenes[scenes.length - 1]}`;
 }
-function missingSceneLines(missing, framesNodeId, runId, runUrl) {
+function missingSceneLines(missing, framesNodeId, runId, runUrl, songCalls = false) {
     const scenes = missing.map((m) => m.sceneIndex);
     const lines = [
         `Parked: ${scenesPhrase(scenes)} ${scenes.length === 1 ? "has" : "have"} no clip yet, so the ad isn't complete.`,
     ];
-    for (const { sceneIndex, pictureRefused } of missing) {
+    if (songCalls)
+        lines.push(SONG_CALL_NO_ONE_SCENE);
+    for (const { sceneIndex, pictureRefused } of songCalls ? [] : missing) {
         if (!pictureRefused) {
             lines.push(`Redo clip ${sceneIndex}:     exodus video retry-clip ${runId} --scene ${sceneIndex}`);
             continue;
@@ -1196,10 +1301,10 @@ function missingSceneLines(missing, framesNodeId, runId, runUrl) {
     lines.push("The ad can't be approved until every scene has a clip.", `Watch it here:   ${runUrl}`);
     return lines;
 }
-function heldSceneLines(scenes, runId, videoPage, heldTakes = [], redoFaultScenes) {
+function heldSceneLines(scenes, runId, videoPage, heldTakes = [], redoFaultScenes, songCalls = false) {
     const takes = scenes.filter((scene) => heldTakes.some((t) => t.sceneIndex === scene));
     const faults = scenes.filter((scene) => !takes.includes(scene));
-    return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage, redoFaultScenes) : [])];
+    return [...heldTakeLines(takes, heldTakes, runId, videoPage), ...(faults.length > 0 ? drawingFaultLines(faults, runId, videoPage, redoFaultScenes, songCalls) : [])];
 }
 function heldTakeLines(takes, heldTakes, runId, videoPage) {
     if (takes.length === 0)
@@ -1215,7 +1320,7 @@ function heldTakeLines(takes, heldTakes, runId, videoPage) {
         `${one ? "Watch it first:  " : "Watch them first:"} ${videoPage}`,
     ];
 }
-function drawingFaultLines(scenes, runId, videoPage, redoFaultScenes) {
+function drawingFaultLines(scenes, runId, videoPage, redoFaultScenes, songCalls = false) {
     const one = scenes.length === 1;
     const redone = redoFaultScenes === undefined ? scenes : scenes.filter((scene) => redoFaultScenes.includes(scene));
     const checked = scenes.filter((scene) => !redone.includes(scene));
@@ -1227,14 +1332,18 @@ function drawingFaultLines(scenes, runId, videoPage, redoFaultScenes) {
     ].join(", and ");
     return [
         `Held: ${heldWhy}, so the final video wasn't made.`,
-        ...scenes.map((scene) => one
-            ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
-            : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`),
+        ...(songCalls
+            ? [SONG_CALL_NO_ONE_SCENE]
+            : scenes.map((scene) => one
+                ? `Remake it:        exodus video retry-clip ${runId} --scene ${scene}`
+                : `Remake scene ${scene}:   exodus video retry-clip ${runId} --scene ${scene}`)),
         ...scenes.map((scene) => one ? `Keep it as it is: exodus video keep ${runId} --scene ${scene}` : `Keep scene ${scene} as it is: exodus video keep ${runId} --scene ${scene}`),
         `Or on the video's page: ${videoPage}`,
     ];
 }
 function pilotLines(stop, runId, runUrl) {
+    if (stop.songPart)
+        return songPartLines(stop, stop.songPart, runId, runUrl);
     const scenes = stop.sceneIndexes;
     const checks = stop.checks ?? [];
     const failedScenes = checks.filter((c) => c.clip === "failed").map((c) => c.sceneIndex);
@@ -1265,6 +1374,60 @@ function pilotLines(stop, runId, runUrl) {
     }
     const redoScene = failedScenes[0] ?? scenes[0];
     lines.push(`Redo it:              exodus video retry-clip ${runId} --scene ${redoScene ?? "<n>"} --note "<what is wrong>"`, `Make the other clips: exodus video approve ${runId}`);
+    return lines;
+}
+export const SONG_PART_NOT_NOW = "Not now: nothing more is made or paid until you say yes. The song, the look and characters, the pictures and the first part's clips are paid.";
+export const SONG_PART_LATER = "You can make the rest later from this video at the price it shows then, or start a new video, which pays again from the start.";
+export { SONG_CALL_NEW_VIDEO };
+export const SONG_CALL_FIRST_PART_NOT_MADE = `A clip of this video's first part was not made, and a clip of this video can't be filmed again on its own, so the rest will not be filmed. ${SONG_CALL_NEW_VIDEO}`;
+function songPartWithoutAddress(part) {
+    const { previewUrl, ...rest } = part;
+    return { ...rest, ...(previewUrl ? { previewReady: true } : {}) };
+}
+function songPartLines(stop, part, runId, runUrl) {
+    const checks = stop.checks ?? [];
+    const failedScenes = checks.filter((c) => c.clip === "failed").map((c) => c.sceneIndex);
+    const n = part.scenes.length;
+    const until = part.untilSec !== undefined ? `the song's first ${Math.round(part.untilSec)} s` : "the song's first part";
+    const lines = [
+        failedScenes.length
+            ? `Run ${runId}'s first part has a clip that was not made (${scenesPhrase(failedScenes)}) and is waiting for you.`
+            : `Run ${runId} made the first part: ${n === 1 ? "1 clip" : `${n} clips`}, ${until} (${scenesPhrase(part.scenes)}), and is waiting for you.`,
+        `Watch it here:        ${runUrl}`,
+        ...(part.previewReady
+            ? ["That page has its rough cut with the song, and its clips one by one."]
+            : failedScenes.length
+                ? ["There is no rough cut with the song: it is made only when every clip of the first part is made."]
+                : part.previewStale
+                    ? ["There is no rough cut of the first part's clips as they are now: each clip is made without the song, which is laid under them in the cut."]
+                    : part.previewFailed
+                        ? ["Its rough cut with the song could not be made: each clip is made without the song, which is laid under them in the cut."]
+                        : ["Each clip is made without the song: the song is laid under them in the cut."]),
+    ];
+    for (const c of checks) {
+        if (c.clip === "failed")
+            lines.push(`Clip failed, scene ${c.sceneIndex}: ${c.error ?? "no clip was made"}`);
+        else if (c.clip === "making")
+            lines.push(`Clip, scene ${c.sceneIndex}: still being made, not checked yet`);
+        else {
+            for (const detail of c.failed)
+                lines.push(`Check failed, scene ${c.sceneIndex}: ${detail}`);
+            for (const detail of c.skipped)
+                lines.push(`Check skipped, scene ${c.sceneIndex}: ${detail}`);
+        }
+    }
+    const redoScene = failedScenes[0] ?? part.scenes[0];
+    if (stop.songCalls && failedScenes.length > 0) {
+        lines.push(SONG_CALL_FIRST_PART_NOT_MADE, SONG_PART_NOT_NOW);
+    }
+    else {
+        lines.push(part.rest
+            ? `The rest:             about $${part.rest.aboutUsd.toFixed(2)}, at most $${part.rest.mostUsd.toFixed(2)}, paid only when you say yes to it.`
+            : "The rest:             its price can't be worked out, so it can't be made: start a new video with the whole song.", stop.songCalls
+            ? `A clip of this video can't be filmed again on its own. ${SONG_CALL_NEW_VIDEO}`
+            : `Redo a clip:          exodus video retry-clip ${runId} --scene ${redoScene ?? "<n>"} --note "<what is wrong>"`, ...(part.rest ? [`Make the rest:        exodus video approve ${runId} --max-usd ${part.rest.mostUsd.toFixed(2)}`] : []), SONG_PART_NOT_NOW, SONG_PART_LATER);
+    }
+    lines.push(...(part.spentUsd !== undefined ? [`So far this video has cost $${part.spentUsd.toFixed(2)} to make, checks and text calls included.`] : []));
     return lines;
 }
 export function stopLines(stop, runId, runUrl, videoPage) {
@@ -1313,13 +1476,16 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                     : [
                         "Parked: the storyboard is waiting for your yes.",
                         `Read it:    exodus video storyboard ${runId}`,
-                        `Approve it: exodus video approve ${runId}`,
+                        ...(songCallsProblem(stop.songCalls) ? [] : [`Approve it: exodus video approve ${runId}`]),
                     ]),
         ];
         if (stop.showAd) {
             lines.push(`Send back:  exodus video flag ${runId} --note "what's wrong"`);
         }
-        if (stop.framesNodeId) {
+        if (stop.songCalls) {
+            lines.push(...songCallStopLines(stop.songCalls, videoPage || runUrl));
+        }
+        else if (stop.framesNodeId) {
             lines.push(`Redo one frame: exodus video retry-frame ${runId} --node ${stop.framesNodeId} --scene <n>`);
         }
         if (stop.blockingMap)
@@ -1328,10 +1494,10 @@ export function stopLines(stop, runId, runUrl, videoPage) {
     }
     if (stop.at === "final-watch") {
         if (stop.missingScenes?.length) {
-            return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl);
+            return missingSceneLines(stop.missingScenes, stop.framesNodeId, runId, runUrl, stop.songCalls === true);
         }
         if (stop.heldScenes?.length)
-            return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes, stop.redoFaultScenes);
+            return heldSceneLines(stop.heldScenes, runId, videoPage, stop.heldTakes, stop.redoFaultScenes, stop.songCalls === true);
         if (stop.cutFailure) {
             return [
                 "Parked: every piece is made, but the app's cut of them didn't work.",
@@ -1517,6 +1683,16 @@ function clipQcOf(item) {
 function outputsOfNodeKind(run, kind) {
     return run.nodes.filter((n) => n.kind === kind).flatMap((n) => n.outputs ?? []);
 }
+function songCallInPointOf(artifact) {
+    const call = artifact.songCall;
+    return call && Number.isInteger(call.sceneIndex) && Number.isFinite(call.fromSec) && call.fromSec >= 0 &&
+        Number.isFinite(call.seconds) && call.seconds > 0
+        ? {
+            sceneIndex: call.sceneIndex, fromSec: call.fromSec, seconds: call.seconds,
+            ...(Number.isFinite(call.orderedSec) && call.orderedSec > 0 ? { orderedSec: call.orderedSec } : {}),
+        }
+        : undefined;
+}
 function clipFromArtifact(sceneIndex, artifact) {
     if (!artifact || artifact.type !== "video" || artifact.final || !artifact.videoUrl) {
         return null;
@@ -1538,6 +1714,7 @@ function clipFromArtifact(sceneIndex, artifact) {
         voicePitchMethod: artifact.voicePitchMethod ?? null,
         replannedIdea: artifact.replannedIdea ?? null,
         ...(artifact.voiceLock !== undefined ? { voiceLock: artifact.voiceLock } : {}),
+        ...(songCallInPointOf(artifact) ? { songCall: songCallInPointOf(artifact) } : {}),
         ...(artifact.availableTakes ? { availableTakes: artifact.availableTakes } : {}),
     };
 }
@@ -1967,6 +2144,7 @@ export function planPull(run, items, opts) {
             voicePitchHz: clip ? clip.voicePitchHz : null,
             voicePitchMethod: clip ? clip.voicePitchMethod : null,
             ...(clip?.voiceLock !== undefined ? { voiceLock: clip.voiceLock } : {}),
+            ...(clip?.songCall ? { songCall: clip.songCall } : {}),
             ...(availableTakes ? { availableTakes } : {}),
             clipStatus: item?.status ?? "missing",
             error: item?.error ?? null,
@@ -2037,6 +2215,13 @@ export function planPull(run, items, opts) {
             ...(clipAudio ? { clipAudio } : {}),
             ...(run.videoChoice?.videoModel === "template-video" && run.heldSong === true
                 ? { wholeVoice: true, templateMotion: { enabled: true } } : {}),
+            ...(scenes.some((scene) => scene.songCall)
+                ? {
+                    wholeVoice: true,
+                    songCallCut: SONG_CALL_CUT,
+                    calls: songCallsOfPull(scenes.map((scene) => ({ index: scene.sceneIndex, clip: scene.clip, songCall: scene.songCall }))),
+                }
+                : {}),
             ...(run.shots?.frame || run.shots?.pacing ? { shots: run.shots } : {}),
             ...(finished ? { video: finished.file } : {}),
         },
@@ -4256,6 +4441,7 @@ export async function statusFlow(runId, json, deps) {
     const everyHoldKept = delivered || (holdRows.length > 0 && holdRows.every((r) => r.acceptedAsIs !== undefined));
     const said = warnings
         .filter((w) => !byDesign(run.nodes.find((n) => n.nodeId === w.nodeId)))
+        .filter((w) => !(w.warning === SONG_CALL_NO_SCENE_PICTURES && guidance.includes(SONG_CALL_NO_SCENE_PICTURES)))
         .map((w) => (everyHoldKept && w.warning ? { ...w, warning: heldChoiceMade(w.warning) } : w));
     if (json) {
         return {
@@ -4561,7 +4747,13 @@ export async function storyboardFlow(runId, json, deps) {
         return errorResult(res, json);
     const board = customerAnswer(res.data);
     if (board) {
-        return { code: 0, lines: json ? [JSON.stringify(board)] : customerStoryboardLines(board, customerRunPage(deps.dashboardUrl, board.runId)) };
+        if (json)
+            return { code: 0, lines: [JSON.stringify(board)] };
+        const runRes = board.filmsCalls
+            ? await deps.get(`${RUN_PATH}?runId=${encodeURIComponent(runId)}`).catch(() => null)
+            : null;
+        const songCalls = runRes?.ok === true ? customerAnswer(runRes.data)?.songCalls : undefined;
+        return { code: 0, lines: customerStoryboardLines(board, customerRunPage(deps.dashboardUrl, board.runId), songCalls) };
     }
     const cards = res.data;
     if (json)
@@ -4593,6 +4785,9 @@ export async function storyboardFlow(runId, json, deps) {
         for (const scene of loose)
             lines.push(...sceneCardLines(scene));
     }
+    lines.push(...openingLines(cards.openings, runId, cards.openingsDigest));
+    if (!cards.openings && cards.openingPicked)
+        lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
     const voiceRes = await deps
         .get(`${VOICES_PATH}?runId=${encodeURIComponent(runId)}`)
         .catch(() => null);
@@ -4615,6 +4810,7 @@ export async function storyboardFlow(runId, json, deps) {
         .catch(() => null);
     const showAd = runRes?.ok === true && isShowAd(asVideoRun(runRes.data));
     const blockingMap = runRes?.ok === true && asVideoRun(runRes.data).blockingMap === true;
+    const songCalls = runRes?.ok === true ? asVideoRun(runRes.data).songCalls : undefined;
     const logic = cards.logicFindings;
     if (logic) {
         lines.push("", "The check before pictures");
@@ -4627,13 +4823,15 @@ export async function storyboardFlow(runId, json, deps) {
         for (const n of logic.notes ?? [])
             lines.push(`  note: ${n}`);
     }
-    lines.push("", logic?.open
-        ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
-        : `approve with: exodus video approve ${runId}`);
+    if (!songCallsProblem(songCalls)) {
+        lines.push("", logic?.open
+            ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
+            : `approve with: exodus video approve ${runId}`);
+    }
     if (showAd) {
         lines.push(`send it back: exodus video flag ${runId} --note "what's wrong"`);
     }
-    if (cards.framesNodeId) {
+    if (cards.framesNodeId && !songCalls) {
         lines.push(`redo one frame: exodus video retry-frame ${runId} --node ${cards.framesNodeId} --scene <n>`);
     }
     if (cards.broll === true) {
@@ -4646,6 +4844,8 @@ export async function storyboardFlow(runId, json, deps) {
         const workflowId = runRes?.ok === true ? asVideoRun(runRes.data).workflowId : undefined;
         lines.push(`See the pictures: ${reviewUrl(deps.dashboardUrl, { _id: runId, ...(workflowId ? { workflowId } : {}) })}`);
     }
+    if (songCalls)
+        lines.push("", ...songCallStopLines(songCalls, customerRunPage(deps.dashboardUrl, runId)));
     return { code: 0, lines };
 }
 function sceneCardLines(scene) {
@@ -4752,6 +4952,20 @@ async function waitsForFinalApprove(runId, deps) {
         return null;
     }
 }
+export function approveOpeningOf(occurrences) {
+    const typed = occurrences.filter((occurrence) => occurrence.flag === "opening");
+    if (typed.length === 0)
+        return undefined;
+    const value = typed[typed.length - 1].value;
+    return value !== undefined && /^[1-9]\d*$/.test(value) ? Number(value) : "bad";
+}
+export function approveOpeningsDigestOf(occurrences) {
+    const typed = occurrences.filter((occurrence) => occurrence.flag === "openings");
+    if (typed.length === 0)
+        return undefined;
+    const value = typed[typed.length - 1].value?.trim().toLowerCase();
+    return value !== undefined && /^[0-9a-f]{16}$/.test(value) ? value : "bad";
+}
 export async function approveFlow(runId, opts, deps) {
     let requestQuote;
     if (opts.requestQuoteHash !== undefined) {
@@ -4773,12 +4987,15 @@ export async function approveFlow(runId, opts, deps) {
         ...(opts.approveStaleCut ? { approveStaleCut: true } : {}),
         ...(requestQuote ? { requestQuote } : {}),
         ...(opts.auditionDigest ? { auditionDigest: opts.auditionDigest } : {}),
+        ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
+        ...(opts.opening !== undefined ? { opening: opts.opening, ...(opts.openingsDigest ? { openings: opts.openingsDigest } : {}) } : {}),
     });
     if (!res.ok) {
         const refusal = errorResult(res, opts.json);
         const staleCut = !opts.json && videoApiError(res).includes("approve this cut anyway");
         if (!opts.json && videoApiError(res).includes("accept the findings")) {
-            return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId} --accept-findings`] };
+            const opening = opts.opening !== undefined ? ` --opening ${opts.opening}${opts.openingsDigest ? ` --openings ${opts.openingsDigest}` : ""}` : "";
+            return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId}${opening} --accept-findings`] };
         }
         const waiting = opts.json || staleCut || videoApiError(res) === FINISH_STILL_CUTTING ? [] : await waitingLinesAfterRefusal(runId, deps);
         if (waiting.length > 0)
@@ -4806,6 +5023,7 @@ export async function approveFlow(runId, opts, deps) {
         code: 0,
         lines: [
             ...(final ? finalApprovedLines(final.template) : ["Approved."]),
+            ...(opts.opening !== undefined ? [`Take 1 starts with opening ${opts.opening}.`] : []),
             ...warnings,
             ...(summary.length > 0 ? ["", ...summary, ""] : []),
             `See what happens next: exodus video status ${runId}`,
@@ -5642,8 +5860,17 @@ export async function keepFlow(runId, sceneIndex, json, deps) {
     }
     if (!res.ok)
         return errorResult(res, json);
+    const data = res.data;
+    const keptScenes = Array.isArray(data?.keptScenes) && data.keptScenes.every((n) => typeof n === "number") ? data.keptScenes : null;
+    const sentence = keptScenes && typeof data?.sentence === "string" ? data.sentence : null;
     if (json)
-        return { code: 0, lines: [JSON.stringify({ ok: true, runId, sceneIndex })] };
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, sceneIndex, ...(sentence && keptScenes ? { keptScenes } : {}) })] };
+    if (sentence) {
+        return {
+            code: 0,
+            lines: [sentence, "If the final video was waiting on these scenes alone, the app makes it now.", `See where it stands: exodus video status ${runId}`],
+        };
+    }
     return {
         code: 0,
         lines: [
@@ -6073,12 +6300,16 @@ export function planCustomerPull(run, items, meta) {
         const scene = scenes.get(item.sceneIndex) ?? { index: item.sceneIndex, clip: null, voice: null };
         if (item.url && item.kind === "clip" && scene.clip === null) {
             scene.clip = take(`${scenePrefix(item.sceneIndex)}.${extFor(item.url, "video")}`, item.url);
+            const inPoint = songCallInPointOf(item);
+            if (inPoint)
+                scene.songCall = inPoint;
         }
         if (item.url && item.kind === "voice" && scene.voice === null) {
             scene.voice = take(`${scenePrefix(item.sceneIndex)}.voice.${extFor(item.url, "audio")}`, item.url);
         }
         scenes.set(item.sceneIndex, scene);
     }
+    const calls = songCallsOfPull([...scenes.values()]);
     const videoUrl = run.video?.url;
     const video = videoUrl ? take(`video.${extFor(videoUrl, "video")}`, videoUrl) : null;
     return {
@@ -6090,6 +6321,7 @@ export function planCustomerPull(run, items, meta) {
             scenes: [...scenes.values()].sort((a, b) => a.index - b.index),
             music,
             video,
+            ...(calls.length ? { calls } : {}),
         },
     };
 }
@@ -6134,6 +6366,7 @@ async function customerPullFlow(run, dir, json, deps) {
             `Pulled ${downloads.length - failures.length + 1} files into ${dir}`,
             `Every piece is listed in ${manifestPath}.`,
             ...replacedVideoLines(dir, manifest.video, videoBefore, deps),
+            ...songCallPullLines(manifest.calls ?? []),
             ...(manifest.video ? [] : ["The finished video isn't ready yet, so only the scene pieces came down."]),
             ...customerWaitingNote(run),
             ...(failures.length > 0
@@ -6176,6 +6409,10 @@ export async function pullFlow(runId, dir, json, deps) {
         dashboardUrl: deps.dashboardUrl,
         ...(deps.piecesOnly ? { piecesOnly: true } : {}),
     });
+    if (plan.manifest.songCallCut && !cutScriptFitsSongCalls(deps.cutScriptOf?.() ?? null)) {
+        const refusal = SONG_CALL_OLD_CUT_SCRIPT.replace("<runId>", runId);
+        return { code: 1, lines: [json ? JSON.stringify({ runId, error: refusal }) : refusal] };
+    }
     deps.mkdirp(dir);
     if (plan.downloads.length === 0 && plan.texts.length === 0) {
         deps.writeFile(path.join(dir, "manifest.json"), `${JSON.stringify(plan.manifest, null, 2)}\n`);
@@ -6211,6 +6448,8 @@ export async function pullFlow(runId, dir, json, deps) {
         `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
         ...replacedVideoLines(dir, plan.manifest.video, videoBefore, deps),
         ...musicLines(plan.manifest),
+        ...songCallPullLines(plan.manifest.calls ?? []),
+        ...(run.songAsVoice && run.songMissing ? [SONG_MISSING_PULL_LINE] : []),
     ];
     if (plan.manifest.dropped.length > 0) {
         lines.push("", `B-roll left out on purpose (no clip; the edit stays on the speaker): scene${plan.manifest.dropped.length === 1 ? "" : "s"} ${plan.manifest.dropped.join(", ")}. Cut with --skip ${plan.manifest.dropped.join(",")}.`);
@@ -6889,11 +7128,16 @@ const VALUE_FLAGS = new Set([
     "title",
     "sheet",
     "persona",
+    "opening",
+    "openings",
 ]);
 const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
 const WRITE_VALUE_FLAGS = new Set(["kind", "people-max-usd"]);
 const START_VALUE_FLAGS = new Set(["max-usd"]);
 const SHEET_PEOPLE_VALUE_FLAGS = new Set(["count", "max-usd"]);
+const SHEET_SAMPLES_VALUE_FLAGS = new Set(["sounds", "count", "max-usd"]);
+const APPROVE_VALUE_FLAGS = new Set(["max-usd"]);
+const SHEET_CAST_VALUE_FLAGS = new Set(["max-usd"]);
 const SHEET_SET_VALUE_FLAGS = new Set(["people-max-usd"]);
 export function parsePositional(args = process.argv.slice(3)) {
     const read = (valueFlags) => {
@@ -6918,14 +7162,23 @@ export function parsePositional(args = process.argv.slice(3)) {
     if (asFind[0] === "swipe" && asFind[1] === "find")
         return asFind;
     const asWrite = read(WRITE_VALUE_FLAGS);
-    if (asWrite[0] === "swipe" && asWrite[1] === "write")
+    if (asWrite[0] === "swipe" && (asWrite[1] === "write" || asWrite[1] === "new"))
         return asWrite;
     const asStart = read(START_VALUE_FLAGS);
     if (asStart[0] === "swipe" && asStart[1] === "start")
         return asStart;
     const asPeople = read(SHEET_PEOPLE_VALUE_FLAGS);
-    if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && asPeople[2] === "people")
+    if (asPeople[0] === "swipe" && asPeople[1] === "sheet" && (asPeople[2] === "people" || asPeople[2] === "lyric"))
         return asPeople;
+    const asSamples = read(SHEET_SAMPLES_VALUE_FLAGS);
+    if (asSamples[0] === "swipe" && asSamples[1] === "sheet" && asSamples[2] === "samples")
+        return asSamples;
+    const asApprove = read(APPROVE_VALUE_FLAGS);
+    if (asApprove[0] === "approve")
+        return asApprove;
+    const asCast = read(SHEET_CAST_VALUE_FLAGS);
+    if (asCast[0] === "swipe" && asCast[1] === "sheet" && asCast[2] === "cast")
+        return asCast;
     const asSet = read(SHEET_SET_VALUE_FLAGS);
     if (asSet[0] === "swipe" && asSet[1] === "sheet" && asSet[2] === "set")
         return asSet;
@@ -7138,12 +7391,27 @@ export async function run(flags, occurrences) {
         if (flags["request-quote"] !== undefined && !/^[0-9a-f]{64}$/.test(requestQuoteHash ?? "")) {
             usage("--request-quote needs the reviewSha256 printed by exodus video quote.");
         }
+        const maxUsd = flagString(flags, "max-usd");
+        if (flags["max-usd"] !== undefined && !(maxUsd !== undefined && /^\d+(\.\d+)?$/.test(maxUsd))) {
+            usage("--max-usd needs the most the rest's price showed, in dollars: exodus video approve <runId> --max-usd 12.34");
+        }
+        const opening = approveOpeningOf(occurrences);
+        if (opening === "bad")
+            usage("--opening needs the number of an opening, as exodus video storyboard lists them: 1, 2 or 3.");
+        const openingsDigest = approveOpeningsDigestOf(occurrences);
+        if (openingsDigest === "bad")
+            usage("--openings needs the code exodus video storyboard prints with the openings.");
+        if (typeof opening === "number" && openingsDigest === undefined) {
+            usage("--opening goes with --openings <code>, as exodus video storyboard prints it with the openings.");
+        }
         return printResult(await approveFlow(runId, {
             json,
             approveStaleCut: flags["approve-stale-cut"] === true,
             acceptFindings: flags["accept-findings"] === true,
             ...(requestQuoteHash ? { requestQuoteHash } : {}),
             ...(auditionDigest ? { auditionDigest } : {}),
+            ...(maxUsd !== undefined ? { maxUsd: Number(maxUsd) } : {}),
+            ...(typeof opening === "number" ? { opening, ...(typeof openingsDigest === "string" ? { openingsDigest } : {}) } : {}),
         }, defaultDeps));
     }
     if (sub === "flag") {

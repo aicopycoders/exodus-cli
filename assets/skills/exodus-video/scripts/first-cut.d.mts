@@ -119,7 +119,7 @@ export const GUARD_SILENCE: { noise: string; minSec: number };
 
 /** #4585: the end card on the cut, holding the last scene's picture under it; throws VoiceUnderEndCardRefusal when it would cover a word. */
 export function placeEndCard(
-  timeline: unknown, brand: unknown, storyboard: unknown, pictureSec: number, speed: number, notes: string[],
+  timeline: unknown, brand: unknown, storyboard: unknown, pictureSec: number, speed: number, notes: string[], songEditing?: string | null,
 ): ReturnType<typeof endCardLayersOf>;
 
 /** #4585: the end card would cover some of the cut's voice, so the cut is not delivered. */
@@ -666,14 +666,18 @@ export function scenesWithNoClip(options: {
 /** The pace record's note for a paceSpeed the cut does not use (pacePass off, or out of range), or null. */
 export function paceSpeedNote(finishing: { pacePass?: unknown; paceSpeed?: unknown } | null | undefined): string | null;
 
-/** #3424: the sentence-gap cut, which scout's scribe.ts sentenceGapCuts mirrors. */
+/**
+ * #3424: the sentence-gap cut, which scout's scribe.ts sentenceGapCuts mirrors. COP-382: at Luke's medium and hard levels a
+ * span can take out a heard filler the script does not have (`filler`, its words), and at hard a false start's first copy
+ * (`start`), with the heard words it takes (`taken`); the mirror never sees a level.
+ */
 export function sentenceGapCuts(
   words: Array<{ w: string; s: number; e: number }>,
   lines: Array<{ text: string; asksPause: boolean; cuesBeat: boolean }>,
   levels?: { windowSec: number; db: number[] } | null,
   lineGap?: { max: number; keep: number } | null,
   jump?: JumpCut | null,
-): Array<{ s: number; e: number; after: string; gap: number; kept: number; sound: boolean; atLine?: number }>;
+): Array<{ s: number; e: number; after: string; gap: number; kept: number; sound: boolean; atLine?: number; filler?: string; start?: string; taken?: unknown[] }>;
 
 /** jumpCut: a pause over maxGap between two heard words keeps keepAfter after the earlier word and keepBefore before the later. */
 export interface JumpCut { maxGap: number; keepAfter: number; keepBefore: number }
@@ -683,3 +687,64 @@ export const JUMP_CUT: JumpCut;
 export const LOOK_PROBE: { readonly noise: string; readonly minSec: number; readonly framingMinSec: number; readonly freeze: string; readonly motion: string };
 /** jumpCut on one pause: the span it takes out, or null when it keeps the pause whole. */
 export function jumpCutSpan(endSec: number, startSec: number, jump?: JumpCut): { s: number; e: number } | null;
+
+/** COP-382: the caption fonts the cut carries, by file, in the folder captionFontsDir finds. */
+export const CAPTION_FONT_FILES: readonly string[];
+/** COP-382: the folder holding every caption font, beside the script or under a root above it (the worker's bundle), or null. */
+export function captionFontsDir(from?: string, cwd?: string): string | null;
+/** COP-382: a path as a filter option's value inside a filter graph, escaped for both. */
+export function filterPath(value: string): string;
+
+/** COP-382: a run's sheet's words over the last shot: where they come in and where the film ends, on the cut's clock. */
+export function placeEndingWords(timeline: unknown, text: string, speed: number, notes: string[]): { text: string; in: number; out: number; heldFrom?: number } | null;
+/** COP-273 P4f cut: the pull's marker that a call run is cut the fitted way (each call's whole clip fitted to its lines). */
+export const SONG_CALL_CUT: "fit";
+/** A call played slower or faster than these gets a note (no speed limit: the lead's ruling of Nov 15). */
+export const SONG_CALL_NOTE_SLOWER: number;
+export const SONG_CALL_NOTE_FASTER: number;
+/** A clip's fit to its call's stretch of the song, at any speed; null only when a length is missing. */
+export function songCallFit(clipSec: number, callSec: number): { speed: number } | null;
+export function songCallUnreadSentence(scenes: readonly number[]): string;
+export function songCallSpeedNote(scenes: readonly number[], speed: number): string | null;
+/** Fix round 2 (S3): a call is fitted from its ordered seconds; a clip further than this from them gets one note. */
+export const SONG_CALL_ORDER_GAP_SEC: number;
+export function songCallLengthNote(scenes: readonly number[], probedSec: number, orderedSec: number, speed: number, cutSec?: number): string | null;
+/** W2 cut fix (M1): what a clip played from its start at `speed` for `callSec` of the song leaves unshown or holds. */
+export function songCallShownTail(probedSec: number, callSec: number, speed: number): string;
+export function songCallPartSkippedSentence(scenes: readonly number[]): string;
+/** Fix round 2 (M1): a call only partly in the cut (a scene's copy missing, held as a still) is refused. */
+export function songCallPartMissingSentence(scenes: readonly number[], absent: readonly number[], pullAgain: boolean, runId: string): string;
+export const SONG_CALL_NO_WHOLE_SONG: string;
+export const SONG_CALL_OLD_PULL: string;
+/** Fix round 2 (S1): a member's own pull of a call run is cut by the app; the folder is for an editor. */
+export const SONG_CALL_MEMBER_FOLDER: string;
+export const SONG_CALL_NO_MEASURED_MAP: string;
+/** COP-273 W2 cut, songEnd: Luke's end on a sung run with a saved finish (the film, its fade, the end card). */
+export const SONG_END_AFTER_SEC: number;
+export const SONG_END_FADE_SEC: number;
+export const SONG_END_CARD_SEC: number;
+export const SONG_END_CARD_FADE_SEC: number;
+/** COP-273 W2 cut, songCaptions: the caption looks a sung run's saved finish names, drawn on the sung words. */
+export interface SongCaptionLook {
+  readonly per: number; readonly size: number; readonly y: number; readonly caps: boolean;
+  readonly colour: string; readonly lit: string | null; readonly outline: number; readonly shadow: number;
+}
+export const SONG_CAPTION_LOOKS: { readonly lit: SongCaptionLook; readonly line: SongCaptionLook; readonly word: SongCaptionLook };
+export const SONG_CAPTION_HOLD_SEC: number;
+/** COP-273 W2 cut, songEditing: light dips to black into the end card; off does nothing. */
+export const SONG_EDITING_LEVELS: { readonly off: null; readonly light: { readonly lead: number; readonly in: number; readonly out: number } };
+export function songEndOf(
+  spine: readonly unknown[], whole: { starts: Map<number, number>; seconds: number }, notes?: string[] | null,
+): { lastSungSec: number; seconds: number; cutBySec: number } | null;
+export function songEndNote(songEnd: { lastSungSec: number; cutBySec: number }, pictureSec: number): string;
+/** W2 cut fix (S2): the note of a song laid on its measured map, which keeps its own end and draws no dip. */
+export function songEndMeasuredNote(songEditing: string | null | undefined): string;
+export function songEndCardOf(
+  brand: unknown, storyboard: unknown, pictureSec: number, editing?: string | null,
+): { file: string; in: number; out: number; seconds: number; fadeSec: number; dip?: { from: number; lead: number; in: number; out: number } } | null;
+export function songCaptionScreens(
+  words: readonly { text: string; start: number; end: number; line?: string }[], look: SongCaptionLook,
+): { text: string; s: number; e: number; line?: string; words: { text: string; start: number }[] }[];
+export function songLitScreens<T extends { text: string; s: number; e: number; line?: string; words?: { text: string; start: number }[] }>(
+  screens: readonly T[], look: SongCaptionLook | null,
+): { text: string; s: number; e: number; line?: string }[];

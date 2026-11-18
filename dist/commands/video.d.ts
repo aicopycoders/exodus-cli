@@ -2,7 +2,7 @@ import { type TemplateAudition } from "../lib/template-audition.js";
 import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
-import { type SpeechSummary, type CustomerItem, type CustomerRun } from "./video-customer.js";
+import { type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
 export type ScriptRunOptions = {
@@ -141,6 +141,7 @@ export type ArtifactSubset = {
     voicePitchMethod?: string;
     replannedIdea?: ReplannedIdea;
     voiceLock?: unknown;
+    songCall?: SongCallInPoint;
     availableTakes?: StoredTake[];
 } | {
     type: "audio";
@@ -215,6 +216,20 @@ export interface PullCastLock {
     styleSlug?: string;
     cast: PullCastLockMember[];
 }
+export interface SongPartStop {
+    scenes: number[];
+    firstSec: number;
+    untilSec?: number;
+    rest: {
+        aboutUsd: number;
+        mostUsd: number;
+    } | null;
+    previewUrl?: string;
+    previewReady?: true;
+    previewFailed?: true;
+    spentUsd?: number;
+    previewStale?: true;
+}
 export interface VideoRun {
     _id: string;
     launchDoor?: "template";
@@ -240,6 +255,8 @@ export interface VideoRun {
         sceneIndexes?: number[];
         approvedAt?: number;
     };
+    songPartStop?: SongPartStop;
+    songCalls?: object;
     requestQuotePending?: boolean;
     templateAudition?: TemplateAudition;
     sourceEditMap?: true;
@@ -252,6 +269,7 @@ export interface VideoRun {
     videoChoice?: RunVideoChoice;
     songAsVoice?: true;
     heldSong?: true;
+    songMissing?: true;
     roomTone?: boolean;
     shots?: RunShots;
     storyboardAutoApproval?: {
@@ -286,6 +304,26 @@ export interface RunDirector {
         text: string;
     }[];
 }
+export declare const SONG_MISSING_PULL_LINE = "This video's voice is one song, but the run holds no song, so a cut made from these files uses the lines as they were read.";
+export declare const SONG_CALL_CUT: "fit";
+export interface SongCallOfPull {
+    scenes: number[];
+    clip: string;
+    seconds: number;
+    orderedSec?: number;
+}
+export declare function songCallsOfPull(scenes: ReadonlyArray<{
+    index: number;
+    clip: string | null;
+    songCall?: SongCallInPoint;
+}>): SongCallOfPull[];
+export declare const SONG_CALL_FIT_LINE = "Each clip listed under calls in manifest.json is played whole, sped up or slowed down to last exactly its lines' stretch of the song (its seconds).";
+export declare const SONG_CALL_ORDERED_FIT_LINE = "Each clip listed under calls in manifest.json with an orderedSec (the seconds it was ordered at) is played from its start at orderedSec divided by seconds times its filmed speed, so those seconds last exactly its lines' stretch of the song (its seconds): a clip longer than its order loses its end, and a shorter one holds its last frame.";
+export declare const SONG_CALL_UNORDERED_FIT_LINE = "A clip listed there with no orderedSec is played whole, sped up or slowed down to last exactly its lines' stretch of the song (its seconds).";
+export declare const SONG_CALL_SHARED_LINE = "Some scenes share one clip: each says where its line starts in that clip's stretch (songCall.fromSec) and how long it lasts (songCall.seconds).";
+export declare function songCallPullLines(calls: readonly SongCallOfPull[]): string[];
+export declare const SONG_CALL_OLD_CUT_SCRIPT = "This video fits each clip to its lines, and this workspace's first-cut is older and would cut it another way, so nothing was pulled. Refresh the workspace, which is free and makes nothing again: exodus update. Then pull it again: exodus video pull <runId>";
+export declare function cutScriptFitsSongCalls(script: string | null): boolean;
 export declare function asVideoRun(data: unknown): VideoRun;
 export interface NodeItem {
     nodeId: string;
@@ -355,6 +393,7 @@ export interface VideoDeps {
     sleep: (ms: number) => Promise<void>;
     now: () => number;
     dashboardUrl: string;
+    cutScriptOf?: () => string | null;
 }
 export declare const defaultDeps: VideoDeps;
 export declare const VIDEO_NOT_FOUND_MESSAGE: string;
@@ -375,6 +414,7 @@ export type RunStop = {
     place?: {
         imageUrl: string | null;
     };
+    songCalls?: unknown;
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];
@@ -388,12 +428,15 @@ export type RunStop = {
     appOutdatesCut?: true;
     redoingScenes?: number[];
     fromTemplate?: true;
+    songCalls?: true;
 } | {
     at: "pilot";
     nodeId?: string;
     sceneIndexes: number[];
     silentScenes?: number[];
     checks?: PilotCheck[];
+    songPart?: SongPartStop;
+    songCalls?: true;
 } | {
     at: "request-quote";
 } | {
@@ -451,6 +494,10 @@ export declare function stageWord(stage: string): string;
 export declare function stepName(kind: string | undefined): string;
 export declare function isShowAd(run: Pick<VideoRun, "moduleOwned">): boolean;
 export declare function reviewUrl(dashboardUrl: string, run: Pick<VideoRun, "_id" | "workflowId">): string;
+export declare const SONG_PART_NOT_NOW = "Not now: nothing more is made or paid until you say yes. The song, the look and characters, the pictures and the first part's clips are paid.";
+export declare const SONG_PART_LATER = "You can make the rest later from this video at the price it shows then, or start a new video, which pays again from the start.";
+export { SONG_CALL_NEW_VIDEO };
+export declare const SONG_CALL_FIRST_PART_NOT_MADE = "A clip of this video's first part was not made, and a clip of this video can't be filmed again on its own, so the rest will not be filmed. A new video makes the whole ad again, at its own price, shown before you start.";
 export declare function stopLines(stop: ResolvedStop, runId: string, runUrl: string, videoPage: string): string[];
 export declare function failedStoryboardNode(run: VideoRun): VideoRunNode | undefined;
 export declare function errorEchoesReasons(error: string | undefined, record: PlanFailureRecord | undefined): boolean;
@@ -481,6 +528,7 @@ export interface ManifestScene {
     voicePitchHz: number | null;
     voicePitchMethod: string | null;
     voiceLock?: unknown;
+    songCall?: SongCallInPoint;
     availableTakes?: ManifestTake[];
     clipStatus: string;
     error: string | null;
@@ -552,6 +600,8 @@ export interface VideoManifest {
     clipAudio?: "keep" | "discard";
     roomTone?: boolean;
     wholeVoice?: true;
+    songCallCut?: typeof SONG_CALL_CUT;
+    calls?: SongCallOfPull[];
     templateMotion?: {
         enabled: true;
     };
@@ -576,6 +626,12 @@ export interface PullPlan {
 }
 export declare function extensionFromUrl(url: string): string | undefined;
 export declare function scenePrefix(sceneIndex: number): string;
+export interface SongCallInPoint {
+    sceneIndex: number;
+    fromSec: number;
+    seconds: number;
+    orderedSec?: number;
+}
 export declare function planPull(run: VideoRun, items: NodeItem[], opts: {
     pulledAt: string;
     dashboardUrl: string;
@@ -692,12 +748,17 @@ export declare function directorFlow(runId: string, on: DirectorSwitch, json: bo
 export declare function rejectedDraftFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function storyboardFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function quoteFlow(runId: string, json: boolean, deps: VideoDeps, privateExport?: boolean): Promise<FlowResult>;
+export declare function approveOpeningOf(occurrences: readonly FlagOccurrence[]): number | undefined | "bad";
+export declare function approveOpeningsDigestOf(occurrences: readonly FlagOccurrence[]): string | undefined | "bad";
 export declare function approveFlow(runId: string, opts: {
     json: boolean;
     approveStaleCut: boolean;
     acceptFindings?: boolean;
     requestQuoteHash?: string;
     auditionDigest?: string;
+    maxUsd?: number;
+    opening?: number;
+    openingsDigest?: string;
 }, deps: VideoDeps): Promise<FlowResult>;
 export interface PicksPicture {
     n: number;
@@ -1041,9 +1102,11 @@ export interface CustomerManifest {
         index: number;
         clip: string | null;
         voice: string | null;
+        songCall?: SongCallInPoint;
     }>;
     music: string | null;
     video: string | null;
+    calls?: SongCallOfPull[];
 }
 export declare function planCustomerPull(run: CustomerRun, items: CustomerItem[], meta: {
     pulledAt: string;
@@ -1123,4 +1186,3 @@ export declare function songImportFlow(runId: string, opts: SongImportOptions, j
 export declare function parsePositional(args?: string[]): string[];
 export declare function subcommandHelp(words?: readonly string[]): string | null;
 export declare function run(flags: Record<string, string | boolean>, occurrences: FlagOccurrence[]): Promise<void>;
-export {};

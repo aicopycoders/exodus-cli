@@ -387,6 +387,12 @@ export function pauseAheadLine(ahead, opts = {}) {
     if (ahead.after === "picks") {
         return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
     }
+    if (ahead.after === "pilot" && ahead.songPart) {
+        const stop = "This run will stop after the first part's clips, for your second yes and the rest's price.";
+        return ahead.wholeWhen
+            ? `${stop} If this is ${ahead.wholeWhen}, the first part is the whole video and the run makes it whole with no stop.`
+            : stop;
+    }
     if (ahead.after === "pilot") {
         return "This run will stop after its pilot clip. One clip is made and checked first; the other clips are made only when you approve it.";
     }

@@ -1337,7 +1337,7 @@ export interface WorkflowRun {
    * check passes, so it only truly pauses when one fails. Absent on runs that
    * wait for a click, and on every backend older than #2587.
    */
-  pauseAhead?: { nodeId: string; after: "frames" | "storyboard" | "picks" | "pilot"; selfApproves?: true };
+  pauseAhead?: { nodeId: string; after: "frames" | "storyboard" | "picks" | "pilot"; selfApproves?: true; songPart?: true; wholeWhen?: string };
 }
 
 /**
@@ -1357,6 +1357,14 @@ export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, op
   // Stop 2: the picks stop comes before the storyboard.
   if (ahead.after === "picks") {
     return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
+  }
+  // COP-273 P3 fix round 2: a sung video's first part; a short song may be made whole with no stop.
+  if (ahead.after === "pilot" && ahead.songPart) {
+    const stop = "This run will stop after the first part's clips, for your second yes and the rest's price.";
+    // Fix round 3: the worker's own rule, in the server's words.
+    return ahead.wholeWhen
+      ? `${stop} If this is ${ahead.wholeWhen}, the first part is the whole video and the run makes it whole with no stop.`
+      : stop;
   }
   // Stop 4: past the storyboard, the pilot clip comes before the others.
   if (ahead.after === "pilot") {

@@ -2,6 +2,8 @@ import type { FlagOccurrence } from "../lib/args.js";
 import type { ApiResponse } from "../lib/client.js";
 import { onOwnDashboard } from "./video-customer.js";
 import { type FlowResult, type VideoDeps } from "./video.js";
+import { type SheetSamplesPlan } from "./video-swipe-samples.js";
+import { type SheetCastPlan } from "./video-swipe-cast.js";
 export declare const SWIPE_BREAKDOWNS_PATH = "/api/v2/video/breakdowns";
 export declare const SWIPE_UPLOAD_URL_PATH = "/api/v2/video/breakdowns/upload-url";
 export declare const SWIPE_TEMPLATE_PATH = "/api/v2/video/swipe-template";
@@ -13,10 +15,12 @@ export declare const SWIPE_SHEET_PRICE_PATH = "/api/v2/video/swipe-sheet-price";
 export declare const SWIPE_SHEET_OPTIONS_PATH = "/api/v2/video/swipe-sheet/options";
 export declare const SHEET_SOURCES_QUERY = "sources=recommended";
 export declare const SWIPE_WRITE_PEOPLE_PATH = "/api/v2/video/swipe-write-people";
+export declare const SWIPE_SHEET_LYRIC_PATH = "/api/v2/video/swipe-sheet/lyric";
+export declare const SWIPES_OWN_PATH = "/api/v2/video/swipes/own";
 export declare const SWIPE_LIBRARY_PATH = "/api/v2/swipe-library";
 export interface SwipeBreakdown {
     _id: string;
-    sourceKind: "url" | "file" | "ad";
+    sourceKind: "url" | "file" | "ad" | "none";
     sourceUrl: string | null;
     fileName: string | null;
     status: "queued" | "running" | "done" | "failed";
@@ -168,6 +172,9 @@ export interface SwipeDraft {
         ours: number;
         theirs: number;
     };
+    song?: {
+        sentence: string;
+    };
     howClose?: {
         sentence: string;
     };
@@ -194,6 +201,8 @@ export interface SwipeView {
     workflowRunId: string | null;
     costUsd: number | null;
     runHoldsStart?: boolean;
+    scriptNote?: string;
+    ownWords?: boolean;
 }
 export interface SwipeListRow {
     _id: string;
@@ -285,7 +294,13 @@ export type SwipePriceRow = {
     lines: Array<{
         what: string;
         usd: number;
-        beforeStop?: true;
+        maxUsd?: number;
+        paidBy?: Array<{
+            payer: string;
+            usd: number;
+            maxUsd: number;
+        }>;
+        beforeStop?: boolean;
     }>;
     startRefusal?: string;
 } | {
@@ -311,6 +326,59 @@ export type SwipePrice = {
     startRefusals: string[];
     heldBy: string | null;
     approximate: true;
+    song?: {
+        pairs: number;
+        size: string;
+        clips: number;
+        takesPerClip: number;
+        checks?: {
+            what: string;
+            aboutUsd: number;
+            paidBy: "platform";
+        };
+        sizeLine?: string;
+        drawsScenePictures?: boolean;
+        sceneRedo?: boolean;
+        calls?: {
+            about: number;
+            most: number;
+            aboutPassSec?: number;
+            mostPassSec?: number;
+            blackVideo?: boolean;
+        };
+    };
+    part?: {
+        part: "first";
+        firstSec: number;
+        picturesBeforeStop: "all" | "first";
+        aboutScenes: number;
+        mostScenes: number;
+        whole: {
+            costUsd: number;
+            maxUsd: number;
+        };
+        wholeWhen?: string;
+    };
+    firstPart?: {
+        canStart: "yes";
+        firstSec: number;
+        first: {
+            costUsd: number;
+            maxUsd: number;
+        };
+        firstChecks?: {
+            aboutUsd: number;
+            paidBy: "platform";
+        };
+        rest: {
+            maxUsd: number;
+        };
+        wholeWhen: string;
+    } | {
+        canStart: "team-only";
+        firstSec: number;
+        sentence: string;
+    };
 } | {
     swipeId: string;
     kind: {
@@ -446,9 +514,18 @@ export type SwipePlan = {
     count: number | null;
     maxUsd: number | null;
     opts: SwipeOpts;
-} | {
+} | SheetSamplesPlan | SheetCastPlan | {
     kind: "sheet-voices";
     swipeId: string;
+    opts: SwipeOpts;
+} | {
+    kind: "sheet-lyric";
+    swipeId: string;
+    maxUsd: number | null;
+    opts: SwipeOpts;
+} | {
+    kind: "new";
+    ask: OwnAsk;
     opts: SwipeOpts;
 } | {
     kind: "run";
@@ -554,14 +631,25 @@ export declare function optionForJson(option: SheetOption): SheetOptionJson;
 export declare function sheetForJson(sheet: SavedSheet): Omit<SavedSheet, "sections"> & {
     sections: Array<Record<string, unknown>>;
 };
-export declare function personSectionPage(dashboardUrl: string): string;
+export declare function personSectionPage(dashboardUrl: string, section?: string): string;
 export declare function sheetLines(sheet: SavedSheet, dashboardUrl: string): string[];
 export declare function swipeSheetReadFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetSetFlow(swipeId: string, picks: Record<string, string | null>, opts: SwipeOpts, deps: VideoDeps, peopleMaxUsd?: number): Promise<FlowResult>;
+export declare function songStopCommand(why: string, swipeId: string): string | null;
 export declare function priceLines(price: SwipePrice, dashboardUrl: string): string[];
 export declare function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare const SONG_WHO_PAYS = "Who pays: the song, the pictures and the clips on your own Kie key, and the song's takes are heard on your ElevenLabs key. The text calls that plan the storyboard and write each picture and clip are on your model key: they are not in the price, and no number is shown for them.";
+export declare function sectionPageLines(lead: string, dashboardUrl: string, section?: string): string[];
 export declare function swipeSheetPeopleFlow(swipeId: string, count: number | null, maxUsd: number | null, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
 export declare function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export declare const LYRIC_LEFT_OUT_WHY_UNKNOWN = "Why it was left out was not kept for this lyric, made before reasons were kept. Your own lines say it.";
+export declare function swipeSheetLyricFlow(swipeId: string, maxUsd: number | null, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
+export interface OwnAsk {
+    kind: string;
+    productId: string;
+    scriptFile: string;
+}
+export declare function swipeOwnFlow(ask: OwnAsk, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const ANIMAL_WAIT_LINE = "The animal the script puts in the picture is being found and drawn for this swipe. The start waits for it, until 5 minutes after the write asked for it, so the video films the one on the sheet and does not pay to find and draw it again.";
 export declare const ANIMAL_GOES_ON_LINE = "The animal is still being found or drawn 5 minutes after the write asked for it, so the start goes on: the video looks for an animal in the script itself and draws one when it finds one.";
 export declare const SWIPE_ALREADY_STARTED_CODE = "SWIPE_ALREADY_STARTED";

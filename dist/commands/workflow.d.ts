@@ -461,6 +461,8 @@ export interface WorkflowRun {
         nodeId: string;
         after: "frames" | "storyboard" | "picks" | "pilot";
         selfApproves?: true;
+        songPart?: true;
+        wholeWhen?: string;
     };
 }
 export declare function boardDrawsThePlaceFirst(run: {

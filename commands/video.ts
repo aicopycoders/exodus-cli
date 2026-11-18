@@ -1271,6 +1271,12 @@ export interface VideoRun {
    * the field had a bed whenever its Show said so, which is not knowable here.
    */
   musicBed?: boolean;
+  /**
+   * #5059: a run whose saved sheet has a Music row (One-take's): the row, and once the app's cut is the run's film,
+   * whether that film holds the music (video/lib/sheetFinish.ts sheetMusicOfRun). The app's cut makes and lays this
+   * music itself, so it is never the bed above. Absent on every other run and on backends older than #5059.
+   */
+  sheetMusic?: SheetMusicState;
   /** #2282: the video model and voice mode a paste-a-script run used. Absent on
    *  every other run and on backends older than #2282. */
   videoChoice?: RunVideoChoice;
@@ -6333,6 +6339,8 @@ export async function statusFlow(
           // nothing, under the same rule as the two fields below — an absence
           // is "this backend does not say", never "off".
           ...(run.musicBed === undefined ? {} : { musicBed: run.musicBed }),
+          // #5059: the sheet's Music row and whether the app's cut holds it; absent when the server sent none.
+          ...(run.sheetMusic ? { sheetMusic: run.sheetMusic } : {}),
           // Both fields stay ABSENT when the server sent none. An empty record
           // would read as "nothing happened", and an explicit
           // `hasRejectedDraft: false` would tell an unentitled caller there is
@@ -6516,6 +6524,11 @@ export async function statusFlow(
               : "Final cut: not uploaded yet.",
     // COP-319: the app cuts every film at 1080x1920 (first-cut.mjs WIDTH, HEIGHT), whatever the takes' size.
     ...(hasFinal && stop.at === "finished" && hasAppCut(items) ? [APP_CUT_SIZE_LINE] : []),
+    // #5059: the sheet's Music row, under the cut it is laid in; no line on a run without one.
+    // A bed on the run is music too, so a sheet with Music off says nothing there.
+    ...(run.sheetMusic && !(run.musicBed === true && run.sheetMusic.row === "off")
+      ? [sheetMusicLine(run.sheetMusic, { ownCut: hasFinal && !hasAppCut(items) })]
+      : []),
     // COP-300: the cut's check against its own sound, under the cut it was made on.
     ...(run.cutCheck ?? []),
   );
@@ -8917,10 +8930,35 @@ export function voiceSheetLines(sheet: CastVoiceSheet): string[] {
   return lines;
 }
 
+/** #5059: the CLI's copy of video/lib/sheetFinish.ts SheetMusicState (this package cannot import video/lib). */
+export interface SheetMusicState {
+  row: "off" | "on";
+  /** Absent until the app's cut is the run's film. */
+  inAppCut?: boolean;
+}
+
+/**
+ * #5059: what the saved sheet's Music row did, in one line. `ownCut`: the cut on the run is not the app's, so the music
+ * the app would make is in no film; `pulled`: a music file is among the files a pull wrote.
+ */
+export function sheetMusicLine(music: SheetMusicState, opts: { ownCut?: boolean; pulled?: boolean } = {}): string {
+  if (music.row === "off") return "music: off (the sheet's Music row is off)";
+  const notHere = opts.pulled === false ? "; it is not among the files pulled here" : "";
+  if (music.inAppCut === true) return `music: on, made for this video and laid under the voice in the app's cut${notHere}`;
+  if (music.inAppCut === false) return "music: on in the sheet, but the app's cut was finished with no music";
+  if (opts.ownCut) return "music: on in the sheet, but the cut on the run is not the app's, so it holds only the music laid into it";
+  return `music: on, made for this video when the app makes the cut${notHere}`;
+}
+
 /** #2247: the bed, then the scenes the video model put music into by itself.
- *  The second is why "music: off" can still need a listen. */
-function musicLines(manifest: VideoManifest): string[] {
-  const lines = [`music: ${manifest.musicBed}`];
+ *  The second is why "music: off" can still need a listen. #5059: a run with
+ *  a sheet's Music row says that row in place of a bed it never has. */
+function musicLines(manifest: VideoManifest, sheetMusic?: SheetMusicState, ownCut = false): string[] {
+  // A bed on the run is music too, so a sheet with Music off says nothing more under it.
+  const bed = manifest.musicBed === "on";
+  const lines = !sheetMusic
+    ? [`music: ${manifest.musicBed}`]
+    : [...(bed ? [`music: ${manifest.musicBed}`] : []), ...(bed && sheetMusic.row === "off" ? [] : [sheetMusicLine(sheetMusic, { ownCut, pulled: manifest.music !== null })])];
   if (manifest.musicHeardScenes.length > 0) {
     lines.push(`music heard in scene ${manifest.musicHeardScenes.join(", ")}`);
   }
@@ -9140,7 +9178,8 @@ export async function pullFlow(
   if (json) {
     return {
       code: failed.length > 0 ? 1 : 0,
-      lines: [JSON.stringify({ runId, dir, wrote, manifest: plan.manifest })],
+      // #5059: the sheet's Music row beside the manifest, whose `musicBed` stays the bed the cut reads.
+      lines: [JSON.stringify({ runId, dir, wrote, manifest: plan.manifest, ...(run.sheetMusic ? { sheetMusic: run.sheetMusic } : {}) })],
     };
   }
 
@@ -9148,7 +9187,7 @@ export async function pullFlow(
     `Pulled ${wrote} files into ${dir}`,
     `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
     ...replacedVideoLines(dir, plan.manifest.video, videoBefore, deps),
-    ...musicLines(plan.manifest),
+    ...musicLines(plan.manifest, run.sheetMusic, hasAttachedCut(items) && !hasAppCut(items)),
     ...songCallPullLines(plan.manifest.calls ?? []),
     // COP-273 S5: said, never refused: the clips are the member's, and so is the cut they make of them.
     ...(run.songAsVoice && run.songMissing ? [SONG_MISSING_PULL_LINE] : []),

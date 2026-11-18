@@ -268,6 +268,7 @@ export interface VideoRun {
     castLock?: PullCastLock | null;
     provenance?: RunProvenance;
     musicBed?: boolean;
+    sheetMusic?: SheetMusicState;
     videoChoice?: RunVideoChoice;
     songAsVoice?: true;
     heldSong?: true;
@@ -1114,6 +1115,14 @@ export declare function voiceCatalogFlow(runId: string | undefined, json: boolea
 export declare function voicesFlow(runId: string, voices: VoiceMap | null, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare const VOICE_CLASH_HINT: string;
 export declare function voiceSheetLines(sheet: CastVoiceSheet): string[];
+export interface SheetMusicState {
+    row: "off" | "on";
+    inAppCut?: boolean;
+}
+export declare function sheetMusicLine(music: SheetMusicState, opts?: {
+    ownCut?: boolean;
+    pulled?: boolean;
+}): string;
 export interface CustomerManifest {
     runId: string;
     pulledAt: string;

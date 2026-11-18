@@ -4474,6 +4474,7 @@ export async function statusFlow(runId, json, deps) {
                     warnings,
                     guidance,
                     ...(run.musicBed === undefined ? {} : { musicBed: run.musicBed }),
+                    ...(run.sheetMusic ? { sheetMusic: run.sheetMusic } : {}),
                     ...(failedStoryboard?.planFailure ? { planFailure: failedStoryboard.planFailure } : {}),
                     ...(failedStoryboard?.planFailure
                         ? { storyboardNodeId: failedStoryboard.nodeId }
@@ -4615,7 +4616,9 @@ export async function statusFlow(runId, json, deps) {
                         ? `Final cut: made by the app. Approve it with: exodus video approve ${runId}`
                         : hasFinal
                             ? `Final cut: uploaded. Approve it with: exodus video approve ${runId}`
-                            : "Final cut: not uploaded yet.", ...(hasFinal && stop.at === "finished" && hasAppCut(items) ? [APP_CUT_SIZE_LINE] : []), ...(run.cutCheck ?? []));
+                            : "Final cut: not uploaded yet.", ...(hasFinal && stop.at === "finished" && hasAppCut(items) ? [APP_CUT_SIZE_LINE] : []), ...(run.sheetMusic && !(run.musicBed === true && run.sheetMusic.row === "off")
+        ? [sheetMusicLine(run.sheetMusic, { ownCut: hasFinal && !hasAppCut(items) })]
+        : []), ...(run.cutCheck ?? []));
     let finalSpeech;
     for (const item of items)
         if (item.itemKind === "final" && item.status === "done")
@@ -6292,8 +6295,23 @@ export function voiceSheetLines(sheet) {
         : (sheet.whyNot ?? "Voices can no longer be changed on this run."));
     return lines;
 }
-function musicLines(manifest) {
-    const lines = [`music: ${manifest.musicBed}`];
+export function sheetMusicLine(music, opts = {}) {
+    if (music.row === "off")
+        return "music: off (the sheet's Music row is off)";
+    const notHere = opts.pulled === false ? "; it is not among the files pulled here" : "";
+    if (music.inAppCut === true)
+        return `music: on, made for this video and laid under the voice in the app's cut${notHere}`;
+    if (music.inAppCut === false)
+        return "music: on in the sheet, but the app's cut was finished with no music";
+    if (opts.ownCut)
+        return "music: on in the sheet, but the cut on the run is not the app's, so it holds only the music laid into it";
+    return `music: on, made for this video when the app makes the cut${notHere}`;
+}
+function musicLines(manifest, sheetMusic, ownCut = false) {
+    const bed = manifest.musicBed === "on";
+    const lines = !sheetMusic
+        ? [`music: ${manifest.musicBed}`]
+        : [...(bed ? [`music: ${manifest.musicBed}`] : []), ...(bed && sheetMusic.row === "off" ? [] : [sheetMusicLine(sheetMusic, { ownCut, pulled: manifest.music !== null })])];
     if (manifest.musicHeardScenes.length > 0) {
         lines.push(`music heard in scene ${manifest.musicHeardScenes.join(", ")}`);
     }
@@ -6458,14 +6476,14 @@ export async function pullFlow(runId, dir, json, deps) {
     if (json) {
         return {
             code: failed.length > 0 ? 1 : 0,
-            lines: [JSON.stringify({ runId, dir, wrote, manifest: plan.manifest })],
+            lines: [JSON.stringify({ runId, dir, wrote, manifest: plan.manifest, ...(run.sheetMusic ? { sheetMusic: run.sheetMusic } : {}) })],
         };
     }
     const lines = [
         `Pulled ${wrote} files into ${dir}`,
         `Every piece is indexed in ${path.join(dir, "manifest.json")} — scene numbers there are the run's own.`,
         ...replacedVideoLines(dir, plan.manifest.video, videoBefore, deps),
-        ...musicLines(plan.manifest),
+        ...musicLines(plan.manifest, run.sheetMusic, hasAttachedCut(items) && !hasAppCut(items)),
         ...songCallPullLines(plan.manifest.calls ?? []),
         ...(run.songAsVoice && run.songMissing ? [SONG_MISSING_PULL_LINE] : []),
     ];

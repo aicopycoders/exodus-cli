@@ -147,9 +147,11 @@ export interface CustomerRun {
   planHold?: { atBoard?: boolean; beforePictures: boolean; notes?: string[]; acceptFindings?: boolean; findings?: CustomerPlanFinding[] };
   /**
    * COP-351: at that stop, the place its board drew, or tried to draw, before it: its name and look, and its picture's
-   * address, null when none came out. Absent when the board drew none, and from older servers.
+   * address, null when none came out. Absent when the board drew none, and from older servers. COP-380 (C6): `check`,
+   * how the check of its picture ended and the server's line about it (null when there is nothing to say), printed as
+   * the server words it. Absent when it was not checked, and from older servers.
    */
-  place?: { name: string; look: string; imageUrl: string | null };
+  place?: { name: string; look: string; imageUrl: string | null; check?: StopPictureCheck };
   /**
    * COP-273 P7 stage 4: on a sung run filmed in calls (convex/videoRunView.ts customerRunViewOf, songCallsOfRunView), its
    * calls and the pictures each is filmed from, or the stop's own sentence. Absent on every other run.
@@ -160,6 +162,19 @@ export interface CustomerRun {
    * the lines the song's kept take missed, and a song that came out as another kind of music. Absent otherwise.
    */
   songNotice?: string[];
+  /**
+   * COP-380: at that stop, the face photo its board drew, or tried to draw, with the place (none when a person was
+   * picked on the sheet), and the product cut-out (none when the product has no photo): each one's address, null when
+   * none came out. Absent when the board drew none, and from older servers. COP-380 (C6): each with its `check`, as the
+   * place's.
+   */
+  face?: { label: string; imageUrl: string | null; check?: StopPictureCheck };
+  cutout?: { name: string; imageUrl: string | null; check?: StopPictureCheck };
+  /**
+   * COP-388 (fix 2): at that stop, a product with no photo: its name and the server's line that the takes show a plain
+   * pack, printed as the server words it. Absent otherwise, and from older servers.
+   */
+  productNoPhoto?: { name: string; line: string };
 }
 
 /** P7 stage 4 fix (M2): the song step's notice, each sentence a heads-up; nothing for a value this CLI cannot read. */
@@ -227,6 +242,71 @@ export function songCallStopLines(songCalls: unknown, page = ""): string[] {
   if (drawn && page) lines.push(`See the pictures: ${page}`);
   const notes = Array.isArray(songCalls.notes) ? songCalls.notes.filter((note): note is string => typeof note === "string" && note.trim() !== "") : [];
   return [...lines, ...notes, SONG_CALL_NO_ONE_SCENE];
+}
+
+/**
+ * COP-380 (C6): how the check of a picture drawn before the stop ended, as the server sends it: its state (a plain
+ * string, so a state a newer server sends never breaks this CLI) and the line the run's page shows under the picture,
+ * null when there is nothing to say.
+ */
+export interface StopPictureCheck {
+  state?: string;
+  line: string | null;
+}
+
+/** COP-351, COP-380: the pictures a One-take board drew, or tried to draw, before its stop: each one's address, or null. */
+export interface StopPictures {
+  face?: { imageUrl: string | null; check?: StopPictureCheck };
+  place?: { imageUrl: string | null; check?: StopPictureCheck };
+  cutout?: { imageUrl: string | null; check?: StopPictureCheck };
+}
+
+/** COP-380: one picture drawn before the stop, as the stop's lines name it. */
+export interface StopPictureLine {
+  /** What it is, in the line that says what waits for the yes ("the script, the face, the place and the voice"). */
+  noun: string;
+  drawn: boolean;
+  /** Drawn: its line with the page that shows it (COP-375: never its own address). Not drawn: the sentence that says so. */
+  line: string;
+  /** COP-380 (C6): a drawn picture's check line, under its line, when the check left something to say. */
+  check?: string;
+}
+
+/** COP-380 (C6): each picture's lines: its own, then its check's when there is one. */
+export function stopPictureText(pictures: readonly StopPictureLine[]): string[] {
+  return pictures.flatMap((picture) => [picture.line, ...(picture.check ? [picture.check] : [])]);
+}
+
+const STOP_PICTURES = [
+  { key: "face", noun: "face", label: "The face:     ", missed: "The face photo didn't come out. It is drawn when you approve, before the takes are filmed." },
+  { key: "place", noun: "place", label: "The place:    ", missed: "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed." },
+  { key: "cutout", noun: "product cut-out", label: "The cut-out:  ", missed: "The product cut-out didn't come out. It is drawn when you approve, before the takes are filmed." },
+] as const;
+
+/**
+ * COP-351, COP-380: at a One-take run's storyboard stop, the pictures its board drew, or tried to draw, before it, in
+ * the order the run's page shows them (the face, the place, the cut-out), each with its line. Empty when the board drew
+ * none (a run from before).
+ */
+export function stopPictureLines(pictures: StopPictures, page: string): StopPictureLine[] {
+  return STOP_PICTURES.flatMap(({ key, noun, label, missed }) => {
+    const picture = pictures[key];
+    if (!picture) return [];
+    const drawn = picture.imageUrl !== null;
+    // COP-380 (C6): the check's line sits under the picture's, in line with its words.
+    const check = drawn && picture.check?.line ? `${" ".repeat(label.length)}${picture.check.line}` : undefined;
+    return [{ noun, drawn, line: drawn ? `${label}drawn. See it: ${page}` : missed, ...(check ? { check } : {}) }];
+  });
+}
+
+/** COP-388 (fix 2): the line for a product with no photo, under the pictures' lines, in line with their words. */
+export function noPhotoLines(run: { productNoPhoto?: { line: string } }): string[] {
+  return run.productNoPhoto ? [`The product:  ${run.productNoPhoto.line}`] : [];
+}
+
+/** "the script, the place and the voice". */
+export function listedWords(words: readonly string[]): string {
+  return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
 /**
@@ -425,9 +505,31 @@ export interface CustomerStoryboard {
   openings?: StoryboardOpening[];
   /** COP-381 landing review (#4995): their code, which an approve with --opening sends back with --openings. */
   openingsDigest?: string;
+  /**
+   * COP-380 landing: the face, the place and the cut-out a One-take board drew, or tried to draw, before this stop, each
+   * drawn or not and the line its check left (never an address: the run's page shows them). Absent otherwise.
+   */
+  pictures?: { face?: StoryboardPicture; place?: StoryboardPicture; cutout?: StoryboardPicture };
+  /** COP-388 landing: a product with no photo, its server's line. Absent otherwise, and from older servers. */
+  productNoPhoto?: { name: string; line: string };
 }
 
 /** COP-381: one opening a storyboard offers to pick from, in plain words, as the server sends it. */
+/** COP-380 landing: one picture drawn before the stop, as the storyboard answer names it. */
+export interface StoryboardPicture {
+  drawn: boolean;
+  check?: string;
+}
+
+/** COP-380 landing: the storyboard's pictures as the status command's lines print them (stopPictureLines). */
+function storyboardPictureLines(pictures: CustomerStoryboard["pictures"], page: string): string[] {
+  if (!pictures) return [];
+  const as = (picture: StoryboardPicture | undefined) =>
+    picture ? { imageUrl: picture.drawn ? page : null, ...(picture.check ? { check: { line: picture.check } } : {}) } : undefined;
+  const lines = stopPictureText(stopPictureLines({ face: as(pictures.face), place: as(pictures.place), cutout: as(pictures.cutout) }, page));
+  return lines.length > 0 ? ["", ...lines] : [];
+}
+
 export interface StoryboardOpening {
   name: string;
   seen: string;
@@ -438,8 +540,10 @@ export interface StoryboardOpening {
  * COP-381: take 1's openings to pick from, numbered as --opening takes them, the first picked, and the approve that
  * picks another. Nothing for a storyboard with one opening or none. Landing review (#4995): the approve carries the
  * openings' code (--openings), so a pick names an opening of the storyboard listed here, never of one made again since.
+ * COP-380 landing: at a stop the check before filming holds (`acceptFindings`), the pick carries --accept-findings, as the
+ * approve there must, or the server refuses it.
  */
-export function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string): string[] {
+export function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string, acceptFindings = false): string[] {
   if (!openings || openings.length < 2) return [];
   return [
     "",
@@ -449,8 +553,16 @@ export function openingLines(openings: readonly StoryboardOpening[] | undefined,
       `     ${opening.seen}`,
       ...(opening.words ? [`     Words on screen: "${opening.words}"`] : []),
     ]),
-    `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
+    // COP-380 landing: at a held stop the pick says what it accepts, as the approve line does (acceptFindingsLine).
+    acceptFindings
+      ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""} --accept-findings`
+      : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
   ];
+}
+
+/** COP-388 landing: the no-photo line on `exodus video storyboard`, where the member approves, after a blank line. */
+function storyboardNoPhotoLines(board: { productNoPhoto?: { line: string } }): string[] {
+  return board.productNoPhoto ? ["", ...noPhotoLines(board)] : [];
 }
 
 /**
@@ -717,20 +829,24 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         return [
           ...(run.planHold.notes?.length ? run.planHold.notes : ["The app's check found a problem with this plan."]),
           ...findingLines(run.planHold.findings),
-          // COP-375: the run's page shows the place's picture; its own address is never printed.
-          ...(run.place?.imageUrl ? [`The place:    drawn. See it: ${page}`] : []),
+          // COP-375: the run's page shows the place's picture; its own address is never printed. COP-380: and the face
+          // photo's and the cut-out's. COP-380 (C6): each with its check's line.
+          ...stopPictureText(stopPictureLines(run, page).filter((picture) => picture.drawn)),
+          // COP-388 landing: a product with no photo is said at this stop too.
+          ...noPhotoLines(run),
           `Read it:      exodus video storyboard ${id}`,
           acceptFindingsLine(id),
           `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
         ];
       }
-      // COP-351: the place too, only when the view carries it (the board drew it, or tried to, before the stop).
-      if (noPictureBeforeApproval(run) && run.place) {
+      // COP-351: the place too, only when the view carries it (the board drew it, or tried to, before the stop). COP-380:
+      // and the face photo and the cut-out it drew with it.
+      const pictures = noPictureBeforeApproval(run) ? stopPictureLines(run, page) : [];
+      if (pictures.length > 0) {
         return [
-          "Your script, place and voice are waiting for your yes. No take is filmed before you approve.",
-          run.place.imageUrl
-            ? `The place:    drawn. See it: ${page}`
-            : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+          `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), "voice"])} are waiting for your yes. No take is filmed before you approve.`,
+          ...stopPictureText(pictures),
+          ...noPhotoLines(run),
           `Read them:    exodus video storyboard ${id}`,
           `Approve them: exodus video approve ${id}`,
         ];
@@ -738,6 +854,7 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
       if (noPictureBeforeApproval(run)) {
         return [
           "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
+          ...noPhotoLines(run),
           `Read them:    exodus video storyboard ${id}`,
           `Approve them: exodus video approve ${id}`,
         ];
@@ -834,9 +951,13 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
       "Script",
       ...scriptLines(board.scenes),
       ...found,
+      // COP-380 landing: the face, the place and the cut-out drawn before this stop, with their checks.
+      ...storyboardPictureLines(board.pictures, page),
+      // COP-388 landing: a product with no photo, under the pictures.
+      ...storyboardNoPhotoLines(board),
       ...hardWordLines(board.hardWords),
       // COP-381: take 1's openings to pick from, numbered.
-      ...openingLines(board.openings, id, board.openingsDigest),
+      ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0),
       "",
       "No take gets a picture before you approve.",
       approve,
@@ -850,6 +971,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
       ...scriptLines(board.scenes),
       ...found,
       ...hardWordLines(board.hardWords),
+      ...storyboardNoPhotoLines(board),
       "",
       "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
       approve,
@@ -881,6 +1003,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
     "Storyboard",
     ...board.scenes.flatMap(sceneLines),
     ...hardWordLines(board.hardWords),
+    ...storyboardNoPhotoLines(board),
     "",
     ...notice,
     stillDrawing

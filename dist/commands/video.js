@@ -11,10 +11,10 @@ import { findWorkspaceRoot } from "../lib/state.js";
 import { composeTemplateBrief } from "../lib/templateBrief.js";
 import { scriptApprovalExpiresAt, scriptApprovalNeedsReview } from "../lib/script-approval.js";
 import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoicesFlag, } from "./workflow.js";
-import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
+import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX, SET_OPTION_LEDGER_BASE, } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { faceBoxOf } from "../lib/faceBox.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, listedWords, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
@@ -1183,8 +1183,12 @@ export function resolveStop(stop, cutAttached, items) {
         return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
     }
     if (stop.at === "storyboard-gate") {
-        const place = stop.noPictureBeforeApproval ? placeAtStop(items, stop.nodeId) : undefined;
-        return place ? { ...stop, place } : stop;
+        if (!stop.noPictureBeforeApproval)
+            return stop;
+        const place = pictureAtStop(items, stop.nodeId, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX);
+        const face = pictureAtStop(items, stop.nodeId, ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX);
+        const cutout = pictureAtStop(items, stop.nodeId, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX);
+        return { ...stop, ...(place ? { place } : {}), ...(face ? { face } : {}), ...(cutout ? { cutout } : {}) };
     }
     if (stop.at !== "final-watch")
         return stop;
@@ -1211,14 +1215,25 @@ export function resolveStop(stop, cutAttached, items) {
         ...(items && hasAppCut(items) ? { appCutOnRun: true } : {}),
     };
 }
-function placeAtStop(items, boardNodeId) {
-    const row = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === ONE_TAKE_BOARD_PLACE_LEDGER_INDEX);
-    if (row?.status === "done" && row.artifact?.type === "image" && row.artifact.imageUrl)
-        return { imageUrl: row.artifact.imageUrl };
-    if (row?.status === "failed")
+function pictureAtStop(items, boardNodeId, row, checkRow, redrawRow) {
+    const drawnOn = (sceneIndex) => {
+        const at = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === sceneIndex);
+        return at?.status === "done" && at.artifact?.type === "image" && at.artifact.imageUrl ? at.artifact.imageUrl : undefined;
+    };
+    const at = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === row);
+    const first = drawnOn(row);
+    if (first) {
+        const checked = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "recording" && i.sceneIndex === checkRow);
+        const line = checked?.findings?.find((finding) => finding.code === ONE_TAKE_PICTURE_CHECK_CODE)?.detail?.trim();
+        const kept = line?.startsWith(ONE_TAKE_PICTURE_REDRAWN_WORDS) ? drawnOn(redrawRow) : undefined;
+        return { imageUrl: kept ?? first, ...(line ? { check: { line } } : {}) };
+    }
+    if (at?.status === "failed")
         return { imageUrl: null };
     return undefined;
 }
+export const ONE_TAKE_PICTURE_CHECK_CODE = "one-take-picture-check";
+export const ONE_TAKE_PICTURE_REDRAWN_WORDS = "Drawn twice";
 export function appCutOutdates(run) {
     return run.appCut === "making" && run.moduleKey === "script-video";
 }
@@ -1457,14 +1472,13 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                         : `Approve another paid attempt for failed audition takes only: exodus video approve ${runId}. Completed takes are kept; the remaining batch stays held.`,
         ];
     if (stop.at === "storyboard-gate") {
+        const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
-            ...(stop.noPictureBeforeApproval && stop.place
+            ...(pictures.length > 0
                 ? [
-                    "Parked: the script, the place and the voice are waiting for your yes. No take is filmed before you approve.",
-                    stop.place.imageUrl
-                        ? `The place:    drawn. See it: ${videoPage || runUrl}`
-                        : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+                    `Parked: ${listedWords(["the script", ...pictures.map((picture) => `the ${picture.noun}`), "the voice"])} are waiting for your yes. No take is filmed before you approve.`,
+                    ...stopPictureText(pictures),
                     `Read them:    exodus video storyboard ${runId}`,
                     `Approve them: exodus video approve ${runId}`,
                 ]

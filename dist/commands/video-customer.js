@@ -54,6 +54,30 @@ export function songCallStopLines(songCalls, page = "") {
     const notes = Array.isArray(songCalls.notes) ? songCalls.notes.filter((note) => typeof note === "string" && note.trim() !== "") : [];
     return [...lines, ...notes, SONG_CALL_NO_ONE_SCENE];
 }
+export function stopPictureText(pictures) {
+    return pictures.flatMap((picture) => [picture.line, ...(picture.check ? [picture.check] : [])]);
+}
+const STOP_PICTURES = [
+    { key: "face", noun: "face", label: "The face:     ", missed: "The face photo didn't come out. It is drawn when you approve, before the takes are filmed." },
+    { key: "place", noun: "place", label: "The place:    ", missed: "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed." },
+    { key: "cutout", noun: "product cut-out", label: "The cut-out:  ", missed: "The product cut-out didn't come out. It is drawn when you approve, before the takes are filmed." },
+];
+export function stopPictureLines(pictures, page) {
+    return STOP_PICTURES.flatMap(({ key, noun, label, missed }) => {
+        const picture = pictures[key];
+        if (!picture)
+            return [];
+        const drawn = picture.imageUrl !== null;
+        const check = drawn && picture.check?.line ? `${" ".repeat(label.length)}${picture.check.line}` : undefined;
+        return [{ noun, drawn, line: drawn ? `${label}drawn. See it: ${page}` : missed, ...(check ? { check } : {}) }];
+    });
+}
+export function noPhotoLines(run) {
+    return run.productNoPhoto ? [`The product:  ${run.productNoPhoto.line}`] : [];
+}
+export function listedWords(words) {
+    return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
 function noPictureBeforeApproval(run) {
     return run.stage === "review" && run.planHold?.atBoard === true && run.planHold.beforePictures !== true;
 }
@@ -157,7 +181,14 @@ function heldSceneChoiceLines(run, scenes, page) {
             : []),
     ];
 }
-export function openingLines(openings, id, digest) {
+function storyboardPictureLines(pictures, page) {
+    if (!pictures)
+        return [];
+    const as = (picture) => picture ? { imageUrl: picture.drawn ? page : null, ...(picture.check ? { check: { line: picture.check } } : {}) } : undefined;
+    const lines = stopPictureText(stopPictureLines({ face: as(pictures.face), place: as(pictures.place), cutout: as(pictures.cutout) }, page));
+    return lines.length > 0 ? ["", ...lines] : [];
+}
+export function openingLines(openings, id, digest, acceptFindings = false) {
     if (!openings || openings.length < 2)
         return [];
     return [
@@ -168,8 +199,13 @@ export function openingLines(openings, id, digest) {
             `     ${opening.seen}`,
             ...(opening.words ? [`     Words on screen: "${opening.words}"`] : []),
         ]),
-        `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
+        acceptFindings
+            ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""} --accept-findings`
+            : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
     ];
+}
+function storyboardNoPhotoLines(board) {
+    return board.productNoPhoto ? ["", ...noPhotoLines(board)] : [];
 }
 function hardWordLines(words) {
     if (!words?.length)
@@ -339,18 +375,19 @@ export function customerStageLines(run, page) {
                 return [
                     ...(run.planHold.notes?.length ? run.planHold.notes : ["The app's check found a problem with this plan."]),
                     ...findingLines(run.planHold.findings),
-                    ...(run.place?.imageUrl ? [`The place:    drawn. See it: ${page}`] : []),
+                    ...stopPictureText(stopPictureLines(run, page).filter((picture) => picture.drawn)),
+                    ...noPhotoLines(run),
                     `Read it:      exodus video storyboard ${id}`,
                     acceptFindingsLine(id),
                     `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
                 ];
             }
-            if (noPictureBeforeApproval(run) && run.place) {
+            const pictures = noPictureBeforeApproval(run) ? stopPictureLines(run, page) : [];
+            if (pictures.length > 0) {
                 return [
-                    "Your script, place and voice are waiting for your yes. No take is filmed before you approve.",
-                    run.place.imageUrl
-                        ? `The place:    drawn. See it: ${page}`
-                        : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+                    `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), "voice"])} are waiting for your yes. No take is filmed before you approve.`,
+                    ...stopPictureText(pictures),
+                    ...noPhotoLines(run),
                     `Read them:    exodus video storyboard ${id}`,
                     `Approve them: exodus video approve ${id}`,
                 ];
@@ -358,6 +395,7 @@ export function customerStageLines(run, page) {
             if (noPictureBeforeApproval(run)) {
                 return [
                     "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
+                    ...noPhotoLines(run),
                     `Read them:    exodus video storyboard ${id}`,
                     `Approve them: exodus video approve ${id}`,
                 ];
@@ -439,8 +477,10 @@ export function customerStoryboardLines(board, page, songCalls) {
             "Script",
             ...scriptLines(board.scenes),
             ...found,
+            ...storyboardPictureLines(board.pictures, page),
+            ...storyboardNoPhotoLines(board),
             ...hardWordLines(board.hardWords),
-            ...openingLines(board.openings, id, board.openingsDigest),
+            ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0),
             "",
             "No take gets a picture before you approve.",
             approve,
@@ -453,6 +493,7 @@ export function customerStoryboardLines(board, page, songCalls) {
             ...scriptLines(board.scenes),
             ...found,
             ...hardWordLines(board.hardWords),
+            ...storyboardNoPhotoLines(board),
             "",
             "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
             approve,
@@ -480,6 +521,7 @@ export function customerStoryboardLines(board, page, songCalls) {
         "Storyboard",
         ...board.scenes.flatMap(sceneLines),
         ...hardWordLines(board.hardWords),
+        ...storyboardNoPhotoLines(board),
         "",
         ...notice,
         stillDrawing

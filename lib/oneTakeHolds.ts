@@ -11,6 +11,7 @@
  * COP-310: "one-take-sideways" is a hold for its picture: it came out turned on its side or upside down, and still did
  * after it was filmed again.
  * COP-359: "one-take-said-twice" is a hold for its words: the take says part of its script twice.
+ * COP-388: "one-take-pack-held" is a hold for its pack: the label check read another pack than the product's photo.
  */
 export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-words-missing",
@@ -21,4 +22,5 @@ export const ONE_TAKE_HOLD_CODES: readonly string[] = [
   "one-take-said-wrong",
   "one-take-sideways",
   "one-take-said-twice",
+  "one-take-pack-held",
 ];

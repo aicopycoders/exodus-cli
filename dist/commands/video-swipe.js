@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatApiError } from "../lib/format.js";
 import { missingRouteLine } from "../lib/route-support.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, onOwnDashboard } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, listedWords, onOwnDashboard } from "./video-customer.js";
 import { asVideoRun, describeFetchFailure, RUN_PATH, startedThenWait, waitFlow } from "./video.js";
 import { planSheetSamples, swipeSheetSamplesFlow } from "./video-swipe-samples.js";
 import { planSheetCast, swipeSheetCastFlow } from "./video-swipe-cast.js";
@@ -1730,7 +1730,7 @@ function changeLine(price) {
     const parts = [`size=<${sizes.join(" or ")}>`, ...(takes.length > 1 ? [`takes=<${takes.join(" or ")}>`] : [])];
     return `Change it (free): exodus video swipe sheet set ${price.swipeId} ${parts.join(" ")}. The start films what the sheet says then.`;
 }
-const AT_MOST = "At most: every take and every picture ordered twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
+const AT_MOST = "At most: every take and every picture ordered twice, and a picture checked before the stop ordered a third time and checked twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
 function songAtMost(song) {
     const filmed = filmsCalls(song) ? "every video call" : "every clip";
     const pictures = drawsScenePictures(song) ? ", every scene's picture redrawn once" : ", every picture drawn at most as its line says";
@@ -1915,7 +1915,7 @@ async function startNeedsYes(swipeId, step, json, again, choice, deps) {
     const when = step === "start-one-shot"
         ? "paid from the start: the whole video is made with no stop"
         : before.length > 0
-            ? `paid once the storyboard is approved, but for ${before.map((line) => `${line.what.charAt(0).toLowerCase()}${line.what.slice(1)} (${lineUsd(line.usd)})`).join(" and ")}, made before the run stops there`
+            ? `paid once the storyboard is approved, but for ${listedWords(before.map((line) => `${line.what.charAt(0).toLowerCase()}${line.what.slice(1)} (${lineUsd(line.usd)})`))}, made before the run stops there`
             : "paid once the storyboard is approved: the run stops there first";
     return {
         code: 0,

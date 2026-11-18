@@ -22,7 +22,7 @@ import type { FlagOccurrence } from "../lib/args.js";
 import type { ApiResponse } from "../lib/client.js";
 import { formatApiError } from "../lib/format.js";
 import { missingRouteLine } from "../lib/route-support.js";
-import { customerAnswer, customerRunPage, customerStageIsWorking, onOwnDashboard, type CustomerRun, type CustomerStart } from "./video-customer.js";
+import { customerAnswer, customerRunPage, customerStageIsWorking, listedWords, onOwnDashboard, type CustomerRun, type CustomerStart } from "./video-customer.js";
 import { asVideoRun, describeFetchFailure, RUN_PATH, startedThenWait, waitFlow, type FlowResult, type VideoDeps } from "./video.js";
 import { planSheetSamples, swipeSheetSamplesFlow, type SheetSamplesPlan } from "./video-swipe-samples.js";
 import { planSheetCast, swipeSheetCastFlow, type SheetCastPlan } from "./video-swipe-cast.js";
@@ -2568,9 +2568,11 @@ function changeLine(price: PricedSwipe): string {
 /**
  * What "at most" means, said once. The worker's limits count per storyboard (scout ugc-one-take-steps.ts): a change
  * asked for after the takes are filmed (a new voice, the storyboard made again) is a new request and is paid on top.
+ * COP-380 (C6): a picture checked before the stop that fails is drawn once more and checked again (convex
+ * oneTakeLaunch.ts), so the most counts a third order of it and two checks.
  */
 const AT_MOST =
-  "At most: every take and every picture ordered twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
+  "At most: every take and every picture ordered twice, and a picture checked before the stop ordered a third time and checked twice, the most the run orders for one storyboard. A change asked for after the takes are filmed, such as a new voice or the storyboard made again, films them again and is paid on top.";
 
 /**
  * What "at most" means for a sung video (COP-273 S6): the budget its run is held to without a press. P7 stage 3 fix (M2):
@@ -2844,12 +2846,13 @@ async function startNeedsYes(
   }
   const { buys, paidBy } = PAID[step];
   if (json) return { code: 0, lines: [JSON.stringify({ ok: false, needsYes: true, buys, paidBy, price })] };
-  // COP-351: what the run buys before it stops there (One-take's picture of the place), named with its price.
+  // COP-351: what the run buys before it stops there (One-take's picture of the place), named with its price. COP-380:
+  // with the face photo and the cut-out, listed "a, b, c and d".
   const before = price.picked.lines.filter((line) => line.beforeStop === true);
   const when = step === "start-one-shot"
     ? "paid from the start: the whole video is made with no stop"
     : before.length > 0
-      ? `paid once the storyboard is approved, but for ${before.map((line) => `${line.what.charAt(0).toLowerCase()}${line.what.slice(1)} (${lineUsd(line.usd)})`).join(" and ")}, made before the run stops there`
+      ? `paid once the storyboard is approved, but for ${listedWords(before.map((line) => `${line.what.charAt(0).toLowerCase()}${line.what.slice(1)} (${lineUsd(line.usd)})`))}, made before the run stops there`
       : "paid once the storyboard is approved: the run stops there first";
   return {
     code: 0,

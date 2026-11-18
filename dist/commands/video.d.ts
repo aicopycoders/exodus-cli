@@ -415,8 +415,23 @@ export type RunStop = {
     noPictureBeforeApproval?: true;
     place?: {
         imageUrl: string | null;
+        check?: {
+            line: string;
+        };
     };
     songCalls?: unknown;
+    face?: {
+        imageUrl: string | null;
+        check?: {
+            line: string;
+        };
+    };
+    cutout?: {
+        imageUrl: string | null;
+        check?: {
+            line: string;
+        };
+    };
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];
@@ -489,6 +504,8 @@ export interface HeldTake {
 export declare function heldTakesOf(scenes: readonly number[] | undefined, items: readonly NodeItem[] | null | undefined): HeldTake[];
 export declare function flaggedHeldTakesOf(items: readonly NodeItem[] | null | undefined): HeldTake[];
 export declare function resolveStop(stop: RunStop, cutAttached: boolean | null, items?: NodeItem[] | null): ResolvedStop;
+export declare const ONE_TAKE_PICTURE_CHECK_CODE = "one-take-picture-check";
+export declare const ONE_TAKE_PICTURE_REDRAWN_WORDS = "Drawn twice";
 export declare function appCutOutdates(run: Pick<VideoRun, "appCut" | "moduleKey">): boolean;
 export declare function appIsCutting(stop: ResolvedStop): boolean;
 export declare function resolveStopAtPark(stop: RunStop, runId: string, deps: Pick<VideoDeps, "get">): Promise<ResolvedStop>;

@@ -19,12 +19,27 @@ import {
   type RunProvenance,
   type WorkflowRun,
 } from "./workflow.js";
-import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, SET_OPTION_LEDGER_BASE } from "../lib/helperLedgerBase.js";
+import {
+  HELPER_LEDGER_BASE,
+  ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX,
+  ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX,
+  ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX,
+  ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX,
+  ONE_TAKE_BOARD_FACE_LEDGER_INDEX,
+  ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX,
+  ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX,
+  ONE_TAKE_BOARD_PLACE_LEDGER_INDEX,
+  ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX,
+  SET_OPTION_LEDGER_BASE,
+} from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { faceBoxOf, type FaceBox } from "../lib/faceBox.js";
 import {
   customerAnswer,
   customerRunPage,
+  listedWords,
+  stopPictureLines,
+  stopPictureText,
   customerStageIsWorking,
   finalApproveLines,
   finalApprovedLines,
@@ -1632,12 +1647,19 @@ export type RunStop =
        * row: its address, or null when it didn't come out. Absent when the board drew none (a run from before) or the
        * rows were not read.
        */
-      place?: { imageUrl: string | null };
+      place?: { imageUrl: string | null; check?: { line: string } };
       /**
        * COP-273 P7 stage 4: a sung run filmed in calls, its run answer's `songCalls` as sent (convex/workflows.ts getRun):
        * no scene picture is drawn and none is redrawn on its own, so no frame redo is offered at this stop.
        */
       songCalls?: unknown;
+      /**
+       * COP-380: the face photo (when the sheet picked no face) and the product cut-out (when the product has a photo) its
+       * board drew with the place, each read the same way off its own row of the board. COP-380 (C6): each with the line
+       * its check left, read off its check row (`check`), absent when there is nothing to say.
+       */
+      face?: { imageUrl: string | null; check?: { line: string } };
+      cutout?: { imageUrl: string | null; check?: { line: string } };
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -2037,10 +2059,14 @@ export function resolveStop(
     const hasLine = (n: number) => (stop.silentScenes?.includes(n) ? false : undefined);
     return { ...stop, checks: stop.sceneIndexes.map((n) => pilotCheck(n, clipOf(n), hasLine(n))) };
   }
-  // COP-351: the picture of the place a One-take board drew before its stop, off the board's own row.
+  // COP-351: the picture of the place a One-take board drew before its stop, off the board's own row. COP-380: and the
+  // face photo and the cut-out it drew with it, each off its own row.
   if (stop.at === "storyboard-gate") {
-    const place = stop.noPictureBeforeApproval ? placeAtStop(items, stop.nodeId) : undefined;
-    return place ? { ...stop, place } : stop;
+    if (!stop.noPictureBeforeApproval) return stop;
+    const place = pictureAtStop(items, stop.nodeId, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX);
+    const face = pictureAtStop(items, stop.nodeId, ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX);
+    const cutout = pictureAtStop(items, stop.nodeId, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX);
+    return { ...stop, ...(place ? { place } : {}), ...(face ? { face } : {}), ...(cutout ? { cutout } : {}) };
   }
   if (stop.at !== "final-watch") return stop;
   const named = heldTakesOf(stop.heldScenes, items);
@@ -2072,14 +2098,50 @@ export function resolveStop(
 /**
  * COP-351: the picture of the place on the board's own row (the worker's ONE_TAKE_BOARD_PLACE_LEDGER_INDEX on the
  * parked storyboard step): its address when it was drawn, null when it didn't come out, undefined when the board has no
- * such row (it drew none: a run from before) or the rows were not read.
+ * such row (it drew none: a run from before) or the rows were not read. COP-380: the face photo's and the cut-out's,
+ * on their own rows (ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX), read the same way.
+ * COP-380 (C6): a drawn picture with the line its check left on its check row (`checkRow`, the worker's
+ * ONE_TAKE_BOARD_CHECK_ROWS): the row's one warning with ONE_TAKE_PICTURE_CHECK_CODE, whose detail is the line the
+ * run's page shows, word for word. None when the check left nothing to say, or there was no check. COP-380 landing: a
+ * redraw that came out (`redrawRow`, the worker's ONE_TAKE_BOARD_REDRAW_ROWS) is the picture the board kept and the
+ * check's line speaks of, so its address is the one given, when the line says it was drawn twice.
  */
-function placeAtStop(items: readonly NodeItem[] | null | undefined, boardNodeId: string | undefined): { imageUrl: string | null } | undefined {
-  const row = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === ONE_TAKE_BOARD_PLACE_LEDGER_INDEX);
-  if (row?.status === "done" && row.artifact?.type === "image" && row.artifact.imageUrl) return { imageUrl: row.artifact.imageUrl };
-  if (row?.status === "failed") return { imageUrl: null };
+function pictureAtStop(
+  items: readonly NodeItem[] | null | undefined,
+  boardNodeId: string | undefined,
+  row: number,
+  checkRow: number,
+  redrawRow: number,
+): { imageUrl: string | null; check?: { line: string } } | undefined {
+  const drawnOn = (sceneIndex: number) => {
+    const at = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === sceneIndex);
+    return at?.status === "done" && at.artifact?.type === "image" && at.artifact.imageUrl ? at.artifact.imageUrl : undefined;
+  };
+  const at = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "frame" && i.sceneIndex === row);
+  const first = drawnOn(row);
+  if (first) {
+    const checked = items?.find((i) => i.nodeId === boardNodeId && i.itemKind === "recording" && i.sceneIndex === checkRow);
+    const line = checked?.findings?.find((finding) => finding.code === ONE_TAKE_PICTURE_CHECK_CODE)?.detail?.trim();
+    // The board kept the redraw only when the check's line says the picture was drawn twice (a redraw worse than the
+    // first is not kept, and its line speaks of the first).
+    const kept = line?.startsWith(ONE_TAKE_PICTURE_REDRAWN_WORDS) ? drawnOn(redrawRow) : undefined;
+    return { imageUrl: kept ?? first, ...(line ? { check: { line } } : {}) };
+  }
+  if (at?.status === "failed") return { imageUrl: null };
   return undefined;
 }
+
+/**
+ * COP-380 (C6): the code of the warning a picture's check row carries with the line the run's page shows under it. A
+ * copy of video/lib/oneTakePictureChecks.ts ONE_TAKE_PICTURE_CHECK_FINDING_CODE: this package cannot import video/lib.
+ */
+export const ONE_TAKE_PICTURE_CHECK_CODE = "one-take-picture-check";
+
+/**
+ * COP-380 landing: how the line of a check whose picture the board kept from its redraw begins (oneTakePictureChecks.ts
+ * oneTakePictureCheckLine), a copy for the same reason as the code above.
+ */
+export const ONE_TAKE_PICTURE_REDRAWN_WORDS = "Drawn twice";
 
 /**
  * #4589 landing review: the app is making this run's cut, and so no cut on the run is one to keep: a cut on it is one a
@@ -2452,18 +2514,20 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
       : `Approve another paid attempt for failed audition takes only: exodus video approve ${runId}. Completed takes are kept; the remaining batch stays held.`,
   ];
   if (stop.at === "storyboard-gate") {
+    // COP-375: the video's page shows the pictures drawn before the stop (run-storyboard.tsx); their own addresses are
+    // never printed.
+    const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
     const lines = [
       ...(stop.heldReason ? [stop.heldReason] : []),
       // COP-337: the CLI cannot tell whether a person was picked on the sheet (the run read does not say), so it names
       // the script and the voice; the run page shows the picked person. COP-351: and the place, with the picture its board
-      // drew before the stop, read off the board's row; a run from before reads as COP-337 left it.
-      ...(stop.noPictureBeforeApproval && stop.place
+      // drew before the stop, read off the board's row; a run from before reads as COP-337 left it. COP-380: and the face
+      // photo and the cut-out the board drew with it, each off its own row.
+      ...(pictures.length > 0
         ? [
-            "Parked: the script, the place and the voice are waiting for your yes. No take is filmed before you approve.",
-            // COP-375: the video's page shows the place's picture (run-storyboard.tsx); its own address is never printed.
-            stop.place.imageUrl
-              ? `The place:    drawn. See it: ${videoPage || runUrl}`
-              : "The picture of the place didn't come out. It is drawn when you approve, before the takes are filmed.",
+            `Parked: ${listedWords(["the script", ...pictures.map((picture) => `the ${picture.noun}`), "the voice"])} are waiting for your yes. No take is filmed before you approve.`,
+            // COP-380 (C6): each picture with its check's line.
+            ...stopPictureText(pictures),
             `Read them:    exodus video storyboard ${runId}`,
             `Approve them: exodus video approve ${runId}`,
           ]

@@ -106,6 +106,7 @@ export interface SwipeFilming {
     firstSeconds?: string;
     hookBuilt?: string;
     endCard?: string;
+    endCardLook?: string;
     measuredStillPct?: number;
     cameraHeight?: string;
     cameraTilt?: string;

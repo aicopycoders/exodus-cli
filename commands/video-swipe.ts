@@ -89,8 +89,9 @@ export interface SwipeFull {
     script: Array<{ lineId: string; speakerId: string | null; start: number; end: number; text: string }>;
   };
   /**
-   * The breakdown's format version: "1.0" to "1.3". 1.3 (COP-273 P1a) adds their song as the read heard it, in closed
-   * values; the CLI prints none of it here: the swipe's saved sheet names it in its song rows.
+   * The breakdown's format version: "1.0" to "1.4". 1.3 (COP-273 P1a) adds their song as the read heard it, in closed
+   * values; the CLI prints none of it here: the swipe's saved sheet names it in its song rows. 1.4 (COP-393) adds the
+   * look of the designed card the ad ends on (`filming.endCardLook`), printed under how it ends.
    */
   version?: string;
   /** How the ad is filmed (format 1.1, more fields in 1.2); absent from a breakdown of 1.0. */
@@ -122,6 +123,8 @@ export interface SwipeFilming {
   firstSeconds?: string;
   hookBuilt?: string;
   endCard?: string;
+  /** Format 1.4 (COP-393): the look of the designed card the ad ends on; only for an ad that ends on one. */
+  endCardLook?: string;
   measuredStillPct?: number;
   cameraHeight?: string;
   cameraTilt?: string;
@@ -1434,6 +1437,7 @@ export function filmingLines(filming: SwipeFilming | undefined, version?: string
   line("First seconds", f.firstSeconds ?? "");
   line("How the hook is built", f.hookBuilt ?? "");
   line("How it ends", f.endCard ?? "");
+  line("End card look", f.endCardLook ?? "");
   return ["How it is filmed:", ...(out.length > 0 ? [BY_EYE, ...out] : ["  Nothing was read."])];
 }
 

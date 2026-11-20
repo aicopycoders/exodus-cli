@@ -881,6 +881,7 @@ export function filmingLines(filming, version) {
     line("First seconds", f.firstSeconds ?? "");
     line("How the hook is built", f.hookBuilt ?? "");
     line("How it ends", f.endCard ?? "");
+    line("End card look", f.endCardLook ?? "");
     return ["How it is filmed:", ...(out.length > 0 ? [BY_EYE, ...out] : ["  Nothing was read."])];
 }
 const BY_EYE = "  (The video model's reading by eye, not proven: every line but Measured, taken from the frames; Words, counted by code; and Cuts, counted by code with the jump cuts the video model saw.)";

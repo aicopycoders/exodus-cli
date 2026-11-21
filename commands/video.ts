@@ -38,6 +38,8 @@ import {
   customerAnswer,
   customerRunPage,
   listedWords,
+  endCardLines,
+  type StopEndCard,
   stopPictureLines,
   stopPictureText,
   customerStageIsWorking,
@@ -260,6 +262,11 @@ The whole loop, in order:
        waits for the yes (status lists them), as "Drop" on the video's page
        does. It orders nothing; the shot is neither made nor cut in.
 
+     exodus video drop-card <runId>
+       Drop the end card a One-take storyboard drew, while it waits for the
+       yes (status shows it), as "Drop" on the video's page does. It orders
+       and refunds nothing; the video ends on the last word.
+
      exodus video keep-going <runId>
      exodus video stop-here <runId>
        A video that reached the estimate it showed before the start stops
@@ -301,6 +308,7 @@ Usage:
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video keep <runId> --scene <n> [--json]
   exodus video drop-shot <runId> --shot <n> [--json]
+  exodus video drop-card <runId> [--json]
   exodus video keep-going <runId> [--json]
   exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
@@ -857,6 +865,8 @@ export const FINAL_PATH = "/api/v2/video/final";
 export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 /** COP-384: drop one of the extra shots a One-take board planned, at its stop. */
 export const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
+/** COP-393: drop the end card a One-take board drew, at its stop. */
+export const END_CARD_PATH = "/api/v2/video/storyboard/end-card";
 /** #4582: the member's answer to a video that reached its estimate. */
 export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
@@ -1264,6 +1274,15 @@ export interface VideoRun {
   nodes: VideoRunNode[];
   /** #1883: the approval stop a still-running run is headed for. Server-decided. */
   pauseAhead?: WorkflowRun["pauseAhead"];
+  /**
+   * COP-393 (convex videoRunView.ts endCardForCli): `endCardAsked`, the run's lock asks for an end card; `endCard`, at
+   * the storyboard stop, the card the board drew, or why none was drawn, or that it was dropped, as the member's view
+   * carries it; `endCardAfter`, once the video is cut, the one line about it. Each absent when the lock asks for no
+   * card, and from older servers.
+   */
+  endCardAsked?: true;
+  endCard?: StopEndCard;
+  endCardAfter?: { state: string; line: string };
   castLock?: PullCastLock | null;
   /**
    * #1869: whose saved format rules this run followed (`runProvenance`). Read
@@ -1674,6 +1693,8 @@ export type RunStop =
        */
       face?: { imageUrl: string | null; check?: { line: string } };
       cutout?: { imageUrl: string | null; check?: { line: string } };
+      /** COP-393: the end card the run's lock asked for, as the run read carries it (VideoRun.endCard). */
+      endCard?: StopEndCard;
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -1922,6 +1943,7 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(run.blockingMap === true ? { blockingMap: true as const } : {}),
         ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true as const } : {}),
         ...(run.songCalls ? { songCalls: run.songCalls } : {}),
+        ...(run.endCard ? { endCard: run.endCard } : {}),
       };
     }
     if (parkedAtFinalWatch(run)) {
@@ -2531,6 +2553,9 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     // COP-375: the video's page shows the pictures drawn before the stop (run-storyboard.tsx); their own addresses are
     // never printed.
     const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
+    // COP-393: the end card the lock asked for, named among what waits only when one is shown, and its lines.
+    const card = stop.endCard?.state === "ready" ? ["the end card"] : [];
+    const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl);
     const lines = [
       ...(stop.heldReason ? [stop.heldReason] : []),
       // COP-337: the CLI cannot tell whether a person was picked on the sheet (the run read does not say), so it names
@@ -2539,20 +2564,25 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
       // photo and the cut-out the board drew with it, each off its own row.
       ...(pictures.length > 0
         ? [
-            `Parked: ${listedWords(["the script", ...pictures.map((picture) => `the ${picture.noun}`), "the voice"])} are waiting for your yes. No take is filmed before you approve.`,
+            `Parked: ${listedWords(["the script", ...pictures.map((picture) => `the ${picture.noun}`), ...card, "the voice"])} are waiting for your yes. No take is filmed before you approve.`,
             // COP-380 (C6): each picture with its check's line.
             ...stopPictureText(pictures),
+            ...cardLines,
             `Read them:    exodus video storyboard ${runId}`,
             `Approve them: exodus video approve ${runId}`,
           ]
         : stop.noPictureBeforeApproval
         ? [
-            "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+            card.length > 0
+              ? "Parked: the script, the end card and the voice are waiting for your yes. No take gets a picture before you approve."
+              : "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+            ...cardLines,
             `Read them:    exodus video storyboard ${runId}`,
             `Approve them: exodus video approve ${runId}`,
           ]
         : [
             "Parked: the storyboard is waiting for your yes.",
+            ...cardLines,
             `Read it:    exodus video storyboard ${runId}`,
             ...(songCallsProblem(stop.songCalls) ? [] : [`Approve it: exodus video approve ${runId}`]),
           ]),
@@ -6363,6 +6393,9 @@ export async function statusFlow(
           ...(run.director ? { director: run.director } : {}),
           // COP-300: absent when the server sent none, as the fields above.
           ...(run.cutCheck?.length ? { cutCheck: run.cutCheck } : {}),
+          // COP-393: the end card, absent when the lock asks for none, as the fields above.
+          ...(run.endCard ? { endCard: run.endCard } : {}),
+          ...(run.endCardAfter ? { endCardAfter: run.endCardAfter } : {}),
         }),
       ],
     };
@@ -6426,7 +6459,9 @@ export async function statusFlow(
     ...guidance,
     // #1883: "Working" alone reads like a run going straight through, and a
     // healthy gated run was cancelled over exactly that.
-    ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) })] : []),
+    ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run), endCard: run.endCardAsked === true })] : []),
+    // COP-393: what became of the end card the lock asked for, once the video is cut.
+    ...(run.endCardAfter ? [run.endCardAfter.line] : []),
     ...planFailureLines(failedStoryboard, runId),
     ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
     ...(run.director ? ["", ...directorLines(run.director)] : []),
@@ -6779,6 +6814,8 @@ interface GateCards {
   openingsDigest?: string;
   /** COP-381: once approved, the opening picked, by its number and name, when one was. */
   openingPicked?: { n: number; name: string };
+  /** COP-393: the end card at the stop (VideoRun.endCard). Absent when the lock asks for none, and from older servers. */
+  endCard?: StopEndCard;
   /** The check before pictures, on a kind that runs it. `open`: a block still holds the storyboard. */
   logicFindings?: {
     findings: Array<{ id: string; severity: string; kind: string; scenes: number[]; what: string }>;
@@ -6836,6 +6873,9 @@ export async function storyboardFlow(
   // COP-381: take 1's openings to pick from, numbered, while the storyboard waits; past it, the one picked.
   lines.push(...openingLines(cards.openings, runId, cards.openingsDigest));
   if (!cards.openings && cards.openingPicked) lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
+  // COP-393: the end card the board drew, as status prints it.
+  const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId));
+  if (cardLines.length > 0) lines.push("", ...cardLines);
 
   // #1845: the voices ride the storyboard stop, so a person sees who speaks with
   // what before approving instead of having to know about a second command. A
@@ -8403,6 +8443,29 @@ export async function dropShotFlow(runId: string, shot: number, json: boolean, d
   return {
     code: 0,
     lines: [`Extra shot ${shot} dropped. It won't be made, and nothing was ordered.`, `See the rest: exodus video status ${runId}`],
+  };
+}
+
+/** COP-393: what an older server, with no drop route, leaves the member: the page's own button. */
+// Landing review (Opus): such a server has no Drop on the page either, so the one way to keep the card out is to stop.
+const DROP_CARD_NOT_ON_THIS_SERVER = "This Exodus server cannot drop the end card yet, so nothing changed. To keep the card out of the video, stop this video on its page before you approve:";
+
+/**
+ * COP-393: `exodus video drop-card <runId>`, the run page's "Drop" in the END CARD block, while the video waits at its
+ * storyboard: the card is marked dropped on the board and on its record, and the cut lays none, so the video ends on the
+ * last word. It orders and refunds nothing. A card dropped already is no error.
+ */
+export async function dropCardFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const res = await deps.post(END_CARD_PATH, { runId });
+  if (missingRouteLine(res, "exodus video drop-card")) {
+    const line = `${DROP_CARD_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+    return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+  }
+  if (!res.ok) return errorResult(res, json);
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId })] };
+  return {
+    code: 0,
+    lines: ["End card dropped. The video ends on the last word, and nothing was ordered.", `See the rest: exodus video status ${runId}`],
   };
 }
 
@@ -10240,6 +10303,7 @@ export async function run(
     "revoice",
     "keep",
     "drop-shot",
+    "drop-card",
     "keep-going",
     "stop-here",
     "voices",
@@ -10433,6 +10497,10 @@ export async function run(
     const shot = Number(shotRaw);
     if (!Number.isInteger(shot) || shot < 1) usage(`video drop-shot --shot must be a whole shot number, not "${shotRaw}".`);
     return printResult(await dropShotFlow(runId, shot, json, defaultDeps));
+  }
+
+  if (sub === "drop-card") {
+    return printResult(await dropCardFlow(runId, json, defaultDeps));
   }
 
   if (sub === "keep") {

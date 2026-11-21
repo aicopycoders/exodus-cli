@@ -88,6 +88,10 @@ export interface CustomerRun {
         wordsOff: boolean;
         speech?: SpeechSummary;
         notes?: string[];
+        endCard?: {
+            state: string;
+            line: string;
+        };
     } | null;
     canRetry: boolean;
     canCutAgain?: boolean;
@@ -156,7 +160,32 @@ export interface CustomerRun {
             usd: number | null;
         }>;
     };
+    endCard?: StopEndCard;
 }
+export type StopEndCard = {
+    state: "ready";
+    imageUrl?: string | null;
+    drawn?: boolean;
+    layout: string;
+    words: ReadonlyArray<{
+        label: string;
+        words: string;
+    }>;
+    check: {
+        state: string;
+        labelWords?: string;
+    };
+    note: string;
+    simpleNote?: string;
+} | {
+    state: "none";
+    reason: string;
+    note: string;
+} | {
+    state: "dropped";
+    note: string;
+};
+export declare function endCardLines(card: StopEndCard | undefined, id: string, page: string): string[];
 export declare const SONG_CALL_NEW_VIDEO = "A new video makes the whole ad again, at its own price, shown before you start.";
 export declare const SONG_CALL_NO_SCENE_PICTURES = "This video is filmed from the pictures of its people and places, one clip for every one to three sung lines, so no picture of a scene was drawn.";
 export declare const SONG_CALL_NO_ONE_SCENE = "One scene's clip or picture can't be made again on its own. A new video makes the whole ad again, at its own price, shown before you start.";
@@ -251,6 +280,7 @@ export interface CustomerStoryboard {
         name: string;
         line: string;
     };
+    endCard?: StopEndCard;
 }
 export interface StoryboardPicture {
     drawn: boolean;

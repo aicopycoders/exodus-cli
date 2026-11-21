@@ -5847,7 +5847,23 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   });
   // endCardLayers: the brand's ground over the whole frame and the pack photo in its box, pushing in slowly, made as
   // one card on its own clock and dissolved in over the last picture (#4585: never the ground alone, never black).
-  if (finish?.endCard) {
+  if (finish?.endCard?.fullFrame) {
+    // COP-393: the board's end card, words and all, over the whole frame: it pushes in at the picture's own size, is then
+    // scaled to cover the frame (a 1536x2736 card loses a few pixels at its edges), and dissolves in over the last picture.
+    const e = finish.endCard;
+    const [pw, ph] = e.size.map(even);
+    const frames = Math.max(1, Math.round(e.seconds * FPS));
+    const length = sec(e.out - e.in);
+    const k = addInput("-loop", "1", "-t", length, "-i", resolve(e.file));
+    filters.push(
+      `[${k}:v]fps=${FPS},scale=${pw}:${ph},setsar=1,` +
+        `zoompan=z=1+${END_CARD_PUSH_IN}*on/${frames}:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2):d=1:s=${pw}x${ph}:fps=${FPS},` +
+        `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1,` +
+        `format=yuva420p,fade=t=in:st=0:d=${e.fadeSec}:alpha=1,setpts=PTS-STARTPTS+${sec(e.in)}/TB[ecbody]`,
+    );
+    filters.push(`[${videoLabel}][ecbody]overlay=enable=between(t\\,${sec(e.in)}\\,${sec(e.out)}):eof_action=pass[ecard]`);
+    videoLabel = "ecard";
+  } else if (finish?.endCard) {
     const e = finish.endCard;
     const box = END_CARD_PHOTO_BOX;
     const w = even((box[2] - box[0]) * WIDTH);
@@ -7423,7 +7439,7 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
     `Style: End,Helvetica,${Math.round(H * 0.045)},&H00FFFFFF,&H00FFFFFF,&H20101010,&H00000000,-1,0,0,0,100,100,2,0,3,40,0,5,0,0,0,1`,
     ...(look ? [lookStyle(look, H)] : []),
     ...(ending ? [endingStyle(H)] : []),
-    ...(endLayers ? endCardStyles(endLayers.colors, H) : []),
+    ...(endLayers && !endLayers.fullFrame ? endCardStyles(endLayers.colors, H) : []),
     ...(cards.some((c) => c.label && c.headline) ? [headlineStyle(H)] : []), "",
     "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ...captions.flatMap((c, k) => (look && c.look === look && c.words?.length
@@ -7434,7 +7450,7 @@ export function editAss({ captions = [], cap = null, cards = [], hook = null, en
       : [`Dialogue: 2,${at(c.in)},${at(c.out)},Card,,0,0,0,,{${box(c.box)}\\fs${Math.round(H * 0.036)}\\fad(60,0)}${assText(c.label)}`])),
     ...(hook?.text ? [`Dialogue: 3,${at(hook.in)},${at(hook.out)},Card,,0,0,0,,{${box(hook.box)}\\fs${Math.round(H * 0.026)}}${assText(hook.text)}`] : []),
     ...(endCard ? [`Dialogue: 4,${at(endCard.in)},${at(endCard.out)},End,,0,0,0,,{\\pos(${W / 2},${H / 2})\\fad(120,0)}${assText(endCard.text)}`] : []),
-    ...(endLayers ? endCardDialogues(endLayers, W, H, at) : []),
+    ...(endLayers && !endLayers.fullFrame ? endCardDialogues(endLayers, W, H, at) : []),
     // COP-382: a run's sheet's words over the last shot.
     ...(ending ? endingDialogues(ending, W, H, at, speed) : []),
   ].join("\n") + "\n";
@@ -7782,6 +7798,110 @@ export function placeEndCard(timeline, brand, storyboard, pictureSec, speed, not
   if (covered.length > 0) throw new VoiceUnderEndCardRefusal(covered);
   if (card) timeline.endCard = { in: card.in, out: card.out };
   return card;
+}
+
+/**
+ * COP-393: how long the full-frame end card shows, in seconds of the finished film: its last 3 s, the 0.2 s fade
+ * (END_CARD_FADE_SEC) inside its first 0.2 s.
+ */
+export const END_CARD_PICTURE_SEC = 3;
+
+/**
+ * COP-393: the manifest's `endCardPicture`, the file name of the end card the board drew (one 9:16 picture with every
+ * word already on it), which the worker downloads into the folder beside the takes. Null when the manifest names none
+ * or names something that is not a plain picture file of the folder, so a cut without it is the one it always was.
+ */
+export function endCardPictureOf(manifest) {
+  const file = manifest?.endCardPicture;
+  return hasText(file) && /^[\w.-]+\.(png|jpe?g|webp)$/i.test(file.trim()) && !file.includes("..") ? file.trim() : null;
+}
+
+/** COP-393: a picture's own [width, height] as ffprobe reads it, or null when it cannot be read as one. */
+export function pictureSizeOf(file) {
+  try {
+    const raw = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", file]).toString();
+    const s = JSON.parse(raw)?.streams?.[0];
+    return Number.isInteger(s?.width) && Number.isInteger(s?.height) && s.width > 1 && s.height > 1 ? [s.width, s.height] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * COP-393: the full-frame end card's place on the cut's clock (before the speed-up, `speed`): the film's last
+ * END_CARD_PICTURE_SEC seconds, but never before the last heard word (`voiceEndSec`, null on a measured map) plus
+ * END_CARD_AFTER_VOICE_SEC of the film; when the word ends too late for that, `holdSec` is how much longer the last
+ * picture runs on under the card so it keeps its length. Its length and fade are multiplied by `speed`, so after the
+ * speed step they are seconds of the film. It has no half-film limit. `size` is the picture's own [width, height]: the
+ * push-in runs at that size before the picture is scaled to cover the frame. No words are drawn on it by code.
+ */
+export function endCardPictureLayersOf(file, size, pictureSec, speed = 1, voiceEndSec = null) {
+  if (!hasText(file) || !(pictureSec > 0)) return null;
+  const seconds = END_CARD_PICTURE_SEC * speed;
+  const earliest = Number.isFinite(voiceEndSec) ? voiceEndSec + END_CARD_AFTER_VOICE_SEC * speed : 0;
+  // Landing review: a cut on its measured map (no voiceEndSec) cannot run on, so its card never waits.
+  const waits = Number.isFinite(voiceEndSec) && earliest > pictureSec - seconds + 1e-3;
+  const at = roundMs(Math.max(0, waits ? earliest : pictureSec - seconds));
+  // Whole frames, so the held picture ends on the cut's own frame clock.
+  const holdSec = waits ? Math.max(0, Math.ceil((at + seconds - pictureSec) * FPS - 1e-6)) / FPS : 0;
+  const end = pictureSec + holdSec;
+  return {
+    file,
+    fullFrame: true,
+    size,
+    in: at,
+    out: roundMs(end + 1),
+    seconds: roundMs(end - at),
+    fadeSec: roundMs(END_CARD_FADE_SEC * speed),
+    ...(holdSec > 0 ? { holdSec } : {}),
+    words: { headline: null, offer: null, cta: null },
+    colors: { ...END_CARD_COLORS },
+  };
+}
+
+/**
+ * COP-393: the full-frame end card on the cut, in endCardLayers' place (placeEndCard), so whatever reads that card
+ * reads this one. It comes up after the last heard word of the takes kept, and the last picture runs on under it (its
+ * sound faded out where it ends, then silence) so the card keeps its 3 s. With no heard word there is no card, and the
+ * note says so. A cut laid on its measured map cannot run on, so its card keeps the film's last seconds; a card that
+ * would cover a heard word refuses the cut (VoiceUnderEndCardRefusal), as the pack-photo card does.
+ */
+export function placeEndCardPicture(timeline, file, size, pictureSec, speed, notes) {
+  const rows = wordRows(timeline);
+  if (rows.length === 0) {
+    notes.push("endCardPicture: the takes kept have no measured words, so the end card was not laid and the film ends as it was");
+    return null;
+  }
+  const voiceEndSec = timeline.mapped ? null : Math.max(...rows.map((r) => r.end));
+  const card = endCardPictureLayersOf(file, size, pictureSec, speed, voiceEndSec);
+  if (!card) return null;
+  const covered = voiceUnderEndCard(rows, card);
+  if (covered.length > 0) throw new VoiceUnderEndCardRefusal(covered);
+  if (card.holdSec) {
+    const last = timeline.spine.at(-1);
+    last.endCardHoldSec = card.holdSec;
+    // Landing review: a still runs its whole `seconds` already (-loop 1 -t), so only a clip's last frame is held on.
+    if (last.source === "clip") last.holdSec = (last.holdSec ?? 0) + card.holdSec;
+    last.seconds += card.holdSec;
+    notes.push(`the end card waits for the last word, so the ad runs ${card.holdSec.toFixed(2)}s longer under it`);
+  }
+  timeline.endCard = { in: card.in, out: card.out };
+  notes.push(`endCardPicture: ${file} is the film's last ${roundMs(card.seconds / speed).toFixed(2)}s, from ${roundMs(card.in / speed).toFixed(2)}s`);
+  return card;
+}
+
+/**
+ * COP-393: the full-frame end card's window on the finished film's clock, after the speed step, for the worker's last
+ * guard: from the first frame of its fade to the film's end. The card runs to the end, so with the finished film's own
+ * length (`filmSec`, ffprobe's) the window ends there: the speed step can end the film up to a frame after the card's
+ * time on the cut's clock divided by the speed.
+ */
+export function endCardWindowOf(card, speed = 1, filmSec = null) {
+  if (!card?.fullFrame) return null;
+  const endSec = roundMs((card.in + card.seconds) / speed);
+  // Landing review: by two frames at most, so a film that runs on past its card is not hidden from the worker's guard.
+  const filmEnd = Number.isFinite(filmSec) ? Math.min(roundMs(filmSec), roundMs(endSec + 2 / FPS)) : endSec;
+  return { startSec: roundMs(card.in / speed), endSec: Math.max(endSec, filmEnd) };
 }
 
 /**
@@ -8393,6 +8513,27 @@ export function flashes(shots, motion, bars = FLASH_BARS) {
 }
 
 /**
+ * COP-393: the full-frame end card's fade on the finished film's clock, as flashCheck leaves it out: from a frame before
+ * the card comes up to a frame after its fade ends. Null for any other card (the pack-photo card's is judged as ever).
+ */
+export function endCardFadeSpan(card, speed = 1) {
+  if (!card?.fullFrame) return null;
+  const start = roundMs(card.in / speed);
+  return { from: roundMs(start - 1 / FPS), to: roundMs(start + card.fadeSec / speed + 1 / FPS) };
+}
+
+/**
+ * COP-393: flashCheck's findings less the frame flashes inside the full-frame end card's fade (`fade`, endCardFadeSpan):
+ * its dissolve from the last shot is wanted, and a pale card's changes a cut's size every frame of it. A short shot, and
+ * a flash later in the card or anywhere else, still count. `left` are the ones left out.
+ */
+export function flashesOutsideEndCardFade(found, fade) {
+  if (!fade) return { flashes: found, left: [] };
+  const inFade = (f) => f.from === "frame" && f.at >= fade.from - 1e-6 && f.at <= fade.to + 1e-6;
+  return { flashes: found.filter((f) => !inFade(f)), left: found.filter(inFade) };
+}
+
+/**
  * freezeCheck's runs: the finished film's, and (COP-357, fix A) the takes' read before the look, merged; the end card,
  * which the check leaves out, is left out of both.
  */
@@ -8589,7 +8730,7 @@ export function namesNotHeard(takes, script, cast = []) {
  * turns it on, every time in the finished cut's (after `speed`). The script's
  * lines are read off the clips' scribe words (lineWords), as the captions are.
  */
-function plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, cards, speed }) {
+function plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, cards, speed, endCardFade = null }) {
   const faster = (t) => roundMs(t / speed);
   const script = storyboard?.script ?? [];
   const takeOfLine = new Map();
@@ -8606,6 +8747,7 @@ function plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, 
     byScene.set(seg.sceneIndex, take);
   }
   const levels = finish?.levelStepCheck ? clipLevels(out) : null;
+  const flashed = finish?.flashCheck ? flashesOutsideEndCardFade(flashes(shots, motion), endCardFade) : null;
   return {
     ...(finish?.floorCheck
       ? {
@@ -8615,7 +8757,9 @@ function plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, 
         }),
       }
       : {}),
-    ...(finish?.flashCheck ? { flashes: flashes(shots, motion) } : {}),
+    ...(flashed ? { flashes: flashed.flashes } : {}),
+    // COP-393: the frame flashes of the full-frame end card's own fade, seen and not counted.
+    ...(flashed?.left.length ? { flashesInEndCardFade: flashed.left } : {}),
     // null: the cut's sound could not be decoded, so no cut was read.
     ...(finish?.levelStepCheck ? { levelSteps: levels ? levelSteps(levels, shots.slice(1).map((s) => ({ n: s.n, at: s.start })), rows) : null } : {}),
     // A song laid whole is one voice-over the length of the ad, so it has no takes to fit.
@@ -8649,7 +8793,8 @@ const roleOf = (seg) => (seg.reaction || seg.audio === "clip" ? "a-roll" : seg.a
  * burned in and `speed` the cut's speed-up, so every time they name is the
  * finished cut's. `endCard` (endCardLayers) is the pack-photo end card: its
  * slow push-in is still picture by design, so freezeCheck reads only the
- * picture before it.
+ * picture before it. COP-393: with the full-frame end card, flashCheck leaves out
+ * the frame flashes of its fade (flashesOutsideEndCardFade).
  */
 function checkCut({ timeline, storyboard, screens, rows, scenes, out, loudness, levels, finish = null, sourceAd = null, shotOf = () => null, cards = [], speed = 1, endCard = null, lookRows = null, readFps = null }) {
   const roles = new Map(timeline.spine.map((seg) => [seg.sceneIndex, roleOf(seg)]));
@@ -8670,7 +8815,7 @@ function checkCut({ timeline, storyboard, screens, rows, scenes, out, loudness, 
     slowShots: motion.length ? slowShots(motionByShot(motion, shots)) : null,
     ...(finish?.blipCheck ? { blips: blips(shots.map((s) => ({ ...s, srcSec: sourceShotSec(sourceAd, shotOf(s.n)) }))) } : {}),
     ...(finish?.freezeCheck ? { freezes: cutFreezes(endCard ? motion.filter((r) => r.t < endCard.in / speed) : motion, lookRows, endCard, speed) } : {}),
-    ...plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, cards, speed }),
+    ...plan14Checks({ timeline, storyboard, rows, shots, motion, out, finish, cards, speed, endCardFade: endCardFadeSpan(endCard, speed) }),
     lufs: finished ? round2(finished.i) : null,
     truePeak: finished ? round2(finished.tp) : null,
   };
@@ -10540,10 +10685,27 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     endLayers = packPhoto ? placeEndCard(timeline, brand, storyboard, pictureSec, speed, notes, finish.songEditing ?? null) : null;
     if (!endLayers) notes.push("the pull has no pack photo of the product, so the end card was not drawn");
   }
+  // COP-393: the end card the board drew, a full-frame picture the worker downloaded into the folder, in the pack-photo
+  // card's place. Not there, or not a picture ffprobe can read: nothing in its place, and the film ends as it was.
+  const cardPicture = endCardPictureOf(manifest);
+  if (cardPicture) {
+    const why = finish?.endCardLayers ? "the kind's own end card closes this video"
+      : !finish ? "the manifest has no finishing settings to lay it with"
+        : stagedText ? "the text stage draws this cut's words"
+          : template ? "a template launch's clock is its own"
+            : !exists(cardPicture) ? `${cardPicture} is not in the folder` : null;
+    const size = why ? null : pictureSizeOf(here(cardPicture));
+    if (why || !size) notes.push(`endCardPicture: the end card was not laid, so the film ends as it was: ${why ?? `${cardPicture} could not be read as a picture`}`);
+    else {
+      endLayers = placeEndCardPicture(timeline, cardPicture, size, pictureSec, speed, notes);
+      if (endLayers) pictureSec = timeline.spine.reduce((sum, seg) => sum + seg.seconds, 0);
+    }
+  }
   // COP-382: a run's sheet's words over the last shot, on a cut of its own clock with no end card.
   let ending = null;
   if (finish?.endingWords) {
-    const why = endLayers ? "the kind's end card closes this video"
+    const why = endLayers?.fullFrame ? "the end card closes this video"
+      : endLayers ? "the kind's end card closes this video"
       : stagedText ? "the text stage draws this cut's words"
         : timeline.mapped ? "this cut is laid on its measured map"
           : template ? "a template launch's clock is its own"
@@ -10607,7 +10769,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       };
     });
   };
-  if (finish && (finish.captions || finish.cards || endLayers || ending) && !stagedText) {
+  if (finish && (finish.captions || finish.cards || (endLayers && !endLayers.fullFrame) || ending) && !stagedText) {
     if (hasFilter("subtitles")) {
       ass = "edit.ass";
       const cap = sourceAd?.captions ?? manifest.sheetCaptions ?? null;
@@ -10702,7 +10864,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       }));
     } else {
       notes.push(
-        endLayers
+        endLayers && !endLayers.fullFrame
           ? "this ffmpeg has no subtitles filter (libass), so the captions, cards and the end card's words were not burned in"
           : "this ffmpeg has no subtitles filter (libass), so the captions and cards were not burned in",
       );
@@ -11180,6 +11342,10 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         ...(lookProbe ? { lookRows: lookProbe.rows } : {}), ...(deliverFps ? { readFps: FPS } : {}),
       })
     : null;
+  if (checks?.flashesInEndCardFade) {
+    const at = checks.flashesInEndCardFade.map((f) => `${f.at.toFixed(3)}s`).join(", ");
+    notes.push(`flashCheck: ${checks.flashesInEndCardFade.length} frame flash(es) at ${at} are the end card's own fade from the last shot, so they do not count`);
+  }
   // The pace record: the cut's own numbers, the settings it was cut with (so
   // a redo of the run matches), its loudness once the pass ran, and its checks.
   const pace = {
@@ -11206,6 +11372,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ...(musicRecord ? { music: musicRecord } : {}),
     // COP-384: the extra shots the cut laid, where and how, and the whoosh's level against the voice.
     ...(shotsRecord ? { extraShots: shotsRecord } : {}),
+    // COP-393: the full-frame end card the cut laid, and its window on the finished film's clock.
+    ...(endLayers?.fullFrame ? { endCardPicture: { file: endLayers.file, ...endCardWindowOf(endLayers, speed, durationSec) } } : {}),
     ...(notes.length > 0 ? { notes } : {}),
   };
   writeFileSync(paths.pace, `${JSON.stringify(pace, null, 2)}\n`);
@@ -11216,6 +11384,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ...(pauseJoinsSec ? { pauseJoinsSec } : {}),
     // COP-357, fix A: for the worker's guard, the takes' frozen runs read before the look, on the film's clock.
     ...(lookProbe ? { lookFreeze: lookProbe.freezes } : {}),
+    // COP-393: for the worker's guard, the full-frame end card's window on the finished film's clock.
+    ...(endLayers?.fullFrame ? { endCardWindow: endCardWindowOf(endLayers, speed, durationSec) } : {}),
   });
 }
 

@@ -1026,7 +1026,8 @@ does, four rows a call. "How it is finished" changes only how the app cuts
 the takes once they are filmed, `cardPlace` (in "Captions and text card")
 where the cut puts the text card, and `ending` (in "Ending") how the video
 ends: all free to set, the price's figures the same, but `music`,
-`extraShots` and `ultraRealism`'s `ultra`, which the price names. Set one only on the member's word. As `sheet` prints them:
+`extraShots`, `ultraRealism`'s `ultra` and `ending`'s `end_card`, which the
+price names. Set one only on the member's word. As `sheet` prints them:
 
 - `speed`: how fast the video plays, from `1.0` (as filmed) to `1.25`.
 - `pauses`: how much silence between words is cut: `trim`, `keep`, or the
@@ -1089,6 +1090,41 @@ ends: all free to set, the price's figures the same, but `music`,
   seconds past the last word), or the member's own short words over the last
   shot. Words we write make no claim: an offer such as "53% OFF" is only ever
   the member's own words.
+  Where the sheet offers it, also `end_card`: an end card, one picture of the
+  member's pack, logo and words, held for the video's last 3 s after the last
+  word. Offer it only when the sheet you printed lists it (the server switches
+  it on, and only for a product with a photo); else a set of it is refused in
+  one sentence. It is the default when their ad ends on an offer card, a brand
+  slide or a deadline. With `end_card`, the sheet shows the card's rows, each
+  only while the card and its layout call for it. `endCardLayout` is one of
+  `logo-pack-button` (logo, pack, button: needs no words), `number-stack` (big
+  number), `sticker-deal` (deal sticker), `offer-band`, `sale-stack` (sale
+  name), `guarantee-row`, `split-panel` or `headline-stack`; it starts on the
+  layout the reading of their ad matched, else `logo-pack-button`. The words
+  are the member's own, each only for a layout that prints it, and some
+  layouts print a word in capitals: `endCardHeadline` (64 characters at most), `endCardOffer` (32),
+  `endCardSmallPrint` (32), `endCardSaleName` (28), `endCardGuarantee` (40),
+  `endCardButton` (20, `SHOP NOW` with no pick) and `endCardWebAddress` (40,
+  the host of the brand's product link with no pick); `endCardButton=none` and
+  `endCardWebAddress=none` print none (never "no button"); to leave another word off, clear its
+  row (the word none alone is refused there). Latin letters, digits and plain
+  punctuation, no double quotes. Never write an offer for the member: an
+  offer, a guarantee or a sale is only ever theirs. `number-stack` takes an
+  offer with one number first or last ("SAVE 30%", "25% off"), `sticker-deal`
+  an offer with one number, `headline-stack` a headline of 3 words or more. A
+  layout that lacks the word it needs (the offer, the headline or the
+  guarantee) draws the simple card instead (the pack, the logo if the brand
+  has one, the button and the web address), and the sheet says so. Never set
+  `ending` to "end card" or "endcard" as words: for the card, set `end_card`. Set the ending, the layout and the words in
+  one set, in any order:
+  `ending=end_card endCardLayout=number-stack endCardOffer="SAVE 30%"`.
+  The card is two lines of the price, a few cents each: its picture, drawn on
+  the member's Kie key, and a read of every word on it.
+  The storyboard draws the card and a check reads it before the stop; status
+  and the storyboard show its layout, its words, the check and one note, and
+  the member can drop it there (`exodus video drop-card <runId>`), and the
+  video then ends on the last word. After the cut, status says whether the
+  card is in the video, is the simple card and why, or was left out and why.
 
 The captions keep clear of the person's face, with nothing to set: when the
 cut draws captions, the video step finds where the face is in each take
@@ -2526,6 +2562,8 @@ exodus video keep <runId> --scene <n>                     keep a held scene as i
                                                           only after the member's yes
 exodus video drop-shot <runId> --shot <n>                 drop one planned extra shot at the storyboard
                                                           stop; orders nothing; only on the member's word
+exodus video drop-card <runId>                            drop the end card at the storyboard stop; orders
+                                                          and refunds nothing; only on the member's word
 exodus video keep-going <runId>                           a video waiting at its estimate films on;
                                                           only after the member's own yes
 exodus video stop-here <runId>                            a video waiting at its estimate orders nothing

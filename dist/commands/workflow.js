@@ -400,7 +400,9 @@ export function pauseAheadLine(ahead, opts = {}) {
         return "When the frames are ready, the app checks the storyboard and approves it itself if the checks pass, then goes on to the voices and clips. It only stops for your approval if a check finds a problem. The reference, cast and scene pictures are made first (a few cents each).";
     }
     if (ahead.after === "storyboard" && opts.placeFirst) {
-        return "This run will pause for your approval once the takes are written and their pictures are drawn: the place, the face (unless it was picked on the sheet) and the product cut-out (if the product has a photo), a few cents each. No take is filmed until you approve.";
+        return opts.endCard
+            ? "This run will pause for your approval once the takes are written and their pictures are drawn: the place, the face (unless it was picked on the sheet), the product cut-out (if the product has a photo) and the end card, a few cents each. No take is filmed until you approve."
+            : "This run will pause for your approval once the takes are written and their pictures are drawn: the place, the face (unless it was picked on the sheet) and the product cut-out (if the product has a photo), a few cents each. No take is filmed until you approve.";
     }
     return ahead.after === "frames"
         ? "This run will pause for your approval once the frames are ready. The reference, cast and scene pictures are made first (a few cents each). Nothing bigger is spent until you approve."
@@ -1280,7 +1282,7 @@ export function formatWorkflowRun(run) {
     }
     if (run.pauseAhead) {
         lines.push("");
-        lines.push(pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) }));
+        lines.push(pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run), endCard: run.endCardAsked === true }));
     }
     const parkedNodeId = gateParkedNodeId(run.status, run.pauseReason, run.pausedNodeId);
     if (run.nodes.length > 0) {

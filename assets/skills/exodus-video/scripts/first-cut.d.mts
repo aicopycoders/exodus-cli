@@ -122,6 +122,37 @@ export function placeEndCard(
   timeline: unknown, brand: unknown, storyboard: unknown, pictureSec: number, speed: number, notes: string[], songEditing?: string | null,
 ): ReturnType<typeof endCardLayersOf>;
 
+/** COP-393: the full-frame end card's window on the finished film's clock, in seconds. */
+export interface EndCardWindow { startSec: number; endSec: number }
+
+/** COP-393: the full-frame end card's length in seconds of the finished film. */
+export const END_CARD_PICTURE_SEC: number;
+
+/** COP-393: the manifest's `endCardPicture`, a plain picture file name of the folder, or null. */
+export function endCardPictureOf(manifest: unknown): string | null;
+
+/** COP-393: a picture's own [width, height] as ffprobe reads it, or null. */
+export function pictureSizeOf(file: string): [number, number] | null;
+
+/** COP-393: the full-frame end card on the cut's clock before the speed-up; `holdSec` is how long the picture runs on under it. */
+export function endCardPictureLayersOf(
+  file: string, size: [number, number], pictureSec: number, speed?: number, voiceEndSec?: number | null,
+): { file: string; fullFrame: true; size: [number, number]; in: number; out: number; seconds: number; fadeSec: number; holdSec?: number } | null;
+
+/** COP-393: the full-frame end card on the cut, in the pack-photo card's place; null with no heard word; throws VoiceUnderEndCardRefusal over a word. */
+export function placeEndCardPicture(
+  timeline: unknown, file: string, size: [number, number], pictureSec: number, speed: number, notes: string[],
+): ReturnType<typeof endCardPictureLayersOf>;
+
+/** COP-393: the full-frame end card's fade on the finished film's clock, a frame either side; null for any other card. */
+export function endCardFadeSpan(card: unknown, speed?: number): { from: number; to: number } | null;
+
+/** COP-393: flashCheck's findings less the frame flashes inside the full-frame end card's fade; `left` are those left out. */
+export function flashesOutsideEndCardFade<F extends { at: number; from: string }>(found: F[], fade: { from: number; to: number } | null): { flashes: F[]; left: F[] };
+
+/** COP-393: the full-frame card's window on the finished film's clock; null for any other card. */
+export function endCardWindowOf(card: unknown, speed?: number, filmSec?: number | null): EndCardWindow | null;
+
 /** #4585: the end card would cover some of the cut's voice, so the cut is not delivered. */
 export class VoiceUnderEndCardRefusal extends FirstCutError {
   constructor(words: CutWordRow[]);
@@ -363,6 +394,8 @@ export interface CutPace {
     }>;
     whoosh?: Record<string, unknown>;
   };
+  /** COP-393: the full-frame end card the cut laid (the manifest's `endCardPicture`) and its EndCardWindow; absent with none. */
+  endCardPicture?: { file: string } & EndCardWindow;
   /**
    * COP-300, captionCheck: the checks' verdicts (CutSync without its lists, and Check B without its rows). The worker
    * replaces it with Check B judged on its listen of the finished film (`listens`, `model`), and the first cut's Check B
@@ -440,6 +473,8 @@ export interface CutChecks {
   };
   /** flashCheck: shots under 0.2 s (`shot`) and one-frame flashes the motion read shows (`frame`, n null). */
   flashes?: Array<{ n: number | null; at: number; sec: number; from: "shot" | "frame" }>;
+  /** COP-393: the frame flashes inside the full-frame end card's fade, seen and left out of `flashes`; absent with none. */
+  flashesInEndCardFade?: Array<{ n: null; at: number; sec: number; from: "frame" }>;
   /** levelStepCheck: cuts where the sound between words steps over 3 dB; null when the cut's sound could not be read. */
   levelSteps?: Array<{ n: number; at: number; stepDb: number; beforeDb: number; afterDb: number }> | null;
   /** voFitCheck: a voice-over take starting under 0.3 s after the word before it (`early`), or its last word past its take (`late`). */
@@ -583,6 +618,13 @@ export interface FirstCut {
    * film's clock; present only with a pause level picked.
    */
   pauseJoinsSec?: number[];
+  /**
+   * COP-393: the full-frame end card's window (the manifest's `endCardPicture`), on the finished film's clock after the
+   * speed step: from the first frame of its fade to the film's end (ffprobe's length of the finished file, which the speed
+   * step can make up to a frame longer than the card's own end). Present only when the cut laid that card. The
+   * worker's last guard leaves this window, and only it, out of "frozen and silent".
+   */
+  endCardWindow?: EndCardWindow;
   /** Present only when the manifest asked for the measured map.
    * Authored picture time is reserved once per take; only its final split piece
    * may extend, so earlier pieces never replay the resumed piece's source audio.

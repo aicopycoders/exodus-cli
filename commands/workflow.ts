@@ -1338,6 +1338,8 @@ export interface WorkflowRun {
    * wait for a click, and on every backend older than #2587.
    */
   pauseAhead?: { nodeId: string; after: "frames" | "storyboard" | "picks" | "pilot"; selfApproves?: true; songPart?: true; wholeWhen?: string };
+  /** COP-393: the run's lock asks for an end card (convex videoRunView.ts endCardForCli). Absent otherwise, and from older servers. */
+  endCardAsked?: true;
 }
 
 /**
@@ -1354,7 +1356,7 @@ export function boardDrawsThePlaceFirst(run: { moduleKey?: string; nodes?: Reado
  * the picture of the place before it stops (boardDrawsThePlaceFirst), says so at its text gate. COP-380: and the face
  * photo and the product cut-out it draws with it, when the run needs them (the CLI cannot tell from the run read).
  */
-export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, opts: { placeFirst?: boolean } = {}): string {
+export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, opts: { placeFirst?: boolean; endCard?: boolean } = {}): string {
   // Stop 2: the picks stop comes before the storyboard.
   if (ahead.after === "picks") {
     return "This run will stop for your picks before anything is planned. It draws the faces and rooms to pick from first. Nothing else is made until every slot has a pick.";
@@ -1375,7 +1377,10 @@ export function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, op
     return "When the frames are ready, the app checks the storyboard and approves it itself if the checks pass, then goes on to the voices and clips. It only stops for your approval if a check finds a problem. The reference, cast and scene pictures are made first (a few cents each).";
   }
   if (ahead.after === "storyboard" && opts.placeFirst) {
-    return "This run will pause for your approval once the takes are written and their pictures are drawn: the place, the face (unless it was picked on the sheet) and the product cut-out (if the product has a photo), a few cents each. No take is filmed until you approve.";
+    // COP-393: `endCard`, the run's lock asks for an end card (the run read's endCardAsked): the board draws and checks it too.
+    return opts.endCard
+      ? "This run will pause for your approval once the takes are written and their pictures are drawn: the place, the face (unless it was picked on the sheet), the product cut-out (if the product has a photo) and the end card, a few cents each. No take is filmed until you approve."
+      : "This run will pause for your approval once the takes are written and their pictures are drawn: the place, the face (unless it was picked on the sheet) and the product cut-out (if the product has a photo), a few cents each. No take is filmed until you approve.";
   }
   return ahead.after === "frames"
     ? "This run will pause for your approval once the frames are ready. The reference, cast and scene pictures are made first (a few cents each). Nothing bigger is spent until you approve."
@@ -2941,7 +2946,7 @@ export function formatWorkflowRun(run: WorkflowRun): string {
     // Its own paragraph: it is a sentence, and the header above it is a column
     // of `key: value` lines a reader skims rather than reads.
     lines.push("");
-    lines.push(pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) }));
+    lines.push(pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run), endCard: run.endCardAsked === true }));
   }
 
   // #923/#929: while the run is parked at a REVIEW stop (a checkpoint, or a

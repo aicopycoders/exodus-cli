@@ -464,6 +464,7 @@ export interface WorkflowRun {
         songPart?: true;
         wholeWhen?: string;
     };
+    endCardAsked?: true;
 }
 export declare function boardDrawsThePlaceFirst(run: {
     moduleKey?: string;
@@ -474,6 +475,7 @@ export declare function boardDrawsThePlaceFirst(run: {
 }): boolean;
 export declare function pauseAheadLine(ahead: NonNullable<WorkflowRun["pauseAhead"]>, opts?: {
     placeFirst?: boolean;
+    endCard?: boolean;
 }): string;
 export type WorkflowRunProjection = Omit<WorkflowRun, "nodes"> & {
     nodes?: never;

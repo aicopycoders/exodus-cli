@@ -3,7 +3,7 @@ import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
 import { type FaceBox } from "../lib/faceBox.js";
-import { type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
+import { type StopEndCard, type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
 export type ScriptRunOptions = {
@@ -31,6 +31,7 @@ export declare const ITEMS_PATH = "/api/v2/workflow/items";
 export declare const FINAL_PATH = "/api/v2/video/final";
 export declare const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export declare const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
+export declare const END_CARD_PATH = "/api/v2/video/storyboard/end-card";
 export declare const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export declare const VOICES_PATH = "/api/v2/video/voices";
 export declare const PICKS_PATH = "/api/v2/video/picks";
@@ -266,6 +267,12 @@ export interface VideoRun {
     blockingMap?: true;
     nodes: VideoRunNode[];
     pauseAhead?: WorkflowRun["pauseAhead"];
+    endCardAsked?: true;
+    endCard?: StopEndCard;
+    endCardAfter?: {
+        state: string;
+        line: string;
+    };
     castLock?: PullCastLock | null;
     provenance?: RunProvenance;
     musicBed?: boolean;
@@ -434,6 +441,7 @@ export type RunStop = {
             line: string;
         };
     };
+    endCard?: StopEndCard;
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];
@@ -1038,6 +1046,7 @@ export type RevoiceTarget = ClipRedoTarget | {
 };
 export declare function keepFlow(runId: string, sceneIndex: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function dropShotFlow(runId: string, shot: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function dropCardFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function spendAnswerFlow(runId: string, answer: "go" | "stop", json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function revoiceFlow(runId: string, target: RevoiceTarget, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export interface CastVoiceRow {

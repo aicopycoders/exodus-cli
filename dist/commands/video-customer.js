@@ -7,6 +7,28 @@ export function speechSummaryLines(speech) {
         "speech-issue": "Speech issue — review required", unverified: "Speech not verified" };
     return [labels[speech.status], ...speech.issues.map(speechIssueText)];
 }
+const END_CARD_CHECK_WORDS = { passed: "passed", failed: "failed", unchecked: "not checked" };
+export function endCardLines(card, id, page) {
+    if (!card)
+        return [];
+    const label = "The end card: ";
+    const under = " ".repeat(label.length);
+    if (card.state === "none")
+        return [`${card.reason} ${card.note}`];
+    if (card.state === "dropped")
+        return [`${label}${card.note}`];
+    if (card.state !== "ready")
+        return [];
+    const drawn = card.drawn ?? (card.imageUrl !== null && card.imageUrl !== undefined);
+    return [
+        `${label}${card.layout}. ${drawn ? `See it: ${page}` : "Its picture can't be shown here."}`,
+        ...card.words.map((word) => `${under}${word.label}: ${word.words}`),
+        `${under}Check: ${END_CARD_CHECK_WORDS[card.check.state] ?? card.check.state}`,
+        `${under}${card.note}`,
+        ...(card.simpleNote ? [`${under}${card.simpleNote}`] : []),
+        `Drop it:      exodus video drop-card ${id}`,
+    ];
+}
 function songNoticeLines(notice) {
     return Array.isArray(notice) ? notice.filter((s) => typeof s === "string" && s.trim() !== "").map((s) => `Heads-up: ${s}`) : [];
 }
@@ -215,6 +237,10 @@ export function openingLines(openings, id, digest, acceptFindings = false) {
             : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
     ];
 }
+function storyboardEndCardLines(board, page) {
+    const lines = endCardLines(board.endCard, board.runId, page);
+    return lines.length > 0 ? ["", ...lines] : [];
+}
 function storyboardNoPhotoLines(board) {
     return board.productNoPhoto ? ["", ...noPhotoLines(board)] : [];
 }
@@ -388,17 +414,20 @@ export function customerStageLines(run, page) {
                     ...findingLines(run.planHold.findings),
                     ...stopPictureText(stopPictureLines(run, page).filter((picture) => picture.drawn)),
                     ...noPhotoLines(run),
+                    ...endCardLines(run.endCard, id, page),
                     `Read it:      exodus video storyboard ${id}`,
                     acceptFindingsLine(id),
                     `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
                 ];
             }
             const pictures = noPictureBeforeApproval(run) ? stopPictureLines(run, page) : [];
+            const card = run.endCard?.state === "ready" ? ["end card"] : [];
             if (pictures.length > 0) {
                 return [
-                    `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), "voice"])} are waiting for your yes. No take is filmed before you approve.`,
+                    `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), ...card, "voice"])} are waiting for your yes. No take is filmed before you approve.`,
                     ...stopPictureText(pictures),
                     ...noPhotoLines(run),
+                    ...endCardLines(run.endCard, id, page),
                     ...extraShotLines(run, id),
                     `Read them:    exodus video storyboard ${id}`,
                     `Approve them: exodus video approve ${id}`,
@@ -406,8 +435,11 @@ export function customerStageLines(run, page) {
             }
             if (noPictureBeforeApproval(run)) {
                 return [
-                    "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
+                    card.length > 0
+                        ? "Your script, end card and voice are waiting for your yes. No take gets a picture before you approve."
+                        : "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
                     ...noPhotoLines(run),
+                    ...endCardLines(run.endCard, id, page),
                     ...extraShotLines(run, id),
                     `Read them:    exodus video storyboard ${id}`,
                     `Approve them: exodus video approve ${id}`,
@@ -433,6 +465,7 @@ export function customerStageLines(run, page) {
                     : ["Your video is ready."]),
                 ...speechSummaryLines(run.video?.speech),
                 ...(run.video?.notes ?? []),
+                ...(run.video?.endCard ? [run.video.endCard.line] : []),
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),
@@ -492,6 +525,7 @@ export function customerStoryboardLines(board, page, songCalls) {
             ...found,
             ...storyboardPictureLines(board.pictures, page),
             ...storyboardNoPhotoLines(board),
+            ...storyboardEndCardLines(board, page),
             ...hardWordLines(board.hardWords),
             ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0),
             "",
@@ -507,6 +541,7 @@ export function customerStoryboardLines(board, page, songCalls) {
             ...found,
             ...hardWordLines(board.hardWords),
             ...storyboardNoPhotoLines(board),
+            ...storyboardEndCardLines(board, page),
             "",
             "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
             approve,

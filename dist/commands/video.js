@@ -14,7 +14,7 @@ import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoic
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX, SET_OPTION_LEDGER_BASE, } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { faceBoxOf } from "../lib/faceBox.js";
-import { customerAnswer, customerRunPage, listedWords, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, listedWords, endCardLines, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
@@ -182,6 +182,11 @@ The whole loop, in order:
        waits for the yes (status lists them), as "Drop" on the video's page
        does. It orders nothing; the shot is neither made nor cut in.
 
+     exodus video drop-card <runId>
+       Drop the end card a One-take storyboard drew, while it waits for the
+       yes (status shows it), as "Drop" on the video's page does. It orders
+       and refunds nothing; the video ends on the last word.
+
      exodus video keep-going <runId>
      exodus video stop-here <runId>
        A video that reached the estimate it showed before the start stops
@@ -223,6 +228,7 @@ Usage:
   exodus video revoice <runId> (--scene <n> | --all) [--node <nodeId>] [--json]
   exodus video keep <runId> --scene <n> [--json]
   exodus video drop-shot <runId> --shot <n> [--json]
+  exodus video drop-card <runId> [--json]
   exodus video keep-going <runId> [--json]
   exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
@@ -765,6 +771,7 @@ const REVOICE_NOT_ON_THIS_SERVER = "This Exodus server does not have the voice r
 export const FINAL_PATH = "/api/v2/video/final";
 export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
+export const END_CARD_PATH = "/api/v2/video/storyboard/end-card";
 export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
 export const PICKS_PATH = "/api/v2/video/picks";
@@ -1097,6 +1104,7 @@ export function classifyRun(run) {
                 ...(run.blockingMap === true ? { blockingMap: true } : {}),
                 ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true } : {}),
                 ...(run.songCalls ? { songCalls: run.songCalls } : {}),
+                ...(run.endCard ? { endCard: run.endCard } : {}),
             };
         }
         if (parkedAtFinalWatch(run)) {
@@ -1480,23 +1488,30 @@ export function stopLines(stop, runId, runUrl, videoPage) {
         ];
     if (stop.at === "storyboard-gate") {
         const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
+        const card = stop.endCard?.state === "ready" ? ["the end card"] : [];
+        const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl);
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
             ...(pictures.length > 0
                 ? [
-                    `Parked: ${listedWords(["the script", ...pictures.map((picture) => `the ${picture.noun}`), "the voice"])} are waiting for your yes. No take is filmed before you approve.`,
+                    `Parked: ${listedWords(["the script", ...pictures.map((picture) => `the ${picture.noun}`), ...card, "the voice"])} are waiting for your yes. No take is filmed before you approve.`,
                     ...stopPictureText(pictures),
+                    ...cardLines,
                     `Read them:    exodus video storyboard ${runId}`,
                     `Approve them: exodus video approve ${runId}`,
                 ]
                 : stop.noPictureBeforeApproval
                     ? [
-                        "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+                        card.length > 0
+                            ? "Parked: the script, the end card and the voice are waiting for your yes. No take gets a picture before you approve."
+                            : "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
+                        ...cardLines,
                         `Read them:    exodus video storyboard ${runId}`,
                         `Approve them: exodus video approve ${runId}`,
                     ]
                     : [
                         "Parked: the storyboard is waiting for your yes.",
+                        ...cardLines,
                         `Read it:    exodus video storyboard ${runId}`,
                         ...(songCallsProblem(stop.songCalls) ? [] : [`Approve it: exodus video approve ${runId}`]),
                     ]),
@@ -4489,6 +4504,8 @@ export async function statusFlow(runId, json, deps) {
                     ...(failedStoryboard?.hasRejectedDraft === true ? { hasRejectedDraft: true } : {}),
                     ...(run.director ? { director: run.director } : {}),
                     ...(run.cutCheck?.length ? { cutCheck: run.cutCheck } : {}),
+                    ...(run.endCard ? { endCard: run.endCard } : {}),
+                    ...(run.endCardAfter ? { endCardAfter: run.endCardAfter } : {}),
                 }),
             ],
         };
@@ -4537,7 +4554,8 @@ export async function statusFlow(runId, json, deps) {
         headline,
         ...(carryingOn(run) ? [CARRYING_ON_LINE] : []),
         ...guidance,
-        ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run) })] : []),
+        ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run), endCard: run.endCardAsked === true })] : []),
+        ...(run.endCardAfter ? [run.endCardAfter.line] : []),
         ...planFailureLines(failedStoryboard, runId),
         ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
         ...(run.director ? ["", ...directorLines(run.director)] : []),
@@ -4816,6 +4834,9 @@ export async function storyboardFlow(runId, json, deps) {
     lines.push(...openingLines(cards.openings, runId, cards.openingsDigest));
     if (!cards.openings && cards.openingPicked)
         lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
+    const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId));
+    if (cardLines.length > 0)
+        lines.push("", ...cardLines);
     const voiceRes = await deps
         .get(`${VOICES_PATH}?runId=${encodeURIComponent(runId)}`)
         .catch(() => null);
@@ -5922,6 +5943,22 @@ export async function dropShotFlow(runId, shot, json, deps) {
     return {
         code: 0,
         lines: [`Extra shot ${shot} dropped. It won't be made, and nothing was ordered.`, `See the rest: exodus video status ${runId}`],
+    };
+}
+const DROP_CARD_NOT_ON_THIS_SERVER = "This Exodus server cannot drop the end card yet, so nothing changed. To keep the card out of the video, stop this video on its page before you approve:";
+export async function dropCardFlow(runId, json, deps) {
+    const res = await deps.post(END_CARD_PATH, { runId });
+    if (missingRouteLine(res, "exodus video drop-card")) {
+        const line = `${DROP_CARD_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+        return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+    }
+    if (!res.ok)
+        return errorResult(res, json);
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId })] };
+    return {
+        code: 0,
+        lines: ["End card dropped. The video ends on the last word, and nothing was ordered.", `See the rest: exodus video status ${runId}`],
     };
 }
 const SPEND_ANSWER_NOT_ON_THIS_SERVER = "This Exodus server cannot take this answer from the command line, so nothing changed. Answer on the video's page:";
@@ -7337,6 +7374,7 @@ export async function run(flags, occurrences) {
         "revoice",
         "keep",
         "drop-shot",
+        "drop-card",
         "keep-going",
         "stop-here",
         "voices",
@@ -7514,6 +7552,9 @@ export async function run(flags, occurrences) {
         if (!Number.isInteger(shot) || shot < 1)
             usage(`video drop-shot --shot must be a whole shot number, not "${shotRaw}".`);
         return printResult(await dropShotFlow(runId, shot, json, defaultDeps));
+    }
+    if (sub === "drop-card") {
+        return printResult(await dropCardFlow(runId, json, defaultDeps));
     }
     if (sub === "keep") {
         const sceneRaw = flagString(flags, "scene");

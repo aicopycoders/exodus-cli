@@ -105,7 +105,11 @@ export interface CustomerRun {
   waiting: { ahead: number; stepsDone: number } | null;
   scenes: CustomerRunScene[] | null;
   /** COP-300: `notes` are the cut's check against its own sound, in the server's sentences. Absent from older servers. */
-  video: { url: string; wordsOff: boolean; speech?: SpeechSummary; notes?: string[] } | null;
+  /**
+   * COP-393: `endCard`, one line about the end card the run's lock asked for (in the film, the simple card and why, or
+   * left out and why). Absent when the lock asked for none, and from older servers.
+   */
+  video: { url: string; wordsOff: boolean; speech?: SpeechSummary; notes?: string[]; endCard?: { state: string; line: string } } | null;
   canRetry: boolean;
   /** #3366: the app's cut failed with every clip done, so the video's page can cut the same clips again, free. */
   canCutAgain?: boolean;
@@ -180,6 +184,58 @@ export interface CustomerRun {
    * (null with none). Absent when it planned none, and from older servers.
    */
   extraShots?: { shots: Array<{ n: number; label: string; word: string; layout: "full" | "split"; usd: number | null }> };
+  /**
+   * COP-393: at that stop, the end card the run's lock asked for, as its board drew it (its picture's address, never
+   * printed), or why none was drawn, or that it was dropped. Absent when the lock asks for no card, and from older servers.
+   */
+  endCard?: StopEndCard;
+}
+
+/**
+ * COP-393: the end card at the stop, as the server sends it (CustomerRunView.endCard on status, CustomerCliStoryboard
+ * .endCard with `drawn` on the storyboard). Its states and the check's are plain strings, so a newer server's never
+ * break this CLI; the note is the server's own sentence.
+ */
+export type StopEndCard =
+  | {
+      state: "ready";
+      imageUrl?: string | null;
+      drawn?: boolean;
+      layout: string;
+      words: ReadonlyArray<{ label: string; words: string }>;
+      check: { state: string; labelWords?: string };
+      note: string;
+      /** The simple card's reason, when another note took the note's place. */
+      simpleNote?: string;
+    }
+  | { state: "none"; reason: string; note: string }
+  | { state: "dropped"; note: string };
+
+/** COP-393: the check's state, in the stop's words. */
+const END_CARD_CHECK_WORDS: Readonly<Record<string, string>> = { passed: "passed", failed: "failed", unchecked: "not checked" };
+
+/**
+ * COP-393: the end card's lines at the stop, in line with the pictures' (COP-375: never its address; the page shows it):
+ * its layout's name, its words by slot, the check's state, the server's one note, and how to drop it. A card not drawn
+ * says its reason and how the film ends; a dropped one says so. None when the server sent none.
+ */
+export function endCardLines(card: StopEndCard | undefined, id: string, page: string): string[] {
+  if (!card) return [];
+  const label = "The end card: ";
+  const under = " ".repeat(label.length);
+  // The board's reason names the card itself ("The end card was not drawn: ..."), so it is said as it is.
+  if (card.state === "none") return [`${card.reason} ${card.note}`];
+  if (card.state === "dropped") return [`${label}${card.note}`];
+  if (card.state !== "ready") return [];
+  const drawn = card.drawn ?? (card.imageUrl !== null && card.imageUrl !== undefined);
+  return [
+    `${label}${card.layout}. ${drawn ? `See it: ${page}` : "Its picture can't be shown here."}`,
+    ...card.words.map((word) => `${under}${word.label}: ${word.words}`),
+    `${under}Check: ${END_CARD_CHECK_WORDS[card.check.state] ?? card.check.state}`,
+    `${under}${card.note}`,
+    ...(card.simpleNote ? [`${under}${card.simpleNote}`] : []),
+    `Drop it:      exodus video drop-card ${id}`,
+  ];
 }
 
 /** P7 stage 4 fix (M2): the song step's notice, each sentence a heads-up; nothing for a value this CLI cannot read. */
@@ -530,6 +586,8 @@ export interface CustomerStoryboard {
   pictures?: { face?: StoryboardPicture; place?: StoryboardPicture; cutout?: StoryboardPicture };
   /** COP-388 landing: a product with no photo, its server's line. Absent otherwise, and from older servers. */
   productNoPhoto?: { name: string; line: string };
+  /** COP-393: the end card the board drew, drawn or not (never its address). Absent otherwise, and from older servers. */
+  endCard?: StopEndCard;
 }
 
 /** COP-381: one opening a storyboard offers to pick from, in plain words, as the server sends it. */
@@ -576,6 +634,12 @@ export function openingLines(openings: readonly StoryboardOpening[] | undefined,
       ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""} --accept-findings`
       : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
   ];
+}
+
+/** COP-393: the end card's lines on `exodus video storyboard`, where the member approves, after a blank line. */
+function storyboardEndCardLines(board: { endCard?: StopEndCard; runId: string }, page: string): string[] {
+  const lines = endCardLines(board.endCard, board.runId, page);
+  return lines.length > 0 ? ["", ...lines] : [];
 }
 
 /** COP-388 landing: the no-photo line on `exodus video storyboard`, where the member approves, after a blank line. */
@@ -852,6 +916,8 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           ...stopPictureText(stopPictureLines(run, page).filter((picture) => picture.drawn)),
           // COP-388 landing: a product with no photo is said at this stop too.
           ...noPhotoLines(run),
+          // COP-393: the end card the board drew, and how to drop it.
+          ...endCardLines(run.endCard, id, page),
           `Read it:      exodus video storyboard ${id}`,
           acceptFindingsLine(id),
           `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
@@ -860,11 +926,14 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
       // COP-351: the place too, only when the view carries it (the board drew it, or tried to, before the stop). COP-380:
       // and the face photo and the cut-out it drew with it.
       const pictures = noPictureBeforeApproval(run) ? stopPictureLines(run, page) : [];
+      // COP-393: the end card is named among them only when one is shown.
+      const card = run.endCard?.state === "ready" ? ["end card"] : [];
       if (pictures.length > 0) {
         return [
-          `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), "voice"])} are waiting for your yes. No take is filmed before you approve.`,
+          `Your ${listedWords(["script", ...pictures.map((picture) => picture.noun), ...card, "voice"])} are waiting for your yes. No take is filmed before you approve.`,
           ...stopPictureText(pictures),
           ...noPhotoLines(run),
+          ...endCardLines(run.endCard, id, page),
           ...extraShotLines(run, id),
           `Read them:    exodus video storyboard ${id}`,
           `Approve them: exodus video approve ${id}`,
@@ -872,8 +941,11 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
       }
       if (noPictureBeforeApproval(run)) {
         return [
-          "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
+          card.length > 0
+            ? "Your script, end card and voice are waiting for your yes. No take gets a picture before you approve."
+            : "Your script and voice are waiting for your yes. No take gets a picture before you approve.",
           ...noPhotoLines(run),
+          ...endCardLines(run.endCard, id, page),
           ...extraShotLines(run, id),
           `Read them:    exodus video storyboard ${id}`,
           `Approve them: exodus video approve ${id}`,
@@ -903,6 +975,8 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           : ["Your video is ready."]),
         ...speechSummaryLines(run.video?.speech),
         ...(run.video?.notes ?? []),
+        // COP-393: what became of the end card the lock asked for, after the cut's own notes.
+        ...(run.video?.endCard ? [run.video.endCard.line] : []),
         ...(run.video?.wordsOff
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),
@@ -975,6 +1049,8 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
       ...storyboardPictureLines(board.pictures, page),
       // COP-388 landing: a product with no photo, under the pictures.
       ...storyboardNoPhotoLines(board),
+      // COP-393: the end card the board drew, and how to drop it.
+      ...storyboardEndCardLines(board, page),
       ...hardWordLines(board.hardWords),
       // COP-381: take 1's openings to pick from, numbered.
       ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0),
@@ -992,6 +1068,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
       ...found,
       ...hardWordLines(board.hardWords),
       ...storyboardNoPhotoLines(board),
+      ...storyboardEndCardLines(board, page),
       "",
       "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
       approve,

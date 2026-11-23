@@ -342,6 +342,8 @@ export interface CutPace {
     addedCuts?: "7" | "5" | "3.5";
     /** COP-355: with addedCuts, the script lines no added cut falls inside. */
     wholeLines?: string[];
+    /** B-roll, inserts and overlays: the items the worker laid in the manifest's `oneTakeCutaways` (first-cut-cutaways.mjs). */
+    cutaways?: true;
   };
   /**
    * COP-354: the room sound the cut laid: none, or a bed with its levels (the voice's integrated loudness after its

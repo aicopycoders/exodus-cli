@@ -3058,6 +3058,38 @@ export async function swipeSheetPeopleFlow(
 }
 
 /**
+ * The most a batch start of the swipe is held to: the price before the yes, read now (a free read), its picked most.
+ * The price is worked out at the swipe's own look, so a start on another look (the sheet's "style") is not what it
+ * priced, and goes unheld as before: a look drawn with a style master costs more than a live-action one, and the server
+ * would refuse the start. A kind whose sheet gives no price (`priced: false`) and a server with no price route (an older
+ * one) give none, and the start goes as before. A price that cannot be read (an error, an answer that does not read, a
+ * most that is no dollar amount) is a problem: the batch starts nothing for that swipe and says why.
+ */
+async function batchQuoteOf(swipeId: string, swipe: SwipeView, style: string | undefined, deps: VideoDeps): Promise<{ maxUsd?: number } | { problem: string }> {
+  if (style !== undefined && swipe.outcome.kind === "written" && style !== swipe.outcome.draft.style) return {};
+  const cannot = (why: string) => {
+    const said = why.replace(/\s*\n\s*/g, " ").trim();
+    return {
+      problem: `Swipe ${swipeId}'s price could not be read before its start, so nothing was sent: ${/[.!?]$/.test(said) ? said : `${said}.`} Run the sheet again to try it; if it keeps failing, start it on its own: exodus video swipe start ${swipeId}`,
+    };
+  };
+  try {
+    const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
+    if (missingRouteLine(res, "exodus video swipe sheet price")) return {};
+    if (!res.ok) return cannot(formatApiError(res));
+    const read = priceOf(res.data);
+    if (!read) return cannot("the server's answer could not be read");
+    if (!read.price.priced) return {};
+    const most: unknown = read.price.picked.maxUsd;
+    // The start refuses a quote that is no dollar amount (convex/lib/workflow/scriptRunPlan.ts quotedMaxUsdReads).
+    if (typeof most !== "number" || !Number.isFinite(most) || most < 0) return cannot("the server's answer gave no most in dollars");
+    return { maxUsd: most };
+  } catch (err) {
+    return cannot(`the server could not be reached: ${describeFetchFailure(err)}`);
+  }
+}
+
+/**
  * Why a start held to `maxUsd` cannot be sent: this server has no price before the yes (an older server, which ignores
  * maxUsd), or the CLI could not reach it to ask. Null when the server can hold the start to the price.
  */
@@ -5086,12 +5118,30 @@ async function startVideo(video: SheetVideo, run: SheetRunState, swipeId: string
     await sayIfFailedAtStart(video, existing, swipeId, ctx);
     return;
   }
+  // The start is held to the price read a moment before, as `exodus video swipe start --max-usd` is: the server refuses a
+  // start that can now cost more than the most it read. A price that cannot be read starts nothing for this swipe.
+  const quoted = await batchQuoteOf(swipeId, read.swipe, ctx.sheet.start.style, ctx.deps);
+  if ("problem" in quoted) {
+    stopRun(video, run, outcome, quoted.problem, ctx);
+    return;
+  }
   run.pending = { at: stamp(ctx.deps), swipeId, ...(read.serverNow !== null ? { serverAt: read.serverNow } : {}) };
   run.updatedAt = stamp(ctx.deps);
   ctx.save();
   // Today every video runs with its own cast. When a swiped run takes characters, video.character.pick goes here.
   // Never with `again`: one swipe is one video, and the server refuses a second start of it.
-  const started = answerOf(await swipeStartFlow(swipeId, ctx.sheet.start, { json: true, yes: true, wait: false }, ctx.deps));
+  const ask = quoted.maxUsd !== undefined ? { ...ctx.sheet.start, maxUsd: quoted.maxUsd } : ctx.sheet.start;
+  // Whether the start itself was sent: a held start reads the price's route once more first (maxUsdUnsupported), and a
+  // read that fails there sends nothing, so the start is not left pending.
+  let sent = false;
+  const deps: VideoDeps = {
+    ...ctx.deps,
+    post: (path, body) => {
+      if (path === SWIPE_RUNS_PATH) sent = true;
+      return ctx.deps.post(path, body);
+    },
+  };
+  const started = answerOf(await swipeStartFlow(swipeId, ask, { json: true, yes: true, wait: false }, deps));
   const held = isRecord(started.alreadyStarted) && typeof started.alreadyStarted.runId === "string" ? started.alreadyStarted : null;
   if (held) {
     // The swipe got its video between the read above and this start (another door, a start whose answer was lost).
@@ -5106,7 +5156,7 @@ async function startVideo(video: SheetVideo, run: SheetRunState, swipeId: string
     return;
   }
   if (started.ok !== true || typeof started.runId !== "string") {
-    if (postRefused(started)) run.pending = null;
+    if (!sent || postRefused(started)) run.pending = null;
     stopRun(video, run, outcome, errorOf(started), ctx);
     return;
   }

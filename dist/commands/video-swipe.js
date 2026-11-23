@@ -2049,6 +2049,35 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
         ],
     };
 }
+async function batchQuoteOf(swipeId, swipe, style, deps) {
+    if (style !== undefined && swipe.outcome.kind === "written" && style !== swipe.outcome.draft.style)
+        return {};
+    const cannot = (why) => {
+        const said = why.replace(/\s*\n\s*/g, " ").trim();
+        return {
+            problem: `Swipe ${swipeId}'s price could not be read before its start, so nothing was sent: ${/[.!?]$/.test(said) ? said : `${said}.`} Run the sheet again to try it; if it keeps failing, start it on its own: exodus video swipe start ${swipeId}`,
+        };
+    };
+    try {
+        const res = await deps.get(`${SWIPE_SHEET_PRICE_PATH}?id=${encodeURIComponent(swipeId)}`);
+        if (missingRouteLine(res, "exodus video swipe sheet price"))
+            return {};
+        if (!res.ok)
+            return cannot(formatApiError(res));
+        const read = priceOf(res.data);
+        if (!read)
+            return cannot("the server's answer could not be read");
+        if (!read.price.priced)
+            return {};
+        const most = read.price.picked.maxUsd;
+        if (typeof most !== "number" || !Number.isFinite(most) || most < 0)
+            return cannot("the server's answer gave no most in dollars");
+        return { maxUsd: most };
+    }
+    catch (err) {
+        return cannot(`the server could not be reached: ${describeFetchFailure(err)}`);
+    }
+}
 async function maxUsdUnsupported(swipeId, maxUsd, deps) {
     const cannot = `so it can't hold this start to ${usd(maxUsd)}, and nothing was started.`;
     try {
@@ -3579,10 +3608,25 @@ async function startVideo(video, run, swipeId, outcome, ctx) {
         await sayIfFailedAtStart(video, existing, swipeId, ctx);
         return;
     }
+    const quoted = await batchQuoteOf(swipeId, read.swipe, ctx.sheet.start.style, ctx.deps);
+    if ("problem" in quoted) {
+        stopRun(video, run, outcome, quoted.problem, ctx);
+        return;
+    }
     run.pending = { at: stamp(ctx.deps), swipeId, ...(read.serverNow !== null ? { serverAt: read.serverNow } : {}) };
     run.updatedAt = stamp(ctx.deps);
     ctx.save();
-    const started = answerOf(await swipeStartFlow(swipeId, ctx.sheet.start, { json: true, yes: true, wait: false }, ctx.deps));
+    const ask = quoted.maxUsd !== undefined ? { ...ctx.sheet.start, maxUsd: quoted.maxUsd } : ctx.sheet.start;
+    let sent = false;
+    const deps = {
+        ...ctx.deps,
+        post: (path, body) => {
+            if (path === SWIPE_RUNS_PATH)
+                sent = true;
+            return ctx.deps.post(path, body);
+        },
+    };
+    const started = answerOf(await swipeStartFlow(swipeId, ask, { json: true, yes: true, wait: false }, deps));
     const held = isRecord(started.alreadyStarted) && typeof started.alreadyStarted.runId === "string" ? started.alreadyStarted : null;
     if (held) {
         const heldRunId = held.runId;
@@ -3596,7 +3640,7 @@ async function startVideo(video, run, swipeId, outcome, ctx) {
         return;
     }
     if (started.ok !== true || typeof started.runId !== "string") {
-        if (postRefused(started))
+        if (!sent || postRefused(started))
             run.pending = null;
         stopRun(video, run, outcome, errorOf(started), ctx);
         return;

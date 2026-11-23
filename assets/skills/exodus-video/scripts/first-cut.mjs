@@ -636,6 +636,8 @@ export function finishingOf(manifest) {
     ...(f.musicMix === "light" ? { musicMix: "light" } : {}),
     // COP-384: a run's sheet's extra shots, the clips the worker laid in the manifest's `extraShots` (EXTRA_SHOTS).
     ...(f.extraShots === true ? { extraShots: true } : {}),
+    // B-roll, inserts and overlays (first-cut-cutaways.mjs): the items the worker laid in the manifest's `oneTakeCutaways`.
+    ...(f.cutaways === true ? { cutaways: true } : {}),
   };
   if (!Object.values(on).some(Boolean) && Object.keys(added).length === 0) return null;
   const target = f.targetSeconds;

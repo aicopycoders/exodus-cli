@@ -612,6 +612,13 @@ failure: the work goes on. Follow it by the id it printed, with the command
 the CLI names, and never by running the paid line again: a second run buys it
 a second time.
 
+**An ad from Top ads.** Top ads (the weekly chart of top brands' ads) is
+another place to find an ad to swipe, when the member wants to look there:
+`exodus top-ads search "<words>"` or `exodus top-ads list`, then `exodus
+top-ads show <id>` prints the ad's Meta Ad Library link. That link is a link
+like any other: step 1 reads it with `--url`, in quotes. The `exodus-top-ads`
+skill has the rest.
+
 ### 0. No ad named: find some
 
 When the member asks for ads to swipe without naming one ("find some ads to

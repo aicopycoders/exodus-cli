@@ -27,6 +27,8 @@ Use the transcript for a video, else the headline + body + CTA. If it prints `Tr
 
 **Door B, a link or a paste.** Pasted text is used as is. A link goes through the transcript path: pull the video, transcribe, clean obvious errors, show the transcript once so they can catch a misheard brand name. Save it under `swipes/<slug>/source.md`.
 
+No ad in mind yet? Top ads (the weekly chart of top brands' ads) is a place to find one: `npx @aicopycoders/exodus top-ads search "<words>"`, then `npx @aicopycoders/exodus top-ads show <id>` prints the ad's transcript (use it as the paste) and its Meta Ad Library link; for a video of it instead, `npx @aicopycoders/exodus video swipe --url "<that link>"`. See the `exodus-top-ads` skill.
+
 Either way, say in one line what you've got: brand, length, sung or spoken.
 
 ## 2. Ask the five questions, with a recommendation

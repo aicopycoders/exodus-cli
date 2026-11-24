@@ -38,6 +38,10 @@ const OTHER_COMMANDS = new Set([
   // stored data rather than generating anything, so they belong beside `hooks`.
   "ads",
   "comments",
+  // COP-466: read-only windows on Top ads, Top brands and Ad templates, the shared weekly chart.
+  "top-ads",
+  "top-brands",
+  "ad-templates",
 ]);
 
 // Commands kept runnable (back-compat / power users) but hidden from the

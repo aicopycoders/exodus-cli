@@ -32,6 +32,7 @@ This skill ROUTES. Read what the user wants, name the destination skill, and han
 | See past runs / find an output | `exodus-browse` |
 | Open or create Google Docs/Sheets | `exodus-drive` |
 | Read their OWN live Meta ads and their numbers — "what are my cheapest ads", "where is my spend going", "show me that ad", "what are people saying in the comments on my ads" (`exodus ads` / `exodus comments`) | `exodus-ads` (read-only; already synced by the dashboard, no Meta MCP needed) |
+| See what's working for OTHER brands right now: Top ads, Top brands and Ad templates — "show me top ads", "what's working in top ads this week", "find me a top ad about joint pain", "which brands run the most ads", "find a template for a before-and-after ad", "show me template 3's scripts" (`exodus top-ads` / `exodus top-brands` / `exodus ad-templates`) | `exodus-top-ads` (read-only; to swipe a Top ad into a video it hands the ad's link to `exodus-video`) |
 | Import their OWN winning ads from their Meta ad account ("import my winners", "mine my ad account for winners", "exodus winners") | `exodus-winners` (it checks first whether the brand's Meta account is connected — if it is, it reads `exodus ads` and `exodus winners definition` instead of a Meta MCP) |
 | Figure out WHO to sell to, segments, personas, "map the market" | `odf` (or `positioning-spiral` when no coherent positioning exists yet) |
 | The product's mechanism, "why does this work", "which ingredient leads" | `mechanism` |

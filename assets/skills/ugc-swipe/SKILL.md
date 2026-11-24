@@ -10,6 +10,8 @@ This writes a script; it films nothing. A member who gave their ad as a video fi
 ## 1. Get the ad
 A pasted transcript is best. A link: get the transcript with `python3 -I .claude/skills/swipe/scripts/getad.py <link>` if that skill is installed (it needs ElevenLabs credit). A swipe number from the UGC swipe page: read its transcript from `research/ai-video-ads/ugc/1-swipe/ads-full.json` (field `n`) when that file is present. Save it to `ugc/<brand>/ad-<id>.txt`.
 
+No ad in mind yet? Top ads (the weekly chart of top brands' ads) is a place to find one: `npx @aicopycoders/exodus top-ads search "<words>"`, then `npx @aicopycoders/exodus top-ads show <id>` prints the ad's transcript (use it as the paste) and its Meta Ad Library link; for a video of it instead, `npx @aicopycoders/exodus video swipe --url "<that link>"`. See the `exodus-top-ads` skill.
+
 ## 2. The one ask
 One message, with your pick:
 

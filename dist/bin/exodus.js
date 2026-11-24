@@ -26,6 +26,9 @@ const OTHER_COMMANDS = new Set([
     "hooks",
     "ads",
     "comments",
+    "top-ads",
+    "top-brands",
+    "ad-templates",
 ]);
 const HIDDEN_COMMANDS = new Set([
     "creative",

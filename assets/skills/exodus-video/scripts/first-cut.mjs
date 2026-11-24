@@ -53,7 +53,7 @@ import { captionSync, placementHeard, retimeWords, soundPictureCheck } from "./f
 import { CUTAWAY_BROLL_CLIP, CUTAWAY_INSERT_CLIP, cutawayFrame, cutawayLayoutOf, cutawayLinesOf, cutawaysOf, cutawaysRefusalOf, cutawayUnitsOf, oneLayoutPerRun, scheduleFrameTrack } from "./first-cut-cutaways.mjs";
 import { cutawayCaptionPieces, cutawayScreenFrames, cutawayFillShare, CUTAWAY_FILL_MAX, CUTAWAY_CORNER, CUTAWAY_SPEAKER_TOP, cornerLayout, cutawayCaptionPlace, speakerTopFace } from "./first-cut-cutaways.mjs";
 import { cutawayDrawnPlaceSized, scheduleDrawnTrack } from "./first-cut-cutaways.mjs";
-import { DRAWN_KINDS_LAID, drawnEvents, drawnLayoutOf, drawnStyle } from "./first-cut-drawn.mjs";
+import { DRAWN_KINDS_LAID, DRAWN_LOOK, drawnEvents, drawnLayoutOf, drawnStyle } from "./first-cut-drawn.mjs";
 
 const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]";
 const WIDTH = 1080;
@@ -5984,6 +5984,15 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       videoLabel = `xp${k}`;
     });
   }
+  // B-roll, inserts and overlays: each sticker's cut-out (first-cut.mjs cutOutSticker), on the finished cut's own frames
+  // from its first to its last, over the frame items and under the burned words; a still held, with no move.
+  (finish?.drawnPictures ?? []).forEach((p, k) => {
+    const frames = p.out - p.in;
+    const j = addInput("-loop", "1", "-framerate", String(FPS), "-t", sec((frames + 1) / FPS), "-i", resolve(p.file));
+    filters.push(`[${j}:v]format=rgba,trim=end_frame=${frames + 1},setpts=PTS-STARTPTS+round(${p.in}/(${FPS}*TB))[dp${k}]`);
+    filters.push(`[${videoLabel}][dp${k}]overlay=${p.x}:${p.y}:eof_action=pass:enable='between(t,${sec((p.in - 0.5) / FPS)},${sec((p.out - 0.5) / FPS)})'[dq${k}]`);
+    videoLabel = `dq${k}`;
+  });
   // COP-300: burned after the speed step, on the finished cut's own frames, so no speed step can move the captions
   // off the voice. The ASS file is timed on that clock (editAss `speed`).
   if (finish?.ass) {
@@ -6902,6 +6911,9 @@ const LOOK_FONTS = {
     more: { "‘": 481, "’": 475, "“": 950, "”": 948, "–": 637, "—": 1153, "…": 1450 },
   },
 };
+
+/** B-roll, inserts and overlays: a sticker's width, a share of the frame's (plan 4.7: 0.40). */
+const DRAWN_STICKER_SHARE = DRAWN_LOOK.stickerShare;
 
 /**
  * B-roll, inserts and overlays: the frames of the finished film a card or the headline shows on, as editAss burns it:
@@ -7907,6 +7919,65 @@ export function pictureSizeOf(file) {
   } catch {
     return null;
   }
+}
+
+/**
+ * B-roll, inserts and overlays: a sticker's cut-out, as tried on stored stills: the still's white ground flood-filled from its top left corner on a hard mask (anything more than 15 short of
+ * white is the subject), choked 1 px and feathered, so a white part inside the subject (a highlight, a capsule) stays.
+ */
+const STICKER_MASK = "if(gt(765-r(X,Y)-g(X,Y)-b(X,Y),15),255,0)";
+export const STICKER_KEY = `format=rgb24,split[c][m];[m]geq=r='${STICKER_MASK}':g='${STICKER_MASK}':b='${STICKER_MASK}',format=gray,` +
+  "floodfill=x=0:y=0:s0=0:d0=128,lut=y='if(eq(val,128),0,255)',erosion,gblur=sigma=0.8[a];[c][a]alphamerge";
+/** The filters the cut-out needs, and the two it measures the subject's box with. */
+export const STICKER_FILTERS = ["geq", "floodfill", "lut", "erosion", "gblur", "alphamerge", "alphaextract", "bbox"];
+/** The room kept round the subject's box, in pixels of the still, as the stored stills were cut. */
+const STICKER_MARGIN_PX = 24;
+/** A sticker's still is a picture file by its name (as the end card's, endCardPictureOf), never a playlist or a video. */
+export const STICKER_STILL = /\.(png|jpe?g|webp)$/i;
+
+/**
+ * A sticker's still (`src`, a plain picture on a white ground) cut out, cropped to its subject with a margin, and sized
+ * `width` pixels across, written to `dst` as a PNG with its alpha. Its size [w, h], or null when any step fails, or
+ * `{ noGround: true }` when the still's top left corner is not ground: the flood fill starts there, so nothing would be
+ * cut away and the still would be laid as an opaque box. The still is read as one picture and nothing else (the image
+ * demuxer, local files only, no pattern), so a file that is really a playlist or a link list never reaches past it; a
+ * still not named as a picture is not read at all. `dst` is left only when its size is returned.
+ */
+export function cutOutSticker(src, dst, width) {
+  if (!STICKER_STILL.test(src)) return null;
+  const keyed = `${dst}.keyed.png`;
+  // A file left at either name (a cut that stopped before its clean-up) is removed first, a link as a link, so ffmpeg
+  // never writes through it.
+  rmSync(dst, { force: true });
+  rmSync(keyed, { force: true });
+  let size = null;
+  try {
+    size = cutOut(src, dst, keyed, width);
+    return size;
+  } finally {
+    rmSync(keyed, { force: true });
+    if (!Array.isArray(size)) rmSync(dst, { force: true });
+  }
+}
+
+/** cutOutSticker's steps: the still keyed, its corner and subject's box read, cropped and sized into `dst`. */
+function cutOut(src, dst, keyed, width) {
+  const key = spawnSync("ffmpeg", ["-v", "error", "-y", "-protocol_whitelist", "file", "-f", "image2", "-pattern_type", "none", "-i", src, "-filter_complex", `[0:v]${STICKER_KEY},format=rgba[o]`, "-map", "[o]", "-frames:v", "1", keyed]);
+  if (key.status !== 0) return null;
+  const corner = spawnSync("ffmpeg", ["-v", "error", "-i", keyed, "-vf", "alphaextract,crop=1:1:0:0,format=gray", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]);
+  if (corner.status !== 0 || !corner.stdout || corner.stdout.length < 1) return null;
+  if (corner.stdout[0] >= 128) return { noGround: true };
+  const box = spawnSync("ffmpeg", ["-hide_banner", "-i", keyed, "-vf", "alphaextract,bbox=min_val=128", "-f", "null", "-"]);
+  const found = [...String(box.stderr ?? "").matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)].at(-1);
+  const size = pictureSizeOf(keyed);
+  if (!found || !size) return null;
+  const [w, h, x, y] = found.slice(1).map(Number);
+  const x0 = Math.max(0, x - STICKER_MARGIN_PX);
+  const y0 = Math.max(0, y - STICKER_MARGIN_PX);
+  const x1 = Math.min(size[0], x + w + STICKER_MARGIN_PX);
+  const y1 = Math.min(size[1], y + h + STICKER_MARGIN_PX);
+  const sized = spawnSync("ffmpeg", ["-v", "error", "-y", "-i", keyed, "-vf", `crop=${x1 - x0}:${y1 - y0}:${x0}:${y0},scale=${width}:-2:flags=lanczos,format=rgba`, "-frames:v", "1", dst]);
+  return sized.status === 0 ? pictureSizeOf(dst) : null;
 }
 
 /**
@@ -10886,11 +10957,32 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     } else {
       // A paid item's file: in the folder (really: not a link out of it), a video ffmpeg can read where the cut starts
       // reading it, and its length in frames for its window (an insert's whole window; a b-roll clip's at the speed it
-      // plays, first-cut-cutaways.mjs CUTAWAY_BROLL_CLIP). A drawn item goes to the drawn track (a still it lays is
-      // checked there).
+      // plays, first-cut-cutaways.mjs CUTAWAY_BROLL_CLIP). A drawn item goes to the drawn track; a sticker's still is
+      // checked and cut out here.
       for (const item of cutawaysRead.items) {
-        if (item.track === "drawn") {
+        if (item.track === "drawn" && item.template !== "ingredient-stickers") {
           drawnItems.push(item);
+          continue;
+        }
+        if (item.track === "drawn") {
+          // A sticker's still is cut out here, once, into a file of its own beside it (removed after the render). The
+          // still is checked as a paid clip is: a file really in the folder, and its path past every link is the one cut.
+          // The cut-out's name starts with a dot, which no file of the key can (PLAIN_FILE), so it never writes over, or
+          // removes, a still or clip of the film.
+          const still = item.file && named(item.file) ? inFolder(item.file) : undefined;
+          const missing = still ? missingFilters(STICKER_FILTERS) : [];
+          const file = `.cutaway-sticker-${item.n}.png`;
+          const size = !still || missing.length > 0 ? null : cutOutSticker(here(still), here(file), Math.round(DRAWN_STICKER_SHARE * WIDTH));
+          if (still === undefined) leaveCutaway(item, "cut-no-file");
+          else if (still === null) leaveCutaway(item, "cut-file-unreadable");
+          else if (missing.length > 0) {
+            notes.push(`oneTakeCutaways: item ${item.n} (sticker) was left out: this ffmpeg has no ${missing.join(", ")} filter to cut its picture out`);
+            leaveCutaway(item, "cut-sticker-no-filter");
+          } else if (!size) leaveCutaway(item, "cut-file-unreadable");
+          else if (size.noGround) {
+            notes.push(`oneTakeCutaways: item ${item.n} (sticker) was left out: its still's top left corner is not plain ground, so its picture could not be cut out`);
+            leaveCutaway(item, "cut-sticker-no-ground");
+          } else drawnItems.push({ ...item, sticker: { file, size } });
           continue;
         }
         const file = item.file && named(item.file) ? inFolder(item.file) : undefined;
@@ -11637,6 +11729,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       ...(whooshRecord ? { whoosh: whooshRecord } : {}),
     };
   }
+  // B-roll, inserts and overlays: the stickers laid, as pictures under the burned words.
+  const drawnPictures = (drawnPlaced ?? []).filter((d) => d.layout.picture).map((d) => ({ file: d.layout.picture, in: d.in, out: d.out, x: d.place.box[0], y: d.place.box[1] }));
   const argsWith = (withMusic) => buildFfmpegArgs(timeline, {
     resolve: at,
     music: music && !sheetMusic ? at(music) : null,
@@ -11653,6 +11747,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ...(withMusic && lightMusic ? { lightMusic } : {}),
           ...(extraShots ? { extraShots } : {}),
           ...(cutawayFrames ? { cutawayFrames } : {}),
+          ...(drawnPictures.length > 0 ? { drawnPictures } : {}),
         },
       }
       : {}),
@@ -11678,6 +11773,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     res = spawnSync("ffmpeg", ffmpegArgs, { stdio: "inherit", ...(ass || look ? { cwd: path.resolve(dir) } : {}) });
   }
   if (room?.file) rmSync(room.file, { force: true });
+  for (const item of drawnItems.filter((d) => d.sticker)) rmSync(here(item.sticker.file), { force: true });
   if (res.status !== 0) {
     const quoted = ffmpegArgs.map((a) => (/[\s\[\];]/.test(a) ? `'${a}'` : a)).join(" ");
     throw new FirstCutError(1, `ffmpeg failed. The command it ran:\n  ffmpeg ${quoted}`);

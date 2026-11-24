@@ -11,7 +11,7 @@
 // This file imports nothing, so the cut runs with `node` and no build.
 
 /** The drawn kinds this cut lays (first-cut-cutaways.mjs CUTAWAY_DRAWN_KINDS); any other kind is left for a later part. */
-export const DRAWN_KINDS_LAID = Object.freeze(["label", "list", "timer"]);
+export const DRAWN_KINDS_LAID = Object.freeze(["label", "list", "timer", "card", "emoji", "sticker"]);
 
 /** The card's plain marks (video/lib/sheet/captions.ts CARD_MARKS, less the double quotes, plus the left single quote). */
 const DRAWN_MARKS = [".", ",", "!", "?", "'", "’", "-", "–", "—", ":", ";", "%", "&", "(", ")", "/", "+", "$", "#", "‘"];
@@ -56,7 +56,44 @@ export const DRAWN_LOOK = Object.freeze({
   iconGap: 16,
   maxLines: 2,
   pop: [0.7, 0.9],
+  // A card: 0.50 of the frame's width, on the chest, the member's words in up
+  // to three lines under its figure: the chart's ring (its track grey, filled green to the one number, from the top,
+  // clockwise) or the guarantee's seal (red, a white tick). The offer card is words alone.
+  // An emoji: one of our own drawings on a white round badge, 0.16 of the width; at its smallest (plan 0.40)
+  // 0.11, 120 px, still twice a caption's height. A sticker: its cut-out, 0.40 of the width, never smaller; a card is
+  // never smaller than its own words' floor.
+  emoji: 170,
+  emojiSmall: 120,
+  stickerShare: 0.4,
+  card: { share: 0.5, em: 60, maxLines: 3, pad: 30, figureGap: 18, radius: 34, ring: 200, ringWidth: 32, track: "&HE0E0E0&", seal: 120, sealColour: "&H241B8A&" },
 });
+
+/**
+ * The share of its ring a chart card fills: the one number its words hold, 0 to 100 ("86% saw improvement" fills 0.86),
+ * a decimal point or comma read as such and a comma before three digits as a thousands mark; null when the words hold
+ * no number, more than one, or one past 100.
+ */
+export function chartShareOf(words) {
+  const numbers = String(words).match(/\d+(?:[.,]\d+)*/g) ?? [];
+  if (numbers.length !== 1) return null;
+  const value = Number(numbers[0].replace(/,(?=\d{3}(?!\d))/g, "").replace(",", "."));
+  return Number.isFinite(value) && value >= 0 && value <= 100 ? value / 100 : null;
+}
+
+/**
+ * The chart's ring filled to `share` (0 to 1) as an ASS drawing: a wedge from the ring's middle, from the top clockwise,
+ * its arc a point every 2 degrees or less; the ring's hole is drawn over it. Null for nothing to fill.
+ */
+export function ringWedgePath(share, cx, cy, r) {
+  if (!(share > 0)) return null;
+  const sweep = Math.min(1, share) * 2 * Math.PI;
+  const steps = Math.max(2, Math.ceil((sweep * 180) / Math.PI / 2));
+  const pts = Array.from({ length: steps + 1 }, (_, k) => {
+    const a = -Math.PI / 2 + (sweep * k) / steps;
+    return `${px(cx + r * Math.cos(a))} ${px(cy + r * Math.sin(a))}`;
+  });
+  return `m ${px(cx)} ${px(cy)} l ${pts.join(" l ")}`;
+}
 
 const px = (n) => Math.round(n);
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -107,6 +144,120 @@ export function fitWords(text, measure, { maxW, em, floorEm, maxLines }) {
     if (lines.length <= maxLines) return { em: e, lines, width: Math.max(...lines.map((l) => measure(l, e))) };
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------------------------------- the emoji
+
+/**
+ * The 12 emoji of the set (video/lib/cutawayTemplates.ts CUTAWAY_EMOJI), our own simple flat drawings, no picture from
+ * any emoji set or font (plan 0.10: their licences): each a list of shapes in a 100-unit square, each shape a closed
+ * path of straight lines (`l`) and Bézier curves (`b`) and its colour, drawn over a white round badge with the plates'
+ * soft shadow, so it reads over any frame at phone size.
+ */
+const C = { ink: "&H141414&", white: "&HFFFFFF&", green: "&H3C9B2E&", red: "&H3024E6&", orange: "&H008AFF&", yellow: "&H1FD2FF&", gold: "&H009AD9&", blue: "&HFF8C2F&", leaf: "&H4AB53B&", darkLeaf: "&H2C7A1E&", heart: "&H3C28E8&" };
+const poly = (pts) => `m ${pts[0][0]} ${pts[0][1]} ${pts.slice(1).map(([x, y]) => `l ${x} ${y}`).join(" ")}`;
+const oval = (cx, cy, rx, ry) => {
+  const kx = rx * 0.5523;
+  const ky = ry * 0.5523;
+  return `m ${cx} ${cy - ry} b ${cx + kx} ${cy - ry} ${cx + rx} ${cy - ky} ${cx + rx} ${cy} b ${cx + rx} ${cy + ky} ${cx + kx} ${cy + ry} ${cx} ${cy + ry} b ${cx - kx} ${cy + ry} ${cx - rx} ${cy + ky} ${cx - rx} ${cy} b ${cx - rx} ${cy - ky} ${cx - kx} ${cy - ry} ${cx} ${cy - ry}`;
+};
+const rect = (x0, y0, x1, y1) => poly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+const star = (cx, cy, R, r, n) => poly(Array.from({ length: 2 * n }, (_, k) => {
+  const a = -Math.PI / 2 + (k * Math.PI) / n;
+  const d = k % 2 === 0 ? R : r;
+  return [Math.round((cx + d * Math.cos(a)) * 10) / 10, Math.round((cy + d * Math.sin(a)) * 10) / 10];
+}));
+const rays = (cx, cy, r0, r1, n, half) => Array.from({ length: n }, (_, k) => {
+  const a = (k * 2 * Math.PI) / n;
+  const at = (d, t) => [Math.round((cx + d * Math.cos(t)) * 10) / 10, Math.round((cy + d * Math.sin(t)) * 10) / 10];
+  return poly([at(r0, a - half), at(r1, a), at(r0, a + half)]);
+});
+
+export const DRAWN_EMOJI = Object.freeze({
+  check: [[oval(50, 50, 38, 38), C.green], [poly([[27, 50], [34, 43], [43, 52], [66, 29], [73, 36], [43, 66]]), C.white]],
+  cross: [[oval(50, 50, 38, 38), C.red], [poly([[35.5, 28.5], [71.5, 64.5], [64.5, 71.5], [28.5, 35.5]]), C.white], [poly([[64.5, 28.5], [71.5, 35.5], [35.5, 71.5], [28.5, 64.5]]), C.white]],
+  fire: [
+    ["m 50 10 b 58 28 80 40 78 64 b 76 82 64 90 50 90 b 36 90 24 82 22 64 b 20 46 40 36 50 10", C.orange],
+    ["m 50 44 b 56 56 66 62 64 74 b 62 84 56 88 50 88 b 44 88 38 84 36 74 b 34 62 46 56 50 44", C.yellow],
+  ],
+  sparkles: [[star(42, 56, 32, 11, 4), C.yellow], [star(72, 27, 16, 5, 4), C.yellow], [star(75, 74, 11, 4, 4), C.yellow]],
+  heart: [["m 50 84 b 30 68 16 56 16 40 b 16 28 26 20 36 20 b 43 20 48 24 50 30 b 52 24 57 20 64 20 b 74 20 84 28 84 40 b 84 56 70 68 50 84", C.heart]],
+  star: [[star(50, 53, 38, 16, 5), C.yellow]],
+  "thumbs-up": [
+    [rect(18, 46, 30, 86), C.blue],
+    ["m 30 48 l 42 48 l 46 20 b 46 16 56 16 56 22 l 56 46 l 66 46 b 74 46 74 56 72 58 b 76 60 76 68 72 70 b 76 72 76 80 70 82 b 72 86 68 88 64 88 l 30 88", C.yellow],
+    [rect(50, 57, 72, 60), C.gold], [rect(50, 69, 72, 72), C.gold], [rect(50, 80, 68, 83), C.gold],
+  ],
+  eyes: [
+    [oval(33, 50, 15, 24), C.ink], [oval(33, 50, 12, 21), C.white], [oval(37, 57, 7, 9), C.ink],
+    [oval(67, 50, 15, 24), C.ink], [oval(67, 50, 12, 21), C.white], [oval(71, 57, 7, 9), C.ink],
+  ],
+  clock: [[oval(50, 50, 38, 38), C.ink], [oval(50, 50, 32, 32), C.white], [rect(47, 25, 53, 53), C.ink], [rect(47, 47, 72, 53), C.red]],
+  drop: [["m 50 12 b 58 30 74 46 74 62 b 74 76 63 88 50 88 b 37 88 26 76 26 62 b 26 46 42 30 50 12", C.blue], [oval(39, 64, 5, 9), C.white]],
+  leaf: [["m 20 80 b 20 42 44 18 82 18 b 82 56 58 80 20 80", C.leaf], [poly([[22, 76], [70, 28], [74, 32], [26, 80]]), C.darkLeaf]],
+  sun: [[oval(50, 50, 20, 20), C.yellow], ...rays(50, 50, 26, 44, 8, 0.24).map((p) => [p, C.yellow])],
+});
+
+/** An emoji on its badge, `size` pixels across: each shape drawn in its 100-unit square, scaled to the badge. */
+function emojiBadge(id, size, scale) {
+  const L = DRAWN_LOOK;
+  const k = size / 100;
+  const badge = oval(50, 50, 50, 50);
+  return {
+    w: size,
+    h: size,
+    parts: [
+      { layer: 10, x: 0, y: L.shadow.down * scale, path: badge, scale: k, tags: `\\1c&H000000&\\1a${L.shadow.alpha}\\blur${L.shadow.blur * scale}` },
+      { layer: 11, x: 0, y: 0, path: badge, scale: k, tags: `\\1c${L.plate}` },
+      ...DRAWN_EMOJI[id].map(([path, colour], i) => ({ layer: 12 + i, x: 0, y: 0, path, scale: k, tags: `\\1c${colour}` })),
+    ],
+  };
+}
+
+/** The red arrow at a drawn item (plan 3.6): it points right, at the item, from its left, a white edge round it. */
+export const DRAWN_ARROW = Object.freeze({ w: 72, h: 56, gap: 12, border: 4 });
+const arrowPath = () => {
+  const { w, h } = DRAWN_ARROW;
+  return `m 0 ${px(h * 0.36)} l ${px(w * 0.5)} ${px(h * 0.36)} l ${px(w * 0.5)} 0 l ${w} ${px(h / 2)} l ${px(w * 0.5)} ${h} l ${px(w * 0.5)} ${px(h * 0.64)} l 0 ${px(h * 0.64)}`;
+};
+
+/**
+ * A card (plan 4.7): 0.50 of the width, its figure on top (the chart's ring, the guarantee's seal) and the member's
+ * words under it, centred. Null when the words do not fit its width in three lines at the floor's size.
+ */
+function cardPlate(kind, words, measure, scale, W, share) {
+  const L = DRAWN_LOOK;
+  const K = L.card;
+  const w = px(K.share * W);
+  const pad = K.pad * scale;
+  const fit = fitWords(words, (t, e) => measure(t, e) * scale, { maxW: w - 2 * pad, em: K.em, floorEm: L.floorEm, maxLines: K.maxLines });
+  if (!fit) return null;
+  const figure = kind === "chart-card" ? K.ring * scale : kind === "guarantee-card" ? K.seal * scale : 0;
+  const lineH = fit.em * L.lineShare * scale;
+  const top = pad + (figure > 0 ? figure + K.figureGap * scale : 0);
+  const h = Math.ceil(top + fit.lines.length * lineH + pad);
+  const cx = w / 2;
+  const cy = pad + figure / 2;
+  const r = figure / 2;
+  const fig = kind === "chart-card"
+    ? [
+      { layer: 12, x: 0, y: 0, path: circlePath(cx, cy, r), tags: `\\1c${K.track}` },
+      ...(ringWedgePath(share, cx, cy, r) ? [{ layer: 13, x: 0, y: 0, path: ringWedgePath(share, cx, cy, r), tags: `\\1c${L.green}` }] : []),
+      { layer: 14, x: 0, y: 0, path: circlePath(cx, cy, r - K.ringWidth * scale), tags: `\\1c${L.plate}` },
+    ]
+    : kind === "guarantee-card"
+      ? [
+        { layer: 12, x: 0, y: 0, path: circlePath(cx, cy, r), tags: `\\1c${K.sealColour}` },
+        { layer: 13, x: 0, y: 0, path: `m ${[[27, 50], [34, 43], [43, 52], [66, 29], [73, 36], [43, 66]].map(([x, y]) => `${px(cx - r + (x * 2 * r) / 100)} ${px(cy - r + (y * 2 * r) / 100)}`).join(" l ")}`, tags: `\\1c${L.plate}` },
+      ]
+      : [];
+  const parts = [
+    { layer: 10, x: 0, y: L.shadow.down * scale, path: boxPath(w, h, px(K.radius * scale)), tags: `\\1c&H000000&\\1a${L.shadow.alpha}\\blur${L.shadow.blur * scale}` },
+    { layer: 11, x: 0, y: 0, path: boxPath(w, h, px(K.radius * scale)), tags: `\\1c${L.plate}\\1a${L.plateAlpha}` },
+    ...fig,
+    ...fit.lines.map((text, i) => ({ layer: 12, cx, cy: top + (i + 0.5) * lineH, em: fit.em * scale, text })),
+  ];
+  return { w, h, parts };
 }
 
 /**
@@ -161,16 +312,26 @@ export function drawnLayoutOf(laid, font, W = 1080, H = 1920, { small = false } 
   const L = DRAWN_LOOK;
   const scale = W / 1080;
   const item = laid.item;
-  const room = W - 2 * L.side * scale - 2 * L.padX * scale;
+  const arrow = item.arrow === true;
+  // The arrow's white edge is inside the item's box too, so nothing placed beside it is drawn over.
+  const arrowW = arrow ? (DRAWN_ARROW.border + DRAWN_ARROW.w + DRAWN_ARROW.gap) * scale : 0;
+  const room = W - 2 * L.side * scale - 2 * L.padX * scale - arrowW;
   const fit = (words, em, iconW, maxLines) => fitWords(words, (t, e) => font.measure(t, e) * scale, { maxW: room - iconW, em, floorEm: L.floorEm, maxLines });
   // `small` (plan 0.40): the words at the floor's size, on one line where they fit, else on two.
   const fitOf = (words, em, iconW = 0) => (small ? fit(words, L.floorEm, iconW, 1) ?? fit(words, L.floorEm, iconW, L.maxLines) : fit(words, em, iconW, L.maxLines));
-  const texts = laid.kind === "list" ? (Array.isArray(item.points) ? item.points.map((p) => p?.words) : []) : [item.words];
-  if (texts.length === 0 || texts.some((t) => t === undefined)) return { code: "cut-unread" };
+  // A sticker is its picture alone, cut out and sized when the cut read it (`item.sticker`), laid under the words.
+  if (laid.kind === "sticker") {
+    return item.sticker ? { w: item.sticker.size[0], h: item.sticker.size[1], groups: [], picture: item.sticker.file } : { code: "cut-no-file" };
+  }
+  const texts = laid.kind === "list" ? (Array.isArray(item.points) ? item.points.map((p) => p?.words) : []) : laid.kind === "emoji" ? [] : [item.words];
+  if (laid.kind !== "emoji" && (texts.length === 0 || texts.some((t) => t === undefined))) return { code: "cut-unread" };
   const printed = texts.map(drawnWordsOf);
   if (printed.some((t) => t === null)) return { code: "cut-words-unprintable" };
   let rows;
-  if (laid.kind === "label") {
+  if (laid.kind === "emoji") {
+    if (typeof item.emoji !== "string" || !Object.hasOwn(DRAWN_EMOJI, item.emoji)) return { code: "cut-unread" };
+    rows = [emojiBadge(item.emoji, px((small ? L.emojiSmall : L.emoji) * scale), scale)];
+  } else if (laid.kind === "label") {
     const fit = fitOf(printed[0], L.em.label);
     if (!fit) return { code: "cut-words-wide" };
     rows = [plateRow(fit, L, scale)];
@@ -184,21 +345,31 @@ export function drawnLayoutOf(laid, font, W = 1080, H = 1920, { small = false } 
     const fits = printed.map((t) => fitOf(t, L.em.list, iconW + L.iconGap * scale));
     if (fits.some((f) => f === null)) return { code: "cut-words-wide" };
     rows = fits.map((fit) => plateRow(fit, L, scale, bulletIcon(px(fit.em * L.bullet * scale))));
+  } else if (laid.kind === "card") {
+    const share = item.template === "chart-card" ? chartShareOf(printed[0]) : null;
+    if (item.template === "chart-card" && share === null) return { code: "cut-chart-number" };
+    const card = cardPlate(item.template, printed[0], font.measure, scale, W, share);
+    if (!card) return { code: "cut-words-wide" };
+    rows = [card];
   } else return { code: "cut-drawn-later" };
-  // The rows stacked and centred.
+  // The rows stacked and centred, the arrow at the first row's left.
   const gap = L.stackGap * scale;
   const inner = Math.max(...rows.map((r) => r.w));
-  const w = Math.ceil(inner);
+  const w = Math.ceil(inner + arrowW);
   const h = Math.ceil(rows.reduce((sum, r) => sum + r.h, 0) + gap * (rows.length - 1) + L.shadow.down * scale);
   let y = 0;
   const groups = rows.map((r, k) => {
-    const x = (inner - r.w) / 2;
+    const x = arrowW + (inner - r.w) / 2;
     const parts = r.parts.map((p) => ({ ...p, ...(p.path !== undefined ? { x: p.x + x, y: p.y + y } : { cx: p.cx + x, cy: p.cy + y }) }));
+    if (k === 0 && arrow) {
+      const s = scale;
+      parts.push({ layer: 12, x: x - DRAWN_ARROW.gap * s - DRAWN_ARROW.w * s, y: y + r.h / 2 - (DRAWN_ARROW.h * s) / 2, path: arrowPath(), scale: s, tags: `\\1c${L.red}\\3c${L.plate}\\bord${DRAWN_ARROW.border * s}` });
+    }
     const group = { from: laid.points ? laid.points[k] : laid.in, cx: x + r.w / 2, cy: y + r.h / 2, parts };
     y += r.h + gap;
     return group;
   });
-  return { w, h, groups };
+  return { w, h, groups, ...(arrow ? { arrow: true } : {}) };
 }
 
 /** The drawn items' style: the burn's font in the headline's ink, no edge or shadow, each event placing itself. */

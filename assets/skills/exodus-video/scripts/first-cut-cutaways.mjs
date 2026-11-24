@@ -96,6 +96,7 @@ export const CUTAWAY_CUT_CODES = Object.freeze([
   "cut-words-wide",
   "cut-chart-number",
   "cut-sticker-no-filter",
+  "cut-sticker-no-ground",
 ]);
 
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -1075,7 +1076,8 @@ export function cutawayPointsOf(item, rows, first) {
  * kept of its kind or a higher one comes in (plan 0.10); a later sticker that would cut an earlier one under
  * `stickerMin` is left out, as is a sticker a higher item already laid would cut that short; an emoji that would come in
  * while a sticker is on is left out. Every window is final when it is placed and checked: a laid item is never taken
- * out again, so nothing is cut short by an item that is not on the film.
+ * out again, so nothing is cut short by an item that is not on the film. A sticker that found no place over its window
+ * is tried once more over the shorter window a later sticker laid in it gives it.
  * Returns each item laid, with its window, its word's frame, its points' frames (a list) and its place, and each item
  * left out with its code.
  */
@@ -1137,6 +1139,21 @@ export function scheduleDrawnTrack(items, { rows, lines, stopAt = null, filmFram
   const rank = (c) => CUTAWAY_DRAWN_RANK[c.kind] ?? 0;
   candidates.sort((a, b) => rank(b) - rank(a) || a.in - b.in || a.item.n - b.item.n);
   const laid = [];
+  // Stickers that found no place over their window. Only a later sticker can cut one short (every higher kind is
+  // placed before it), so when one is laid inside such a window, that sticker is tried once more over the window it
+  // would really have, to the later one's in. Nothing laid is moved or taken out for it.
+  const noPlace = [];
+  const tryAgain = (c) => {
+    for (const s of noPlace.filter((x) => x.in < c.in && c.in < x.out && c.in - x.in >= T.stickerMin)) {
+      noPlace.splice(noPlace.indexOf(s), 1);
+      if (laid.some((l) => l.in < c.in && l.out > s.in && l.item !== c.item)) continue;
+      const shorter = { ...s, out: c.in, cutShort: true };
+      const placed = placeOf(shorter);
+      if (!isObject(placed) || !("place" in placed)) continue;
+      left.splice(left.findIndex((l) => l.n === s.item.n && l.key === s.item.key && l.code === "cut-drawn-no-place"), 1);
+      laid.push({ ...shorter, place: placed.place });
+    }
+  };
   for (const c of candidates) {
     // A sticker goes out at the first item already laid that comes in while it is on (plan 0.10).
     const out = c.kind === "sticker" ? laid.reduce((at, l) => (l.in > c.in && l.in < at ? l.in : at), c.out) : c.out;
@@ -1153,7 +1170,9 @@ export function scheduleDrawnTrack(items, { rows, lines, stopAt = null, filmFram
     const window = { ...c, out, ...(out < c.out ? { cutShort: true } : {}) };
     const placed = placeOf(window);
     if (!isObject(placed) || !("place" in placed)) {
-      leave(c.item, isObject(placed) && CUTAWAY_CUT_CODES.includes(placed.code) ? placed.code : "cut-drawn-no-place");
+      const code = isObject(placed) && CUTAWAY_CUT_CODES.includes(placed.code) ? placed.code : "cut-drawn-no-place";
+      leave(c.item, code);
+      if (c.kind === "sticker" && code === "cut-drawn-no-place") noPlace.push(window);
       continue;
     }
     if (cuts) {
@@ -1161,6 +1180,7 @@ export function scheduleDrawnTrack(items, { rows, lines, stopAt = null, filmFram
       on.cutShort = true;
     }
     laid.push({ ...window, place: placed.place });
+    if (c.kind === "sticker") tryAgain(c);
   }
   laid.sort((a, b) => a.in - b.in || a.item.n - b.item.n);
   return {

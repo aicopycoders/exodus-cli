@@ -20,7 +20,7 @@ export type CutawayCutCode =
   | "cut-first-last-line" | "cut-too-early" | "cut-too-close" | "cut-too-short" | "cut-end" | "cut-near-cut"
   | "cut-drawn-later"
   | "cut-drawn-overlap" | "cut-drawn-no-face" | "cut-drawn-no-place" | "cut-drawn-no-filter" | "cut-drawn-no-font"
-  | "cut-words-unprintable" | "cut-words-wide" | "cut-chart-number" | "cut-sticker-no-filter";
+  | "cut-words-unprintable" | "cut-words-wide" | "cut-chart-number" | "cut-sticker-no-filter" | "cut-sticker-no-ground";
 export const CUTAWAY_CUT_CODES: readonly CutawayCutCode[];
 
 /**

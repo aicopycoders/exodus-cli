@@ -16,6 +16,14 @@ export function fitWords(
   measure: (text: string, em: number) => number,
   opts: { maxW: number; em: number; floorEm: number; maxLines: number },
 ): { em: number; lines: string[]; width: number } | null;
+/** Our own drawings of the 12 emoji of the set: each a list of [path in a 100-unit square, ASS colour]. */
+export const DRAWN_EMOJI: Readonly<Record<string, readonly (readonly [string, string])[]>>;
+/** The red arrow's size, in pixels of a 1080-wide frame. */
+export const DRAWN_ARROW: Readonly<{ w: number; h: number; gap: number; border: number }>;
+/** The share of its ring a chart card fills: its words' one number, 0 to 100, over 100; null for none, more, or past 100. */
+export function chartShareOf(words: string): number | null;
+/** The chart's ring filled to `share` as an ASS drawing, a wedge from the top clockwise; null for nothing to fill. */
+export function ringWedgePath(share: number, cx: number, cy: number, r: number): string | null;
 
 /** The burn's font: its family name, the words' width in pixels at `em` pixels a em, and the ASS size for that em. */
 export interface DrawnFont {
@@ -27,7 +35,11 @@ export interface DrawnFont {
 export interface DrawnLayout {
   w: number;
   h: number;
+  /** A sticker: its cut-out's file, laid as a picture under the burned words. */
+  picture?: string;
   groups: { from: number; cx: number; cy: number; parts: Record<string, unknown>[] }[];
+  /** Its arrow was drawn (plan 3.6). */
+  arrow?: true;
 }
 export function drawnLayoutOf(laid: Omit<CutawayDrawnLaid, "place" | "n" | "key" | "template" | "family" | "track">, font: DrawnFont, W?: number, H?: number, opts?: { small?: boolean }): DrawnLayout | { code: string };
 export function drawnStyle(font: DrawnFont, H?: number): string;

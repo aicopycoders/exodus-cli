@@ -43,13 +43,14 @@
 // Trusted external-audio templates may use a recorded retained-frame hold for billed-source fit.
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { planText, READOUT_INSET_BOX } from "./first-cut-text.mjs";
 import { createTextRenderer, measuredTextAss, textFrameWindow } from "./first-cut-text-render.mjs";
 import { isZeroDurationSpeech, parseAuthoredBeat, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC, DIALOGUE_BREATH_LEAD_SEC, DIALOGUE_BREATH_TAIL_SEC } from "./first-cut-speech.mjs";
 import { captionSync, placementHeard, retimeWords, soundPictureCheck } from "./first-cut-sync.mjs";
+import { CUTAWAY_INSERT_CLIP, cutawayFrame, cutawayLayoutOf, cutawayLinesOf, cutawaysOf, cutawaysRefusalOf, oneLayoutPerRun, scheduleFrameTrack } from "./first-cut-cutaways.mjs";
 
 const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]";
 const WIDTH = 1080;
@@ -5907,8 +5908,9 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
   }
   // COP-384: a run's sheet's extra shots (EXTRA_SHOTS), on the finished cut's own frames, after the speed step and
   // under the burned words: each from its clip's `clipFromSec`, at `playSpeed`, settling from `zoomFrom`; a split one on
-  // the top with the person's strip below, made from these same frames.
-  const xs = finish?.extraShots?.shots?.length ? finish.extraShots : null;
+  // the top with the person's strip below, made from these same frames. B-roll, inserts and overlays
+  // (first-cut-cutaways.mjs): their frame track is laid the same way (`cutawayFrames`); a manifest never lays both.
+  const xs = finish?.extraShots?.shots?.length ? finish.extraShots : finish?.cutawayFrames?.shots?.length ? finish.cutawayFrames : null;
   if (xs) {
     const E = EXTRA_SHOTS;
     // Each shot on the film's own frames, its first and its count: the overlays' windows run from half a frame before
@@ -5947,8 +5949,17 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       const hh = s.layout === "split" ? s.split.splitH : HEIGHT;
       // The clip runs one frame past its window: an overlay whose second stream has ended passes the film through on the
       // frame it ends at. Its first frame is put on the film's frame `first` exactly, in whole ticks of its clock.
-      const i = addInput("-ss", sec(E.clipFromSec), "-t", sec((frames / FPS) * E.playSpeed + E.clipFromSec + 0.5), "-i", resolve(s.file));
-      filters.push(
+      // An insert (CUTAWAY_INSERT_CLIP) plays from its own first frame at 1.0x, a hard cut with no zoom.
+      if (s.clip === "insert") {
+        const C = CUTAWAY_INSERT_CLIP;
+        const j = addInput("-ss", sec(C.fromSec), "-t", sec((frames / FPS) * C.playSpeed + C.fromSec + 0.5), "-i", resolve(s.file));
+        filters.push(
+          `[${j}:v]fps=${FPS},scale=${WIDTH}:${hh}:force_original_aspect_ratio=increase,crop=${WIDTH}:${hh},` +
+            `setsar=1,trim=end_frame=${frames + 1},setpts=PTS-STARTPTS+round(${first}/(${FPS}*TB))[xs${k}]`,
+        );
+      }
+      const i = s.clip === "insert" ? null : addInput("-ss", sec(E.clipFromSec), "-t", sec((frames / FPS) * E.playSpeed + E.clipFromSec + 0.5), "-i", resolve(s.file));
+      if (i !== null) filters.push(
         `[${i}:v]setpts=PTS/${E.playSpeed},fps=${FPS},scale=${2 * WIDTH}:${2 * hh}:force_original_aspect_ratio=increase,crop=${2 * WIDTH}:${2 * hh},` +
           `zoompan=z='max(1,${E.zoomFrom}-${round2(E.zoomFrom - 1)}*on/${E.zoomFrames})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${WIDTH}x${hh}:fps=${FPS},` +
           `setsar=1,trim=end_frame=${frames + 1},setpts=PTS-STARTPTS+round(${first}/(${FPS}*TB))[xs${k}]`,
@@ -6116,13 +6127,15 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
     filters.push(`[${audioLabel}][lmbed]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[withmusic]`);
     audioLabel = "withmusic";
   }
-  // COP-384: the whoosh before each extra shot, on the finished film's clock, at the gain the cut set (whooshGain).
+  // COP-384: the whoosh before each extra shot, on the finished film's clock, at the gain the cut set (whooshGain). A
+  // burst's pictures after its first (`whoosh: false`) come in with none (plan 0.2).
   if (xs?.whoosh) {
-    const parts = xs.shots.map((s, k) => {
+    const parts = xs.shots.flatMap((s, k) => {
+      if (s.whoosh === false) return [];
       const i = addInput("-i", resolve(xs.whoosh.file));
       const at = Math.max(0, shotFrames(s).first / FPS - EXTRA_SHOTS.whoosh.leadSec);
       filters.push(`[${i}:a]${stereo},volume=${xs.whoosh.gainDb}dB,adelay=delays=${Math.round(at * 1000)}:all=1[xw${k}]`);
-      return `[xw${k}]`;
+      return [`[xw${k}]`];
     });
     filters.push(`[${audioLabel}]${parts.join("")}amix=inputs=${parts.length + 1}:duration=first:dropout_transition=0:normalize=0[withwhoosh]`);
     audioLabel = "withwhoosh";
@@ -9139,9 +9152,9 @@ export function extraShotsOf(manifest) {
  * COP-384: whether a shot's clip is a video ffmpeg can read: ffprobe finds a picture stream and decodes a frame of it
  * where the cut starts reading (EXTRA_SHOTS.clipFromSec).
  */
-export function shotClipReadable(file) {
+export function shotClipReadable(file, fromSec = EXTRA_SHOTS.clipFromSec) {
   const res = spawnSync("ffprobe", [
-    "-v", "error", "-select_streams", "v:0", "-read_intervals", `${EXTRA_SHOTS.clipFromSec}%+#1`,
+    "-v", "error", "-select_streams", "v:0", "-read_intervals", `${fromSec}%+#1`,
     "-show_entries", "stream=codec_type:frame=pts_time", "-of", "json", file,
   ], { encoding: "utf8", maxBuffer: 1 << 24 });
   if (res.status !== 0) return false;
@@ -10722,9 +10735,15 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   }
   // COP-384: a run's sheet's extra shots (EXTRA_SHOTS), placed on the finished film's clock once an opening headline's end
   // is known (in the burn below, or after it), and laid after the speed step.
-  const shotsAsked = finish?.extraShots ? extraShotsOf(manifest) : [];
+  // B-roll, inserts and overlays (first-cut-cutaways.mjs): the manifest's `oneTakeCutaways`, null when it holds none.
+  // A manifest that holds it and today's extra shots too is a fault of the worker: neither is laid (plan 4.7). Only when
+  // the finish asks for b-roll: without the flag the key is not laid anyway, and today's shots are laid as they are.
+  const cutawaysRead = cutawaysOf(manifest);
+  const bothKeys = cutawaysRead !== null && finish?.cutaways === true && Array.isArray(manifest.extraShots) && manifest.extraShots.length > 0;
+  if (bothKeys) notes.push("oneTakeCutaways: the manifest holds today's extra shots and b-roll, inserts and overlays at once, so neither was laid");
+  const shotsAsked = finish?.extraShots && !bothKeys ? extraShotsOf(manifest) : [];
   const shotsWhy = stagedText ? "the text stage draws this cut's words" : timeline.mapped ? "this cut is laid on its measured map" : template ? "a template launch's clock is its own" : null;
-  if (finish?.extraShots && shotsAsked.length === 0) notes.push("extraShots: the folder holds no extra shot, so the film has none");
+  if (finish?.extraShots && !bothKeys && shotsAsked.length === 0) notes.push("extraShots: the folder holds no extra shot, so the film has none");
   for (const s of shotsAsked.filter((shot) => !exists(shot.file))) notes.push(`extraShots: shot ${s.n} (${s.label}) was left out: ${s.file} is not in the folder`);
   // A clip ffmpeg cannot read is left out with a note before anything is placed, so it never fails the cut.
   const shotsUsable = shotsWhy ? [] : shotsAsked.filter((shot) => exists(shot.file)).filter((shot) => {
@@ -10733,6 +10752,69 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     return false;
   });
   if (shotsWhy && shotsAsked.length > 0) notes.push(`extraShots: the shots were not laid: ${shotsWhy}`);
+  // The key is laid with the finish flag only, at version 1, with none of today's shots' refusals (plan 4.7, "The
+  // gate"). Each item it leaves out, here or when placed, keeps its code for the pace record (`pace.cutaways`).
+  const cutawaysLeft = [];
+  const leaveCutaway = (item, code) => cutawaysLeft.push({ ...(item.n !== undefined ? { n: item.n } : {}), ...(item.key ? { key: item.key } : {}), ...(item.template ? { template: item.template } : {}), code });
+  let cutawaysRefused = null;
+  let cutawayItems = [];
+  // A name in the folder at all, a link included (lstat: nothing is followed or opened).
+  const named = (file) => {
+    try {
+      lstatSync(here(file));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // A file of ours really in the folder: a plain name can still be a link out of it, so where it really points must be
+  // a file inside the folder (its real path, past every link). Its path inside the folder past every link, else null:
+  // that path, not the link, is the one read, probed and laid, so the file checked is the file used.
+  const inFolder = (file) => {
+    try {
+      const root = realpathSync(dir);
+      const real = realpathSync(here(file));
+      return real.startsWith(root + path.sep) && statSync(real).isFile() ? path.relative(root, real) : null;
+    } catch {
+      return null;
+    }
+  };
+  // The insert's length in whole frames, rounded down so it never counts a frame it does not hold; NaN when ffprobe
+  // fails or finds no length, which the track leaves out as a file it could not read (never a failed cut).
+  const clipFrames = (file) => {
+    try {
+      const { seconds } = probe(file);
+      return seconds > 0 ? Math.floor(seconds * FPS + 1e-6) : Number.NaN;
+    } catch {
+      return Number.NaN;
+    }
+  };
+  if (cutawaysRead && !finish?.cutaways) notes.push("oneTakeCutaways: the finishing settings do not ask for b-roll, inserts or overlays, so none were laid");
+  else if (finish?.cutaways && !cutawaysRead) notes.push("oneTakeCutaways: the folder holds no b-roll, insert or overlay, so the film has none");
+  else if (cutawaysRead) {
+    cutawaysRefused = cutawaysRefusalOf({ bothKeys, stagedText, mapped: timeline.mapped, template, read: cutawaysRead });
+    // An item that did not read is listed whether the key is laid or not, so none goes missing in silence.
+    cutawaysLeft.push(...cutawaysRead.left);
+    if (cutawaysRefused) {
+      notes.push(`oneTakeCutaways: nothing was laid: ${cutawaysRefused}`);
+      for (const item of cutawaysRead.items) leaveCutaway(item, cutawaysRefused);
+    } else {
+      // A paid item's file: in the folder (really: not a link out of it), a video ffmpeg can read where the cut starts
+      // reading it, and an insert's length in frames for its window. A drawn item's file is checked by the part that
+      // lays it (it is left out as `cut-drawn-later` here).
+      for (const item of cutawaysRead.items) {
+        if (item.track === "drawn") {
+          cutawayItems.push(item);
+          continue;
+        }
+        const file = item.file && named(item.file) ? inFolder(item.file) : undefined;
+        const fromSec = item.track === "insert" ? CUTAWAY_INSERT_CLIP.fromSec : EXTRA_SHOTS.clipFromSec;
+        if (file === undefined) leaveCutaway(item, "cut-no-file");
+        else if (file === null || !shotClipReadable(here(file), fromSec)) leaveCutaway(item, "cut-file-unreadable");
+        else cutawayItems.push(item.track === "insert" ? { ...item, file, fileFrames: clipFrames(file) } : { ...item, file });
+      }
+    }
+  }
   let shotsPlaced = null;
   const placeShots = (notBefore = 0) => {
     // The script's words as the captions place them (lineWords), every one of them, each with its line, timed again by
@@ -10745,6 +10827,68 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     const joins = [...sceneTimes(timeline).slice(1).map((p) => p.startSec / speed), ...(framingChangesSec ?? [])].sort((a, b) => a - b);
     const { placed, notes: left } = placeExtraShots(shotsUsable, rows, { filmSec: pictureSec / speed, stopAt, notBefore, joins });
     notes.push(...left);
+    return placed;
+  };
+  // B-roll, inserts and overlays: the frame track (scheduleFrameTrack) on the same words, cuts and end as today's
+  // shots, every line of the film in its order (a line nothing was heard on spans its take), the guessed words kept.
+  let cutawaysPlaced = null;
+  const placeCutaways = (notBefore = 0) => {
+    const scripted = lineWords(timeline, storyboard, { everyWord: true }).map(({ line, ...r }) => ({ ...r, lineId: line }));
+    const rows = (heardWords?.length ? retimeWords(scripted, heardWords, speed) : scripted).map((r) => ({ ...r, start: r.start / speed, end: r.end / speed }));
+    const heard = cutawayLinesOf(rows);
+    const lines = [];
+    for (const seg of timeline.spine) {
+      for (const lineId of seg.lineIds ?? []) {
+        if (!lines.some((l) => l.lineId === lineId)) {
+          lines.push(heard.find((l) => l.lineId === lineId) ?? { lineId, from: cutawayFrame(seg.startSec / speed), to: cutawayFrame((seg.startSec + seg.seconds) / speed) });
+        }
+      }
+    }
+    const stopAt = ending ? ending.in / speed : endLayers ? endLayers.in / speed : null;
+    // The picture cuts an edge may snap onto (plan 0.15), on the finished film's clock: the take joins, the cuts the
+    // sheet added, and the joins of the pause trim (pauseJoinTimes; none when no pause was cut), so no sliver of the take
+    // shows between a pause cut and an item. Today's extra shots keep their own list.
+    const joins = [
+      ...sceneTimes(timeline).slice(1).map((p) => p.startSec / speed), ...(framingChangesSec ?? []), ...pauseJoinTimes(timeline.spine, speed),
+    ].sort((a, b) => a - b);
+    return scheduleFrameTrack(cutawayItems, {
+      rows, ...(lines.length > 0 ? { lines } : {}), joins, notBefore, stopAt, filmFrames: filmFrames(pictureSec, speed),
+    });
+  };
+  // Each frame item in the layout cutawayLayoutOf chooses, around the face of the take on screen at its middle; a split
+  // one's captions as a split shot's, marked when they do not fit.
+  const layCutaways = (laid, shareOver = () => null) => {
+    const faces = filmFaces(timeline, new Map(manifest.scenes.flatMap((scene) => (faceBoxOf(scene.faceBox) ? [[scene.sceneIndex, faceBoxOf(scene.faceBox)]] : []))));
+    const placed = laid.map((l) => {
+      const start = l.in / FPS;
+      const end = l.out / FPS;
+      const take = takeAt(timeline, ((start + end) / 2) * speed);
+      const face = faces.get(take) ?? null;
+      const { layout, asked, why } = cutawayLayoutOf(l.frame, face, l.track);
+      const shot = { ...l, start, end, layout, take, ...(asked ? { asked, askedWhy: why } : {}), clip: l.track === "insert" ? "insert" : "broll" };
+      if (layout !== "split") return shot;
+      const split = splitLayout(face);
+      const share = shareOver(shot);
+      if (share === null) return { ...shot, split, faced: true };
+      const place = splitCaptionPlace({ face, split, share });
+      return { ...shot, split: place.split, faced: true, captionBand: place.band, captionsHow: place.how, ...(place.fits === false ? { captionsFit: false } : {}) };
+    });
+    return placed;
+  };
+  // Placed and laid; a run of a burst keeps one layout, and an item whose captions do not fit its layout is laid full
+  // screen instead (plan 0.12, oneLayoutPerRun). Then each item laid in another layout than it asked for says why.
+  const placeAndLayCutaways = (notBefore = 0, shareOver = undefined) => {
+    const { laid, left } = placeCutaways(notBefore);
+    cutawaysLeft.push(...left);
+    const placed = oneLayoutPerRun(layCutaways(laid, shareOver));
+    for (const p of placed.filter((x) => x.asked)) {
+      const why = p.askedWhy === "insert" ? "an insert is always full screen"
+        : p.askedWhy === "no-face" ? `take ${p.take}'s face was not found, so the person could not be framed around it`
+          : p.askedWhy === "captions" ? "the captions did not fit beside it"
+            : p.askedWhy === "run" ? "another picture of its run of pictures is laid full screen, and a run keeps one layout"
+              : `this cut does not lay ${p.asked} yet`;
+      notes.push(`oneTakeCutaways: item ${p.n} (${p.template}) is laid full screen, not ${p.asked}: ${why}`);
+    }
     return placed;
   };
   // Each split shot with the take on screen at its middle, its layout around that take's face on the film, and, given
@@ -10833,12 +10977,22 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         notes.push(...offFace.notes);
       }
       // COP-384: the shots come in after an opening headline, and captions over a split shot sit over the person's half.
+      const capShare = finish.captionsByLine ? CAPTION_MAX_SHARE : null;
+      const shareOver = (shot) => {
+        const over = screens.filter((c) => c.s / speed < shot.end && c.e / speed > shot.start);
+        return over.length > 0 ? Math.max(...over.map((c) => captionBlockShare(c, cap, WIDTH, HEIGHT, capShare))) : null;
+      };
+      // B-roll, inserts and overlays: the same, for their frame track.
+      if (cutawayItems.length > 0) {
+        cutawaysPlaced = placeAndLayCutaways(drawn && finish.cardPlace === "top" ? drawn.out / speed : 0, finish.captions ? shareOver : undefined);
+        if (drawn && finish.cardPlace === "top-film" && cutawaysPlaced.length > 0) notes.push("oneTakeCutaways: the headline at the top for the whole video stays over the frame items");
+        if (finish.captions && cutawaysPlaced.some((p) => p.layout === "split")) {
+          screens = captionsOverSplits(screens, cutawaysPlaced, speed);
+          burned = screens;
+          for (const p of cutawaysPlaced.filter((x) => x.captionsHow)) notes.push(splitCaptionsNote(p).replace(/^extraShots: (while )?shot /, (_, w) => `oneTakeCutaways: ${w ?? ""}item `));
+        }
+      }
       if (shotsUsable.length > 0) {
-        const capShare = finish.captionsByLine ? CAPTION_MAX_SHARE : null;
-        const shareOver = (shot) => {
-          const over = screens.filter((c) => c.s / speed < shot.end && c.e / speed > shot.start);
-          return over.length > 0 ? Math.max(...over.map((c) => captionBlockShare(c, cap, WIDTH, HEIGHT, capShare))) : null;
-        };
         shotsPlaced = layShots(placeShots(drawn && finish.cardPlace === "top" ? drawn.out / speed : 0), finish.captions ? shareOver : undefined);
         if (drawn && finish.cardPlace === "top-film" && shotsPlaced.length > 0) notes.push("extraShots: the headline at the top for the whole video stays over the shots");
         if (finish.captions && shotsPlaced.some((shot) => shot.layout === "split")) {
@@ -11141,6 +11295,47 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       ...(whooshRecord ? { whoosh: whooshRecord } : {}),
     };
   }
+  // B-roll, inserts and overlays: the frame track placed (with no burn to place it in, here), laid, and its whoosh, once
+  // on each shot, burst and the insert, at the gain today's shots' whoosh is set at; then the pace record.
+  if (cutawayItems.length > 0 && cutawaysPlaced === null) cutawaysPlaced = placeAndLayCutaways(0);
+  let cutawayFrames = null;
+  let cutawaysRecord = null;
+  if (cutawaysRead && finish?.cutaways) {
+    const laid = cutawaysPlaced ?? [];
+    let whoosh = null;
+    let whooshRecord = null;
+    if (laid.some((p) => p.whoosh)) {
+      const whooshNamed = cutawaysRead.whoosh !== undefined && named(cutawaysRead.whoosh);
+      const whooshFile = whooshNamed ? inFolder(cutawaysRead.whoosh) : null;
+      if (whooshFile) {
+        const made = whooshGain(at(whooshFile), timeline, { resolve: at, out, clean, levelSegments: !finish.finishLoudness, voiceLufs: musicRecord?.voiceLufs ?? null });
+        if (made.note) notes.push(made.note.replace(/^extraShots: (.*)the shots come in/, "oneTakeCutaways: $1the frame items come in"));
+        else {
+          whoosh = { file: whooshFile, gainDb: made.gainDb };
+          whooshRecord = made.record;
+        }
+      } else if (whooshNamed) notes.push("oneTakeCutaways: the whoosh is not a file really in the folder (a link out of it, or not a file), so the frame items come in with none");
+      else notes.push("oneTakeCutaways: the folder holds no whoosh, so the frame items come in with none");
+    }
+    if (laid.length > 0) cutawayFrames = { shots: laid, ...(whoosh ? { whoosh } : {}) };
+    for (const p of laid) {
+      notes.push(`oneTakeCutaways: item ${p.n} (${p.template}), its word at frame ${p.word}, frames ${p.in} to ${p.out} (${p.start.toFixed(2)} to ${p.end.toFixed(2)} s), ${p.layout === "split" ? `split screen, the person's crop around take ${p.take}'s face` : "full screen"}`);
+    }
+    for (const l of cutawaysLeft) notes.push(`oneTakeCutaways: item ${l.n ?? "?"}${l.template ? ` (${l.template})` : ""} was left out: ${l.code}`);
+    cutawaysRecord = {
+      version: cutawaysRead.version,
+      planId: cutawaysRead.planId,
+      ...(cutawaysRefused ? { refused: cutawaysRefused } : {}),
+      items: laid.map((p) => ({
+        n: p.n, key: p.key, template: p.template, family: p.family, frame: p.layout, ...(p.asked ? { asked: p.asked } : {}),
+        in: p.in, out: p.out, start: roundMs(p.start), end: roundMs(p.end), word: p.word,
+        ...(p.guessed ? { guessed: true } : {}), ...(p.burst ? { burst: p.burst } : {}), whoosh: p.whoosh, ...(p.snapped ? { snapped: p.snapped } : {}),
+        ...(p.split ? { place: { crop: p.split.crop, ...(p.captionsHow ? { captions: { how: p.captionsHow, band: p.captionBand } } : {}) } } : {}),
+      })),
+      left: [...cutawaysLeft].sort((a, b) => (a.n ?? 0) - (b.n ?? 0)),
+      ...(whooshRecord ? { whoosh: whooshRecord } : {}),
+    };
+  }
   const argsWith = (withMusic) => buildFfmpegArgs(timeline, {
     resolve: at,
     music: music && !sheetMusic ? at(music) : null,
@@ -11156,6 +11351,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ...(look ? { look } : {}), ...(deliverFps ? { deliverFps } : {}),
           ...(withMusic && lightMusic ? { lightMusic } : {}),
           ...(extraShots ? { extraShots } : {}),
+          ...(cutawayFrames ? { cutawayFrames } : {}),
         },
       }
       : {}),
@@ -11374,6 +11570,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     ...(musicRecord ? { music: musicRecord } : {}),
     // COP-384: the extra shots the cut laid, where and how, and the whoosh's level against the voice.
     ...(shotsRecord ? { extraShots: shotsRecord } : {}),
+    // B-roll, inserts and overlays: each item laid, its window and its place, and each left out with its code.
+    ...(cutawaysRecord ? { cutaways: cutawaysRecord } : {}),
     // COP-393: the full-frame end card the cut laid, and its window on the finished film's clock.
     ...(endLayers?.fullFrame ? { endCardPicture: { file: endLayers.file, ...endCardWindowOf(endLayers, speed, durationSec) } } : {}),
     ...(notes.length > 0 ? { notes } : {}),

@@ -2,6 +2,7 @@
 // plain JS so the CLI can run it with `node` and no build.
 import type { SourceIdentity, TextItem, TextPlan, PlanTextInput, VerifyObservation, RasterMeasurement, MeasureText } from "./first-cut-text.mjs";
 import type { CaptionSyncVerdict, SeenCaption, SoundPictureCheck, SyncSection } from "./first-cut-sync.mjs";
+import type { CutawayCutCode, CutawayCutFrame, CutawayCutLeft } from "./first-cut-cutaways.mjs";
 
 // The worker's shapes (scout cut-sounds.ts, temporal-action-evidence.ts), kept loose here: the root typecheck
 // runs without scout's packages, so the tool's types must not load the worker.
@@ -394,6 +395,29 @@ export interface CutPace {
       /** Where a split shot's captions sat (splitCaptionPlace), when the cut drew captions over it. */
       captions?: { how: "at" | "below" | "smaller"; band: [number, number]; fits?: false };
     }>;
+    whoosh?: Record<string, unknown>;
+  };
+  /**
+   * B-roll, inserts and overlays (first-cut-cutaways.mjs): present when the finish asks for them and the manifest holds
+   * `oneTakeCutaways`. `refused`: the whole key was not laid, and why. Each frame item laid, its window in whole frames
+   * of the finished film (`in` its first, `out` the frame after its last; `start` and `end` the same in seconds), the
+   * layout it was laid in (`frame`, and `asked` when that is not the one it asked for) and its place; each item left
+   * out with its code (video/lib/cutawayTemplates.ts CUTAWAY_LEFT_OUT); the whoosh's record.
+   */
+  cutaways?: {
+    version: number | null;
+    planId: string | null;
+    refused?: CutawayCutCode;
+    items: Array<{
+      n: number; key: string; template: string; family: "broll" | "insert" | "overlay";
+      frame: "full" | "split"; asked?: CutawayCutFrame;
+      in: number; out: number; start: number; end: number;
+      /** Its word's first frame. */
+      word: number;
+      guessed?: true; burst?: 1 | 2; whoosh: boolean; snapped?: { in?: number; out?: number };
+      place?: { crop: [number, number, number, number]; captions?: { how: "at" | "below" | "smaller"; band: [number, number] } };
+    }>;
+    left: CutawayCutLeft[];
     whoosh?: Record<string, unknown>;
   };
   /** COP-393: the full-frame end card the cut laid (the manifest's `endCardPicture`) and its EndCardWindow; absent with none. */
@@ -867,7 +891,7 @@ export function shotWord(word: unknown): string;
 /** COP-384: the manifest's extra shots that read. */
 export function extraShotsOf(manifest: unknown): CutExtraShot[];
 /** COP-384: whether a shot's clip is a video ffmpeg can read: a picture stream, and a frame decoded where the cut reads from. */
-export function shotClipReadable(file: string): boolean;
+export function shotClipReadable(file: string, fromSec?: number): boolean;
 /** COP-384: where each shot comes in on the finished film, by Luke's rule, and a note for each left out. */
 export function placeExtraShots(
   shots: readonly CutExtraShot[],

@@ -18,7 +18,6 @@ export type CutawayCutCode =
   | "cut-no-file" | "cut-file-unreadable" | "cut-insert-short"
   | "cut-line-not-heard" | "cut-word-not-found"
   | "cut-first-last-line" | "cut-too-early" | "cut-too-close" | "cut-too-short" | "cut-end"
-  | "cut-captions-no-fit"
   | "cut-drawn-later";
 export const CUTAWAY_CUT_CODES: readonly CutawayCutCode[];
 
@@ -181,3 +180,17 @@ export function scheduleFrameTrack(
     filmFrames: number;
   },
 ): { laid: CutawayLaid[]; left: CutawayCutLeft[] };
+
+export const CUTAWAY_LAID_FRAMES: readonly CutawayCutFrame[];
+/** The one place a frame item's layout is chosen: its own when laid and its take's face was found, else full screen and why. */
+export function cutawayLayoutOf(
+  frame: CutawayCutFrame,
+  face: unknown,
+  track?: "broll" | "insert",
+): { layout: "full" | "split"; asked?: CutawayCutFrame; why?: "insert" | "no-face" | "not-laid" };
+/** The frame items laid, as units in film order: a shot alone, the insert, or a run of a burst (its pictures back to back). */
+export function cutawayUnitsOf<P extends { in: number; out: number; burst?: number }>(laid: readonly P[]): P[][];
+/** One layout per run of a burst: an item whose captions do not fit its layout, and every split picture of a run that is not split whole around one take's face, laid full screen instead. */
+export function oneLayoutPerRun<P extends { in: number; out: number; layout: string; frame?: string; burst?: number; take?: number | null; captionsFit?: boolean }>(
+  placed: readonly P[],
+): (P | (P & { layout: "full"; asked?: string; askedWhy: "captions" | "run" }))[];

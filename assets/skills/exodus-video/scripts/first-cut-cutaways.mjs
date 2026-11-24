@@ -3,8 +3,7 @@
 //
 // A later part has the worker write the key (scout auto-cut.ts) from the run's approved plan: each kept item as the
 // plan holds it (video/lib/cutawayPlan.ts CutawayItem), a paid item with its file in the folder. This file reads
-// it and times its frame items (scheduleFrameTrack): first-cut.mjs does not call this file yet, and laying the items and
-// writing `pace.cutaways` come in later parts.
+// it and times its frame items (scheduleFrameTrack); first-cut.mjs lays them and writes `pace.cutaways`.
 // Every time is a whole frame of the finished film's 24 fps clock, after the speed step (cutawayFrame).
 //
 // This file imports nothing, so the cut runs with `node` and no build, as the rest of the cut does. The names it
@@ -83,8 +82,6 @@ export const CUTAWAY_CUT_CODES = Object.freeze([
   "cut-too-close",
   "cut-too-short",
   "cut-end",
-  // Its layout.
-  "cut-captions-no-fit",
   // A drawn item: laid by a later part of the cut.
   "cut-drawn-later",
 ]);
@@ -578,4 +575,75 @@ function laidOf(pic, w, whoosh) {
     whoosh,
     ...(w.snapped ? { snapped: w.snapped } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------------------------------- the layouts
+
+/** The layouts this cut lays (first-cut.mjs splitLayout for `split`); another one asked is laid full screen. */
+export const CUTAWAY_LAID_FRAMES = Object.freeze(["full", "split"]);
+
+/**
+ * The one place a frame item's layout is chosen (plan 4.7, "Layouts", and 0.10): the layout it asked for when the cut
+ * lays it and its take's face was found (`face`, the take's box on the film, or null); else full screen, with `asked`
+ * and the reason: `insert` (the insert is always full screen), `no-face` (a crop could cut the head off, as dev lays a
+ * split shot) or `not-laid` (a layout a later part of the cut adds).
+ */
+export function cutawayLayoutOf(frame, face, track = "broll") {
+  if (frame === "full") return { layout: "full" };
+  if (track === "insert") return { layout: "full", asked: frame, why: "insert" };
+  if (!CUTAWAY_LAID_FRAMES.includes(frame)) return { layout: "full", asked: frame, why: "not-laid" };
+  if (!face) return { layout: "full", asked: frame, why: "no-face" };
+  return { layout: frame };
+}
+
+/** The fields of a layout other than full screen, which a picture laid full screen after all does not keep. */
+const LAYOUT_FIELDS = ["split", "faced", "captionBand", "captionsHow", "captionsFit"];
+
+/**
+ * The frame items laid, as the units the track timed them in, in film order: a shot alone, the insert, or a run of a
+ * burst, its pictures back to back (each comes in on the out of the one before). A burst whose pictures stand apart is
+ * timed as runs (scheduleFrameTrack), each with its own edges and whoosh, and the take shows between them, so a run is
+ * the span that holds one frame. Each unit holds the items it was given, not copies.
+ */
+export function cutawayUnitsOf(laid) {
+  const units = [];
+  const open = new Map();
+  for (const p of [...laid].sort((a, b) => a.in - b.in)) {
+    const run = p.burst ? open.get(p.burst) : undefined;
+    if (run && Number.isFinite(p.in) && run.at(-1).out === p.in) run.push(p);
+    else {
+      units.push([p]);
+      if (p.burst) open.set(p.burst, units.at(-1));
+    }
+  }
+  return units;
+}
+
+/**
+ * One layout for each run of a burst, and plan 0.12: a paid picture is never left out only because its captions do not
+ * fit its layout.
+ * - Each item laid and marked so (`captionsFit: false`) is laid full screen instead, where the captions stay where they
+ *   are, with `asked` and the reason `captions`, as a take with no face box is.
+ * - A run of a burst (cutawayUnitsOf) has one frame for all its pictures, so the person never blinks in and out, or
+ *   jumps, inside it: a run stays split only when every picture of it is laid split around the same take's face.
+ *   Otherwise every picture of it laid split is laid full screen too, with the reason `run` (its own captions not
+ *   fitting stay `captions`).
+ * Another run of the same burst, with the take between them, keeps its own layout.
+ */
+export function oneLayoutPerRun(placed) {
+  const why = new Map();
+  for (const unit of cutawayUnitsOf(placed)) {
+    const oneSplit = unit.every((p) => p.layout === "split" && p.captionsFit !== false && p.take === unit[0].take);
+    for (const p of unit) {
+      if (p.layout === "full") continue;
+      if (p.captionsFit === false) why.set(p, "captions");
+      else if (!oneSplit) why.set(p, "run");
+    }
+  }
+  return placed.map((p) => {
+    if (!why.has(p)) return p;
+    const full = { ...p, layout: "full", asked: p.frame, askedWhy: why.get(p) };
+    for (const field of LAYOUT_FIELDS) delete full[field];
+    return full;
+  });
 }

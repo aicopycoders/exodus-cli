@@ -3,6 +3,7 @@
 import type { SourceIdentity, TextItem, TextPlan, PlanTextInput, VerifyObservation, RasterMeasurement, MeasureText } from "./first-cut-text.mjs";
 import type { CaptionSyncVerdict, SeenCaption, SoundPictureCheck, SyncSection } from "./first-cut-sync.mjs";
 import type { CutawayCutCode, CutawayCutFrame, CutawayCutLeft } from "./first-cut-cutaways.mjs";
+import type { CutawayDrawnBand, CutawayDrawnKind } from "./first-cut-cutaways.mjs";
 
 // The worker's shapes (scout cut-sounds.ts, temporal-action-evidence.ts), kept loose here: the root typecheck
 // runs without scout's packages, so the tool's types must not load the worker.
@@ -418,6 +419,16 @@ export interface CutPace {
       /** A b-roll clip's speed when it is not the usual 1.5x (its clip is too short for its window at 1.5x). */
       playSpeed?: number;
       place?: { crop: [number, number, number, number]; captions?: { how: "at" | "below" | "smaller"; band: [number, number] } };
+    }>;
+    /**
+     * Each drawn item laid (first-cut-cutaways.mjs scheduleDrawnTrack): its window in whole frames of the finished film,
+     * its word's frame, a list's points' frames, and its place: the band it sits in and its box as shares of the frame.
+     */
+    drawn?: Array<{
+      n: number; key: string; template: string; family: "broll" | "insert" | "overlay"; kind: CutawayDrawnKind;
+      in: number; out: number; start: number; end: number; word: number;
+      points?: number[]; guessed?: true; cutShort?: true; arrow?: true;
+      place: { band: CutawayDrawnBand; box: [number, number, number, number] };
     }>;
     left: CutawayCutLeft[];
     whoosh?: Record<string, unknown>;
@@ -845,10 +856,15 @@ export function zoomedFaceBox(box: CutFaceBox, zoom: number, fromTop: number): C
 export function filmFaces(timeline: unknown, faces: ReadonlyMap<number, CutFaceBox>): Map<number, CutFaceBox>;
 /** COP-383: a caption screen's drawn height as a share of the frame's, laid centred on `y` px (the bottom band's with none). */
 export function captionBlockShare(c: unknown, cap: unknown, W?: number, H?: number, capMaxShare?: number | null, y?: number): number;
+/** B-roll, inserts and overlays: a caption screen's drawn height at the size it is burned at (a sung run's at its look's size). */
+export function burnedCaptionShare(
+  c: unknown, opts?: { cap?: unknown; capShare?: number | null; songLook?: SongCaptionLook | null }, W?: number, H?: number, y?: number,
+): number;
 /** Landing review of COP-383: where a headline at the top is drawn, top to bottom, as shares of the frame's height. */
 export function headlineDrawnBand(H?: number): { top: number; bottom: number };
 /** COP-383: where a card in a box is drawn, top to bottom, as shares of the frame's height. */
 export function cardDrawnBand(box: readonly number[], H?: number): { top: number; bottom: number };
+export function burnedFramesOf(inSec: number, outSec: number, speed?: number): { first: number; last: number };
 /** COP-383: the band a take's captions sit in, clear of its face; null when no band is clear. */
 export function clearBand(
   args: {
@@ -911,6 +927,8 @@ export function splitCaptionPlace(
   W?: number,
   H?: number,
 ): { band: [number, number]; how: "at" | "below" | "smaller"; split: CutSplitLayout; fits?: boolean };
+/** B-roll, inserts and overlays: the share a split picture's captions are placed with, one crop for a run of a burst. */
+export function splitRunShare(at: { face: CutFaceBox | null; split: CutSplitLayout; own: number | null; tallest: number | null }): number | null;
 /** COP-384: the cut's note of where a split shot's captions sit, and why (`captionsFit` false: past 0.86 all the same). */
 export function splitCaptionsNote(shot: { n: number; captionsHow: "at" | "below" | "smaller"; captionBand: [number, number]; captionsFit?: boolean }): string;
 /** COP-384: caption screens shown while a split shot is on, in the shot's own band, else at EXTRA_SHOTS.captionsAt of the height. */

@@ -83,8 +83,19 @@ export const CUTAWAY_CUT_CODES = Object.freeze([
   "cut-too-close",
   "cut-too-short",
   "cut-end",
+  "cut-near-cut",
   // A drawn item: laid by a later part of the cut.
   "cut-drawn-later",
+  // A drawn item (scheduleDrawnTrack, the cut's words and pictures).
+  "cut-drawn-overlap",
+  "cut-drawn-no-face",
+  "cut-drawn-no-place",
+  "cut-drawn-no-filter",
+  "cut-drawn-no-font",
+  "cut-words-unprintable",
+  "cut-words-wide",
+  "cut-chart-number",
+  "cut-sticker-no-filter",
 ]);
 
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -327,14 +338,20 @@ export function scheduleFrameTrack(items, opts) {
   const noSnap = new Set(keys.flatMap((key) => [`${key}:in`, `${key}:out`]));
   const idOf = (l) => `${l.n}:${l.key}`;
   let best = placeTrack(items, opts, noSnap);
-  /** Snaps `edges` when, with them, no item laid now is left out and (when `gain`) fewer are left out. */
+  /**
+   * Snaps `edges` when, with them, no item laid now is left out or laid shorter (an item of another key losing its own
+   * snap, say, and ending clear of the cut it was on) and (when `gain`) fewer are left out.
+   */
   const trySnap = (edges, gain) => {
     const off = edges.filter((e) => noSnap.has(e));
     if (off.length === 0) return false;
     for (const e of off) noSnap.delete(e);
     const trial = placeTrack(items, opts, noSnap);
     const leftNow = new Set(best.left.map(idOf));
-    if (trial.left.every((l) => leftNow.has(idOf(l))) && (!gain || trial.left.length < best.left.length)) {
+    const snapping = new Set(off.map((e) => e.slice(0, e.lastIndexOf(":"))));
+    const framesNow = new Map(best.laid.map((l) => [idOf(l), l.out - l.in]));
+    const shorter = trial.laid.some((l) => !snapping.has(l.key) && l.out - l.in < (framesNow.get(idOf(l)) ?? -Infinity));
+    if (!shorter && trial.left.every((l) => leftNow.has(idOf(l))) && (!gain || trial.left.length < best.left.length)) {
       best = trial;
       return true;
     }
@@ -427,7 +444,7 @@ function placeTrack(items, { rows, lines, joins = [], notBefore = 0, stopAt = nu
     const timed = timedIn(ctx);
     const windows = [timed, ...unsnappedTries(timed, timed, pic.item.key, pic.item.key, ctx).map((c) => timedIn(c))];
     const kept = windows.find((w) => !fails(w, ctx));
-    if (kept) laid.push(laidOf(pic, kept, true));
+    if (kept) laid.push(laidOf(pic, insertClearOf(kept, ctx), true));
     else leave(pic.item, fails(windows.at(-1), ctx));
   }
   // A b-roll clip's length in frames, when probed: a value that is not a number of frames is a file the cut could not
@@ -487,17 +504,33 @@ function unitsOf(pics) {
  * bring two items closer, the snaps on both sides together, but never closer than `gapFrames - snapFrames` (tooClose):
  * a gap of 17 frames before the snaps is 13 at the least after them.
  *
- * An in moved back onto a picture cut `snapFrames` or less before it, so no sliver of the take shows between them.
+ * An in moved back onto a picture cut `snapFrames` or less before it, so no sliver of the take shows between them. Of
+ * several such cuts it takes the earliest: the picture starts on the first cut of the short piece of take between them
+ * and covers that piece, which would otherwise show as a flash (on a later cut the in would sit 1 to `snapFrames` frames
+ * after the other). A cut just after the in lies under the picture.
  */
-function snapIn(inAt, { cuts, noSnap }, key = null) {
-  if (noSnap?.has(`${key}:in`)) return inAt;
-  return cuts.filter((c) => c < inAt && inAt - c <= CUTAWAY_TIMING.snapFrames).at(-1) ?? inAt;
+function snapIn(inAt, ctx, key = null) {
+  if (ctx.noSnap?.has(`${key}:in`)) return inAt;
+  const cut = ctx.cuts.find((c) => c < inAt && inAt - c <= CUTAWAY_TIMING.snapFrames);
+  // A cut with another 1 to `snapFrames` frames before it, out of reach, is not taken: the in would only be moved off it
+  // again, `snapFrames` + 1 frames after both (clearAfterCuts), and its window timed from the snap would lose those frames.
+  return cut === undefined || sliverCutBefore(cut, ctx) !== undefined ? inAt : cut;
 }
 
-/** An out moved on onto a picture cut `snapFrames` or less after it. */
-function snapOut(outAt, { cuts, noSnap }, key = null) {
+/**
+ * An out moved on onto a picture cut `snapFrames` or less after it. Of several such cuts it takes the latest: the
+ * picture runs over the short piece of take between them and ends on its far cut (as snapIn). A cut just before the out
+ * lies under the picture. Never past where the end card or the words over the last shot begin (or the film ends:
+ * `stop`), which is a cut too: an out may snap exactly onto it.
+ * When the snap is refused (it would cost another item, or break a rule), taking a nearer cut instead would leave the
+ * refused one 1 to `snapFrames` frames from the edge, so the edge is cleared of both as with no snap (clearOfCuts,
+ * clearAfterCuts): the same frames (an in that would then fall under its floor stays where it was timed).
+ */
+function snapOut(outAt, { cuts, stop, noSnap }, key = null) {
   if (noSnap?.has(`${key}:out`)) return outAt;
-  return cuts.find((c) => c > outAt && c - outAt <= CUTAWAY_TIMING.snapFrames) ?? outAt;
+  const near = [...cuts, ...(Number.isFinite(stop) ? [stop] : [])]
+    .filter((c) => c > outAt && c - outAt <= CUTAWAY_TIMING.snapFrames && !(c > stop));
+  return near.length > 0 ? Math.max(...near) : outAt;
 }
 
 /** A window from `inAt` to `outAt` with both edges snapped, and where each was before it moved. */
@@ -656,6 +689,9 @@ function timeUnit(unit, ctx) {
  *    whole: the side before it, this picture last and held to its clip, and the side after it, against what is laid and
  *    the side before it;
  * 4. else it is left out, `cut-clip-short`, with the clip's frames and the window's.
+ * No picture starts or ends 1 to `snapFrames` frames from a picture cut its edge did not snap onto: the last out ends
+ * `snapFrames` + 1 frames before such a cut (clearOfCuts) and the first in starts that many after one (clearedIn), each
+ * when the picture keeps its floor. An out that cannot is left out by laidRunFails; an in that cannot stays.
  * Returns the windows, each with its `playSpeed` when that is not 1.5x, or the first picture whose clip does not cover
  * it (`at`), with `split` when the run breaks after it.
  */
@@ -663,28 +699,33 @@ function clipFitOf(kept, w, least, ctx) {
   const T = CUTAWAY_TIMING;
   const C = CUTAWAY_BROLL_CLIP;
   const fitted = [];
+  /** Window `win` ended at `out`, its in where it is (and where that was before a snap), played at `speed`. */
+  const endedAt = (win, out, speed) => ({
+    in: win.in, out, ...(win.snapped?.in !== undefined ? { snapped: { in: win.snapped.in } } : {}),
+    ...(speed === undefined || speed === C.playSpeed ? {} : { playSpeed: speed }),
+  });
   for (const [k, pic] of kept.entries()) {
     const { fileFrames } = pic.item;
     const frames = w[k].out - w[k].in;
     // A window of no frames is the rules' to leave out (cut-too-short): it is never lengthened to its clip.
-    if (fileFrames === undefined || !(frames > 0)) {
+    if (!(frames > 0)) {
       fitted.push(w[k]);
+      continue;
+    }
+    // The last of a run whose out the snap left 1 to `snapFrames` frames before a picture cut (the snap not taken, as it
+    // would cost another item, or not possible) ends clear of that cut, `snapFrames` + 1 frames before it, whether or not
+    // its clip could reach it, when that keeps its floor (else laidRunFails leaves it out).
+    const clear = k === kept.length - 1 ? clearOfCuts(w[k].out, ctx) : w[k].out;
+    if (fileFrames === undefined) {
+      fitted.push(clear !== w[k].out && clear - w[k].in >= least ? endedAt(w[k], clear) : w[k]);
       continue;
     }
     const speed = cutawayClipSpeed(fileFrames, frames);
     if (speed !== null) {
-      // The last of a run whose clip covers its window but could not reach a picture cut 1 to `snapFrames` frames after
-      // it ends clear of that cut, as one its clip cuts short does, when that keeps its floor (else laidRunFails leaves
-      // it out). A sliver its clip could close is the snap's to take or leave.
-      const cut = k === kept.length - 1 ? sliverCutAfter(w[k].out, ctx) : undefined;
-      if (cut !== undefined && cutawayClipSpeed(fileFrames, cut - w[k].in) === null) {
-        const out = clearOfCuts(w[k].out, ctx);
-        const cleared = out - w[k].in >= least ? cutawayClipSpeed(fileFrames, out - w[k].in) : null;
-        if (cleared !== null) {
-          const inOnly = w[k].snapped?.in !== undefined ? { snapped: { in: w[k].snapped.in } } : {};
-          fitted.push({ in: w[k].in, out, ...inOnly, ...(cleared === C.playSpeed ? {} : { playSpeed: cleared }) });
-          continue;
-        }
+      const cleared = clear !== w[k].out && clear - w[k].in >= least ? cutawayClipSpeed(fileFrames, clear - w[k].in) : null;
+      if (cleared !== null) {
+        fitted.push(endedAt(w[k], clear, cleared));
+        continue;
       }
       fitted.push(speed === C.playSpeed ? w[k] : { ...w[k], playSpeed: speed });
       continue;
@@ -749,7 +790,26 @@ function clipFitOf(kept, w, least, ctx) {
     }
     return { at: k, clip, ...(afterHolds ? { split: true } : {}) };
   }
-  return { windows: fitted };
+  return { windows: clearedIn(kept, fitted, least, ctx) };
+}
+
+/**
+ * A run whose first in sits 1 to `snapFrames` frames after a picture cut (its snap onto it not taken, as it would cost
+ * another item, or not possible) starts `snapFrames` + 1 frames after the cut instead (clearAfterCuts), when its first
+ * picture keeps its floor (`least`); else it stays as it is. Its out does not move: the picture loses 1 to `snapFrames`
+ * frames at its start, and its clip plays the shorter window at the speed that covers it.
+ */
+function clearedIn(kept, fitted, least, ctx) {
+  const first = fitted[0];
+  const inAt = first ? clearAfterCuts(first.in, ctx) : undefined;
+  if (!first || inAt === first.in || first.out - inAt < least) return fitted;
+  const { fileFrames } = kept[0].item;
+  const speed = fileFrames === undefined ? undefined : cutawayClipSpeed(fileFrames, first.out - inAt);
+  if (speed === null) return fitted;
+  return [{
+    in: inAt, out: first.out, ...(first.snapped?.out !== undefined ? { snapped: { out: first.snapped.out } } : {}),
+    ...(speed === undefined || speed === CUTAWAY_BROLL_CLIP.playSpeed ? {} : { playSpeed: speed }),
+  }, ...fitted.slice(1)];
 }
 
 /**
@@ -774,35 +834,80 @@ function clearOfCuts(out, ctx) {
 }
 
 /**
+ * The insert's window `w` (its rules and its file's length already held) clear of the picture cuts its edges did not
+ * snap onto: its out `snapFrames` + 1 frames before a cut 1 to `snapFrames` frames after it (clearOfCuts), then its in
+ * as many after a cut 1 to `snapFrames` frames before it (clearAfterCuts), each when it keeps its floor (1 frame, the
+ * least its window is held to). It is never left out for a sliver: an edge that would put it under its floor stays.
+ * It only gets shorter, so its file still covers it (it plays from its first frame at the new in), and every gap only
+ * widens. Its spoken line is the take's sound, which it never changes.
+ */
+function insertClearOf(w, ctx) {
+  let win = w;
+  const out = clearOfCuts(win.out, ctx);
+  if (out !== win.out && out - win.in >= 1) {
+    win = { in: win.in, out, ...(win.snapped?.in !== undefined ? { snapped: { in: win.snapped.in } } : {}) };
+  }
+  const inAt = clearAfterCuts(win.in, ctx);
+  if (inAt !== win.in && win.out - inAt >= 1) {
+    win = { in: inAt, out: win.out, ...(win.snapped?.out !== undefined ? { snapped: { out: win.snapped.out } } : {}) };
+  }
+  return win;
+}
+
+/**
+ * The picture cut of the film (a take or pause join, the out of an item laid) that falls 1 to `snapFrames` frames before
+ * `inAt`, the latest, or undefined: the take would show for that sliver after the cut.
+ */
+function sliverCutBefore(inAt, ctx) {
+  const near = [...ctx.cuts, ...ctx.placed.map((p) => p.out)].filter((c) => inAt - c >= 1 && inAt - c <= CUTAWAY_TIMING.snapFrames);
+  return near.length > 0 ? Math.max(...near) : undefined;
+}
+
+/**
+ * The in of a picture moved later while a picture cut falls 1 to `snapFrames` frames before it (sliverCutBefore), so
+ * `snapFrames` + 1 frames of the take or more show after the cut: never a flash (FLASH_BARS.maxSec, 0.2 s, is 4.8 frames).
+ */
+function clearAfterCuts(inAt, ctx) {
+  let at = inAt;
+  for (let near = sliverCutBefore(at, ctx); near !== undefined; near = sliverCutBefore(at, ctx)) at = near + CUTAWAY_TIMING.snapFrames + 1;
+  return at;
+}
+
+/**
  * The one check a run of b-roll passes before it is laid (timeUnit, and each side of a run clipFitOf breaks), whatever
  * branch timed it: `fitted`, its windows as their clips play them, against `timed`, the windows its timing gave.
  * - Each keeps its timed in and is never longer than its timed window: a clip only shortens one, and only the last of
- *   a run, so the run stays back to back (its bounds, the most frames and its line's end, are its timing's).
+ *   a run, so the run stays back to back (its bounds, the most frames and its line's end, are its timing's). The run's
+ *   first in may only have moved later, clear of a picture cut just before it (clearedIn).
  * - Every picture keeps its floor (`least`) and the run's span every window rule (windowFails: the first and last line,
  *   the floor of the film, the end, the gap to every item laid).
- * - Its out is not 1 to `snapFrames` frames before a picture cut its clip could not reach (sliverCutAfter): the take
- *   would show there and no snap could close it. A sliver a clip could close is the snap's to take or leave (0.6: the
- *   snap is optional and never costs a shot).
+ * - Its out is not 1 to `snapFrames` frames before a picture cut (sliverCutAfter): the take would show there. When the
+ *   clip could not reach the cut it is left out as `cut-clip-short`; when it could, but ending `snapFrames` + 1 frames
+ *   before the cut would put it under its floor and the snap onto the cut was not taken (it would cost another item, or
+ *   could not be), as `cut-near-cut`.
  * Returns the picture it fails on (`at`) and its code, with the clip's frames for `cut-clip-short`, or null.
  */
 function laidRunFails(kept, timed, fitted, least, ctx) {
   const clipOf = (k) => ({ clipFrames: kept[k].item.fileFrames, windowFrames: timed[k].out - timed[k].in });
   const last = fitted.length - 1;
   for (const [k, f] of fitted.entries()) {
-    const asTimed = f.in === timed[k].in && (k === last ? f.out <= timed[k].out : f.out === timed[k].out);
+    const inAsTimed = f.in === timed[k].in || (k === 0 && f.in === clearAfterCuts(timed[0].in, ctx));
+    const asTimed = inAsTimed && (k === last ? f.out <= timed[k].out : f.out === timed[k].out);
     const shortened = f.out !== timed[k].out;
     if (!asTimed || (shortened && f.out - f.in < least)) return { at: k, code: "cut-clip-short", clip: clipOf(k) };
     if (f.out - f.in < least) return { at: k, code: "cut-too-short" };
   }
-  // Only the last out can have moved, and only earlier: a rule the span newly fails is about that picture.
+  // Only the last out can have moved, and only earlier, and the first in only later: a rule the span newly fails is
+  // about the last picture.
   const code = windowFails(spanOf(fitted), least, ctx);
   if (code) return { at: last, code };
   const cut = sliverCutAfter(fitted[last].out, ctx);
+  if (cut === undefined) return null;
   const { fileFrames } = kept[last].item;
-  if (cut !== undefined && fileFrames !== undefined && cutawayClipSpeed(fileFrames, cut - fitted[last].in) === null) {
+  if (fileFrames !== undefined && cutawayClipSpeed(fileFrames, cut - fitted[last].in) === null) {
     return { at: last, code: "cut-clip-short", clip: clipOf(last) };
   }
-  return null;
+  return { at: last, code: "cut-near-cut" };
 }
 
 /** An item as the track lays it. */
@@ -817,6 +922,250 @@ function laidOf(pic, w, whoosh) {
     whoosh,
     ...(w.snapped ? { snapped: w.snapped } : {}),
     ...(w.playSpeed !== undefined ? { playSpeed: w.playSpeed } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------- the drawn track
+
+/** How the cut times each drawn template (video/lib/cutawayTemplates.ts `timing`). */
+export const CUTAWAY_DRAWN_KINDS = Object.freeze({
+  label: "label",
+  list: "list",
+  timer: "timer",
+  "emoji-sticker": "emoji",
+  "offer-card": "card",
+  "chart-card": "card",
+  "guarantee-card": "card",
+  "ingredient-stickers": "sticker",
+});
+
+/**
+ * Which drawn item keeps a moment two of them want (plan 0.40): the higher kind stays, a card, then a list
+ * or a timer, then a label, then a sticker, then an emoji (the member's own typed words win over a decoration).
+ */
+export const CUTAWAY_DRAWN_RANK = Object.freeze({ card: 5, list: 4, timer: 4, label: 3, sticker: 2, emoji: 1 });
+
+/**
+ * The drawn items' windows (plan 4.7's table), in whole frames of the finished film: a label from its word for `label`
+ * frames, a card `card`, a timer `timer`, an emoji `emoji`; a list from its first point to `listTail` frames after its
+ * last point comes in; a sticker from its word to its line's last frame, or to the next drawn item's in, whichever is
+ * first, and at least `stickerMin` frames (a default of this build: half a second).
+ */
+export const CUTAWAY_DRAWN_TIMING = Object.freeze({ label: 54, card: 60, listTail: 36, timer: 48, emoji: 24, stickerMin: 12 });
+
+/**
+ * Where a drawn item may sit, as shares of the frame: clear of the face, the captions and the headline by `gap` (the
+ * room the captions keep from the face, first-cut.mjs FACE_CLEAR_SHARE), between `safeTop` (the top of a Reel that Meta
+ * asks to keep free of text, as first-cut.mjs HEADLINE_BOX reads it) and `safeBottom` (the phone apps' lower buttons,
+ * the lab's round 5), centred left to right. Beside the face, an item keeps `side` of the width from the frame's edge
+ * (the drawn words' own margin, first-cut-drawn.mjs DRAWN_LOOK.side).
+ */
+export const CUTAWAY_DRAWN_PLACE = Object.freeze({ gap: 0.01, safeTop: 0.14, safeBottom: 0.8, side: 0.05 });
+
+/**
+ * The first free band for a drawn item `w` by `h` pixels over its whole window (plan 4.7 and 0.6): under
+ * the chin, else under the captions, else above the head. `face` is the face on the film over the window (top, bottom
+ * as shares), `blocks` every other thing it must keep clear of over the window, each { top, bottom } as shares and a
+ * `kind`: `captions` (a caption screen as drawn, the default), `person` (her part of the frame while a frame item moves
+ * her), `headline` or `card` (a card the storyboard draws in a box). Each is treated as the frame's whole width. Between the chin and the head, each block that reaches
+ * below the chin gives a try just under it, the nearest first: under the captions (`captions`), or under her moved part
+ * of the frame (`person`: a speakerTop shot's seam, with the captions on or off). When none is free, the strip beside
+ * the face (plan 0.40): left or right of the face box (`face.left`, `face.right`) and its `gap`, `side` from
+ * the frame's edge, the wider first, when the item is narrower than it; there the item sits as near the face's middle
+ * height as it may, inside the safe area and clear of every block. Returns the band's name (`beside-left`,
+ * `beside-right` for the strip) and the box [x0, y0, x1, y1] in pixels, or null when no band is free.
+ */
+export function cutawayDrawnPlace({ w, h, face, blocks = [] }, W, H) {
+  const P = CUTAWAY_DRAWN_PLACE;
+  // A size, a face or a block that does not read is no place at all (landing review of #5209): never a box off the frame.
+  if (![w, h, W, H].every((v) => Number.isFinite(v) && v > 0) || w > W || h > H) return null;
+  if (!isDrawnSpan(face) || !Array.isArray(blocks) || !blocks.every(isDrawnSpan)) return null;
+  const gap = P.gap * H;
+  const x0 = Math.round((W - w) / 2);
+  if (x0 < 0 || x0 + w > W) return null;
+  const free = (y0) => {
+    const y1 = y0 + h;
+    if (y0 < P.safeTop * H || y1 > P.safeBottom * H) return false;
+    return [face, ...blocks].every((b) => y1 + gap <= b.top * H || y0 - gap >= b.bottom * H);
+  };
+  const under = blocks.filter((b) => b.bottom > face.bottom).sort((a, b) => a.bottom - b.bottom);
+  const tries = [
+    ["chin", Math.ceil(face.bottom * H + gap)],
+    ...under.map((b) => [["person", "headline", "card"].includes(b.kind) ? b.kind : "captions", Math.ceil(b.bottom * H + gap)]),
+    ["head", Math.floor(face.top * H - gap - h)],
+  ];
+  const hit = tries.find(([, y0]) => free(y0));
+  if (hit) return { band: hit[0], box: [x0, hit[1], x0 + w, hit[1] + h] };
+  return besideFace({ w, h, face, blocks }, W, H);
+}
+
+/** A part of the frame top to bottom that reads: both shares finite, the top not under the bottom. */
+const isDrawnSpan = (b) => isObject(b) && Number.isFinite(b.top) && Number.isFinite(b.bottom) && b.top <= b.bottom;
+/**
+ * A drawn item's place over its window, its sizes tried in order (plan 0.40): its own size in the bands, then
+ * beside the face (cutawayDrawnPlace), then the same at its smallest size. `sizes`: [{ w, h }] the item's own size first;
+ * a smaller one is tried only when it is smaller. Returns the place and the index of the size it was found at, or null.
+ */
+export function cutawayDrawnPlaceSized(sizes, { face, blocks = [] }, W, H) {
+  for (const [k, { w, h }] of sizes.entries()) {
+    if (k > 0 && !(w < sizes[0].w || h < sizes[0].h)) continue;
+    const place = cutawayDrawnPlace({ w, h, face, blocks }, W, H);
+    if (place) return { ...place, size: k };
+  }
+  return null;
+}
+
+/** The strip beside the face, for cutawayDrawnPlace: an item in it never crosses the face box and its gap, or a block. */
+function besideFace({ w, h, face, blocks }, W, H) {
+  const P = CUTAWAY_DRAWN_PLACE;
+  const gap = P.gap * H;
+  if (!Number.isFinite(face.left) || !Number.isFinite(face.right) || face.left >= face.right) return null;
+  // Each strip on whole pixels inside its edges, so a box centred in it never reaches the face's gap or the margin.
+  const strips = [["left", Math.ceil(P.side * W), Math.floor(face.left * W - gap)], ["right", Math.ceil(face.right * W + gap), Math.floor((1 - P.side) * W)]]
+    .filter(([, a, b]) => b - a >= w)
+    .sort((p, q) => q[2] - q[1] - (p[2] - p[1]));
+  if (strips.length === 0) return null;
+  const middle = ((face.top + face.bottom) / 2) * H;
+  const clear = (y0) => y0 >= P.safeTop * H && y0 + h <= P.safeBottom * H && blocks.every((b) => y0 + h + gap <= b.top * H || y0 - gap >= b.bottom * H);
+  // As near the face's middle as it may be: there, or just clear of a block, or at an edge of the safe area. A place
+  // under something rounds down to a whole pixel and one over something rounds up, so neither crosses what it clears.
+  const ys = [
+    Math.ceil(middle - h / 2),
+    ...blocks.flatMap((b) => [Math.ceil(b.bottom * H + gap), Math.floor(b.top * H - gap - h)]),
+    Math.ceil(P.safeTop * H),
+    Math.floor(P.safeBottom * H - h),
+  ].sort((a, b) => Math.abs(a + h / 2 - middle) - Math.abs(b + h / 2 - middle));
+  const y0 = ys.find(clear);
+  if (y0 === undefined) return null;
+  const [name, a, b] = strips[0];
+  const x0 = Math.round((a + b - w) / 2);
+  return { band: `beside-${name}`, box: [x0, y0, x0 + w, y0 + h] };
+}
+
+/**
+ * The rows a list's points come in on (plan 4.4: 2 to 4 clauses on lines that follow each other, each at its first
+ * word): the first at the item's own word, each next one at the first row of its clause's words on its own line, after
+ * the point before it. Or the code why one is not found.
+ */
+export function cutawayPointsOf(item, rows, first) {
+  const out = [first];
+  for (const point of (Array.isArray(item.points) ? item.points : []).slice(1)) {
+    const words = typeof point?.words === "string" ? point.words.split(/\s+/).map(cutawayWord).filter(Boolean) : [];
+    const lineId = point?.text?.from === "clause" ? point.text.lineId : null;
+    const after = out.at(-1);
+    // A point comes in on its first word's frame, so that row must have its times (as an item's own word).
+    const index = words.length === 0 || !lineId ? -1 : rows.findIndex((r, i) => i > after && isTimedRow(r) && r.lineId === lineId && words.every((wd, k) => rows[i + k]?.lineId === lineId && cutawayWord(rows[i + k].text) === wd));
+    if (index < 0) return { code: "cut-word-not-found" };
+    out.push(index);
+  }
+  return { indexes: out };
+}
+
+/**
+ * Where each drawn item goes (plan 4.7, "Two tracks"), one at a time, in whole frames of the finished film:
+ * - `items`: the drawn items as cutawaysOf reads them; one of a kind not in `kinds` is left out (`cut-drawn-later`);
+ * - `rows`, `lines`: the film's words and lines as for the frame track; `stopAt` where the end card or the ending's
+ *   words begin (seconds of the finished film, null with none), `filmFrames` the film's frames. As the frame track, a
+ *   bound that does not read leaves items out, never lets one through, and a word with no times is not found;
+ * - `placeOf(candidate)`: where it sits over its whole window (cutawayDrawnPlace and what the cut knows of the film),
+ *   `{ place }`, or `{ code }` when it cannot be drawn there.
+ * Never on the first line (CUTAWAY_FIRST_LINE); a window that would cross the end card or the film's end is left out
+ * whole, never cut short. When two items want the same moment, the higher kind stays (CUTAWAY_DRAWN_RANK) and, within
+ * one kind, the earlier one; the other is left out (`cut-drawn-overlap`). A sticker goes out when the next drawn item
+ * kept of its kind or a higher one comes in (plan 0.10); a later sticker that would cut an earlier one under
+ * `stickerMin` is left out, as is a sticker a higher item already laid would cut that short; an emoji that would come in
+ * while a sticker is on is left out. Every window is final when it is placed and checked: a laid item is never taken
+ * out again, so nothing is cut short by an item that is not on the film.
+ * Returns each item laid, with its window, its word's frame, its points' frames (a list) and its place, and each item
+ * left out with its code.
+ */
+export function scheduleDrawnTrack(items, { rows, lines, stopAt = null, filmFrames, kinds = Object.values(CUTAWAY_DRAWN_KINDS), placeOf }) {
+  const T = CUTAWAY_DRAWN_TIMING;
+  const left = [];
+  const leave = (item, code) => left.push({ n: item.n, key: item.key, template: item.template, code });
+  const rowList = Array.isArray(rows) ? rows : [];
+  const lineList = (Array.isArray(lines) ? lines.filter(isTimedLine) : cutawayLinesOf(rowList)).sort(bySpokenOrder);
+  const filmEnd = Number.isFinite(filmFrames) ? filmFrames : 0;
+  const endAt = stopAt === null || stopAt === undefined ? Infinity : Number.isFinite(stopAt) ? cutawayFrame(stopAt) : 0;
+  const stop = Math.min(filmEnd, endAt);
+  const firstLine = lineList[0];
+  const candidates = [];
+  for (const item of Array.isArray(items) ? items.filter(isObject) : []) {
+    const kind = CUTAWAY_DRAWN_KINDS[item.template];
+    if (!kind || !kinds.includes(kind)) {
+      leave(item, "cut-drawn-later");
+      continue;
+    }
+    const found = cutawayAnchorOf(item.at, rowList);
+    if ("code" in found) {
+      leave(item, found.code);
+      continue;
+    }
+    const row = rowList[found.index];
+    if (!isTimedRow(row)) {
+      leave(item, "cut-word-not-found");
+      continue;
+    }
+    const line = lineList.find((l) => l.lineId === row.lineId);
+    if (!line) {
+      leave(item, "cut-line-not-heard");
+      continue;
+    }
+    const word = cutawayFrame(row.start);
+    if (line === firstLine || word < firstLine.to) {
+      leave(item, "cut-first-last-line");
+      continue;
+    }
+    let out;
+    let points;
+    if (kind === "list") {
+      const read = cutawayPointsOf(item, rowList, found.index);
+      if ("code" in read) {
+        leave(item, read.code);
+        continue;
+      }
+      points = read.indexes.map((i) => cutawayFrame(rowList[i].start));
+      out = points.at(-1) + T.listTail;
+    } else out = kind === "sticker" ? line.to : word + T[kind];
+    if (out - word < (kind === "sticker" ? T.stickerMin : 1)) leave(item, "cut-too-short");
+    else if (out > stop) leave(item, "cut-end");
+    else candidates.push({ item, kind, in: word, out, word, ...(points ? { points } : {}), ...(row.guessed ? { guessed: true } : {}) });
+  }
+  // The higher kind is placed first (CUTAWAY_DRAWN_RANK), and within one kind the earlier, so when two items want the
+  // same moment the higher kind stays and, within one kind, the earlier one. Every item laid before a sticker is of its
+  // kind or a higher one (an emoji is placed last), so a sticker's out is known when it is placed.
+  const rank = (c) => CUTAWAY_DRAWN_RANK[c.kind] ?? 0;
+  candidates.sort((a, b) => rank(b) - rank(a) || a.in - b.in || a.item.n - b.item.n);
+  const laid = [];
+  for (const c of candidates) {
+    // A sticker goes out at the first item already laid that comes in while it is on (plan 0.10).
+    const out = c.kind === "sticker" ? laid.reduce((at, l) => (l.in > c.in && l.in < at ? l.in : at), c.out) : c.out;
+    // The item on screen when `c` comes in (items laid never overlap, so one at most), and whether one comes in while
+    // `c` is on. A sticker on screen that `c` may cut (its kind or a higher one) takes no moment from it, unless that
+    // would leave the sticker under `stickerMin`: then the earlier sticker stays.
+    const on = laid.find((l) => l.in <= c.in && c.in < l.out);
+    const cuts = on && on.kind === "sticker" && on.in < c.in && rank(c) >= rank(on) && c.in - on.in >= T.stickerMin;
+    const held = (on && !cuts) || laid.some((l) => c.in < l.in && l.in < out) || (c.kind === "sticker" && out - c.in < T.stickerMin);
+    if (held) {
+      leave(c.item, "cut-drawn-overlap");
+      continue;
+    }
+    const window = { ...c, out, ...(out < c.out ? { cutShort: true } : {}) };
+    const placed = placeOf(window);
+    if (!isObject(placed) || !("place" in placed)) {
+      leave(c.item, isObject(placed) && CUTAWAY_CUT_CODES.includes(placed.code) ? placed.code : "cut-drawn-no-place");
+      continue;
+    }
+    if (cuts) {
+      on.out = c.in;
+      on.cutShort = true;
+    }
+    laid.push({ ...window, place: placed.place });
+  }
+  laid.sort((a, b) => a.in - b.in || a.item.n - b.item.n);
+  return {
+    laid: laid.map(({ item, ...c }) => ({ n: item.n, key: item.key, template: item.template, family: item.family, track: "drawn", item, ...c })),
+    left,
   };
 }
 

@@ -17,8 +17,10 @@ export type CutawayCutCode =
   | "cut-unread" | "cut-version" | "cut-both-keys" | "cut-staged-text" | "cut-mapped" | "cut-template"
   | "cut-no-file" | "cut-file-unreadable" | "cut-insert-short" | "cut-clip-short"
   | "cut-line-not-heard" | "cut-word-not-found"
-  | "cut-first-last-line" | "cut-too-early" | "cut-too-close" | "cut-too-short" | "cut-end"
-  | "cut-drawn-later";
+  | "cut-first-last-line" | "cut-too-early" | "cut-too-close" | "cut-too-short" | "cut-end" | "cut-near-cut"
+  | "cut-drawn-later"
+  | "cut-drawn-overlap" | "cut-drawn-no-face" | "cut-drawn-no-place" | "cut-drawn-no-filter" | "cut-drawn-no-font"
+  | "cut-words-unprintable" | "cut-words-wide" | "cut-chart-number" | "cut-sticker-no-filter";
 export const CUTAWAY_CUT_CODES: readonly CutawayCutCode[];
 
 /**
@@ -194,6 +196,82 @@ export function scheduleFrameTrack(
     filmFrames: number;
   },
 ): { laid: CutawayLaid[]; left: CutawayCutLeft[] };
+
+export type CutawayDrawnKind = "label" | "list" | "timer" | "emoji" | "card" | "sticker";
+/** How the cut times each drawn template. */
+export const CUTAWAY_DRAWN_KINDS: Readonly<Record<string, CutawayDrawnKind>>;
+/** Which drawn item keeps a moment two want: the higher kind stays (a card, a list or a timer, a label, a sticker, an emoji). */
+export const CUTAWAY_DRAWN_RANK: Readonly<Record<CutawayDrawnKind, number>>;
+/** The drawn items' windows in frames of the finished film. */
+export const CUTAWAY_DRAWN_TIMING: Readonly<{ label: number; card: number; listTail: number; timer: number; emoji: number; stickerMin: number }>;
+/** Where a drawn item may sit, as shares of the frame. */
+export const CUTAWAY_DRAWN_PLACE: Readonly<{ gap: number; safeTop: number; safeBottom: number; side: number }>;
+
+/** A part of the frame top to bottom, as shares of its height. */
+export interface CutawayBlock {
+  top: number;
+  bottom: number;
+  /** What it is: a caption screen (the default), her moved part of the frame, the headline, a card the storyboard draws in a box. */
+  kind?: "captions" | "person" | "headline" | "card";
+}
+export type CutawayDrawnBand = "chin" | "captions" | "person" | "headline" | "card" | "head" | "beside-left" | "beside-right";
+/** A drawn item's place, its own size first, then its smallest: with the index of the size it was found at, or null. */
+export function cutawayDrawnPlaceSized(
+  sizes: readonly { w: number; h: number }[],
+  opts: { face: CutawayBlock & { left?: number; right?: number }; blocks?: readonly CutawayBlock[] },
+  W: number,
+  H: number,
+): { band: CutawayDrawnBand; box: [number, number, number, number]; size: number } | null;
+/**
+ * The first free band for a drawn item over its whole window, then the strip beside the face, or null when none is free
+ * or a size, the face or a block does not read.
+ */
+export function cutawayDrawnPlace(
+  opts: { w: number; h: number; face: CutawayBlock & { left?: number; right?: number }; blocks?: readonly CutawayBlock[] },
+  W: number,
+  H: number,
+): { band: CutawayDrawnBand; box: [number, number, number, number] } | null;
+
+/** The rows a list's points come in on, or the code why one is not found. */
+export function cutawayPointsOf(
+  item: { points?: unknown },
+  rows: readonly { text: string; lineId?: string }[],
+  first: number,
+): { indexes: number[] } | { code: "cut-word-not-found" };
+
+/** A drawn item before it is placed: its window, its word's frame, its points' frames (a list). */
+export interface CutawayDrawnCandidate {
+  item: CutawayCutItem;
+  kind: CutawayDrawnKind;
+  in: number;
+  out: number;
+  word: number;
+  points?: number[];
+  guessed?: true;
+  /** A sticker that goes out when the next drawn item comes in. */
+  cutShort?: true;
+}
+/** A drawn item as the track lays it. */
+export interface CutawayDrawnLaid<P = unknown> extends Omit<CutawayDrawnCandidate, "item"> {
+  n: number;
+  key: string;
+  template: string;
+  family: "broll" | "insert" | "overlay";
+  track: "drawn";
+  item: CutawayCutItem;
+  place: P;
+}
+export function scheduleDrawnTrack<P = unknown>(
+  items: readonly CutawayCutItem[],
+  opts: {
+    rows: readonly { text: string; start: number; end: number; lineId: string; guessed?: boolean }[];
+    lines?: readonly CutawayLine[];
+    stopAt?: number | null;
+    filmFrames: number;
+    kinds?: readonly CutawayDrawnKind[];
+    placeOf: (candidate: CutawayDrawnCandidate) => { place: P } | { code: CutawayCutCode };
+  },
+): { laid: CutawayDrawnLaid<P>[]; left: CutawayCutLeft[] };
 
 export const CUTAWAY_LAID_FRAMES: readonly CutawayCutFrame[];
 /** The one place a frame item's layout is chosen: its own when laid and its take's face was found, else full screen and why. */

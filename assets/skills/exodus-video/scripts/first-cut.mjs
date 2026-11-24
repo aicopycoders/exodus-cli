@@ -51,7 +51,7 @@ import { createTextRenderer, measuredTextAss, textFrameWindow } from "./first-cu
 import { isZeroDurationSpeech, parseAuthoredBeat, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC, DIALOGUE_BREATH_LEAD_SEC, DIALOGUE_BREATH_TAIL_SEC } from "./first-cut-speech.mjs";
 import { captionSync, placementHeard, retimeWords, soundPictureCheck } from "./first-cut-sync.mjs";
 import { CUTAWAY_BROLL_CLIP, CUTAWAY_INSERT_CLIP, cutawayFrame, cutawayLayoutOf, cutawayLinesOf, cutawaysOf, cutawaysRefusalOf, cutawayUnitsOf, oneLayoutPerRun, scheduleFrameTrack } from "./first-cut-cutaways.mjs";
-import { cutawayCaptionPieces, cutawayScreenFrames, cutawayFillShare, CUTAWAY_FILL_MAX, CUTAWAY_CORNER, CUTAWAY_SPEAKER_TOP, cornerLayout, cutawayCaptionPlace, speakerTopFace } from "./first-cut-cutaways.mjs";
+import { cutawayCaptionPieces, cutawayScreenFrames, CUTAWAY_CORNER, CUTAWAY_SPEAKER_TOP, cornerLayout, cutawayCaptionPlace, speakerTopFace } from "./first-cut-cutaways.mjs";
 import { cutawayDrawnPlaceSized, scheduleDrawnTrack } from "./first-cut-cutaways.mjs";
 import { DRAWN_KINDS_LAID, DRAWN_LOOK, drawnEvents, drawnLayoutOf, drawnStyle } from "./first-cut-drawn.mjs";
 
@@ -5932,20 +5932,35 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       // The film widened with a blurred copy of itself is shared by the split shots (their margin is the same); the
       // blur and the overlay work in the windows alone, and each shot's crop is cut from it.
       const anyWindow = splits.map((s) => windowOf(s).shown).join("+");
+      // B-roll, inserts and overlays: her window is a part of the take inside its frame (cutawayPersonWindow), so no
+      // blurred margin is drawn behind her part, none is made, and each crop is cut from the film itself. Today's split
+      // shots keep their canvas.
+      const pastFrame = (s) => !s.corner && (s.split.crop[2] < s.split.margin || s.split.crop[2] + s.split.crop[0] > s.split.margin + WIDTH);
+      const canvas = xs !== finish?.cutawayFrames || splits.some(pastFrame);
       // A shot showing the person smaller (splitCaptionPlace) widens the canvas; each crop keeps its place on the frame.
-      const margin = Math.max(0, ...splits.map((s) => s.split?.margin ?? 0));
-      filters.push(`[${videoLabel}]split=2[xsbase][xsrc]`);
-      filters.push(`[xsrc]split=2[xsa][xsb]`);
-      filters.push(`[xsa]scale=${WIDTH + 2 * margin}:${HEIGHT},boxblur=${E.blur}:enable='${anyWindow}'[xsbg]`);
-      filters.push(`[xsbg][xsb]overlay=${margin}:0:enable='${anyWindow}'[xscv]`);
+      const margin = canvas ? Math.max(0, ...splits.map((s) => s.split?.margin ?? 0)) : 0;
+      if (canvas) {
+        filters.push(`[${videoLabel}]split=2[xsbase][xsrc]`);
+        filters.push(`[xsrc]split=2[xsa][xsb]`);
+        filters.push(`[xsa]scale=${WIDTH + 2 * margin}:${HEIGHT},boxblur=${E.blur}:enable='${anyWindow}'[xsbg]`);
+        filters.push(`[xsbg][xsb]overlay=${margin}:0:enable='${anyWindow}'[xscv]`);
+      } else filters.push(`[${videoLabel}]split=2[xsbase][xscv]`);
       const canvases = splits.length > 1 ? splits.map((_, j) => `xscv${j}`) : ["xscv"];
       if (splits.length > 1) filters.push(`[xscv]split=${splits.length}${canvases.map((c) => `[${c}]`).join("")}`);
       splits.forEach((s, j) => {
         const k = xs.shots.indexOf(s);
         // A corner one's crop is of the film's own frame, so it sits `margin` into the canvas, and is scaled to its box.
         const [wc, hc, x0, y0] = s.corner ? s.corner.crop : s.split.crop;
-        const size = s.corner ? `${s.corner.box[2]}:${s.corner.box[3]}` : `${WIDTH}:${s.split.stripH}`;
-        filters.push(`[${canvases[j]}]crop=${wc}:${hc}:${x0 + margin - (s.corner ? 0 : s.split.margin)}:${y0},scale=${size},setsar=1[xst${k}]`);
+        const x = x0 + margin - (s.corner ? 0 : s.split.margin);
+        const [bw, bh] = s.corner ? [s.corner.box[2], s.corner.box[3]] : [WIDTH, s.split.stripH];
+        // B-roll, inserts and overlays: her crop a window of even size inside the frame, as the layouts make it; a record
+        // that says otherwise (crop=0:0, or past the frame) stops the cut here, not in ffmpeg. Today's split shots are
+        // cut as before.
+        const even = (v) => Number.isInteger(v) && v > 0 && v % 2 === 0;
+        if (xs === finish?.cutawayFrames && !(even(wc) && even(hc) && even(bw) && even(bh) && Number.isInteger(x) && Number.isInteger(y0) && x >= 0 && y0 >= 0 && x + wc <= WIDTH + 2 * margin && y0 + hc <= HEIGHT)) {
+          throw new Error(`buildFfmpegArgs: shot ${k + 1}'s crop of the person is ${JSON.stringify([wc, hc, x0, y0])} into ${bw}x${bh}, not a window of even size inside the ${WIDTH + 2 * margin}x${HEIGHT} frame`);
+        }
+        filters.push(`[${canvases[j]}]crop=${wc}:${hc}:${x}:${y0},scale=${bw}:${bh},setsar=1[xst${k}]`);
         strips.set(k, `xst${k}`);
       });
       videoLabel = "xsbase";
@@ -9448,15 +9463,86 @@ export function splitCaptionPlace({ face, split, share }, W = WIDTH, H = HEIGHT)
 }
 
 /**
- * B-roll, inserts and overlays: the share a split picture's captions are placed with (splitCaptionPlace), so a run of a
- * burst shows the person at one size. `own` is the tallest screen over the picture (null with none), `tallest` the
- * tallest over any picture of its run (null for a picture alone). When the run's tallest needs the smaller crop
- * ("smaller"), every picture of the run is placed with it and takes that crop; else each picture with its own, as the
- * "at" and "below" places keep the crop.
+ * B-roll, inserts and overlays: her window for a `split` or `speakerTop` item, a part of the take never wider or taller
+ * than the take's frame, so her part is always real picture and no blurred margin is drawn behind it. `numbers` are the
+ * layout's shares (EXTRA_SHOTS for `split`, first-cut-cutaways.mjs CUTAWAY_SPEAKER_TOP for `speakerTop`). The window has
+ * her part's shape, `crop.widthShare` of the width at first (the take zoomed in, as today's split shows it); it grows,
+ * up to the frame's own width (the take at its own scale), until her face sits between `crop.faceTop` and
+ * `crop.faceBottom` of its height. It is centred on her face and slid back inside the frame where centring would leave
+ * it, her face's top `crop.faceTop` down it; it grows too until it is as wide as her face. `tooClose`: her face does not
+ * fit the largest window with `crop.faceTop` of its height clear above and below it, or is wider than it: she is too
+ * close to the camera for this layout. `y0`: the window's top, slid
+ * (cutawayWindowSlid). Returns splitLayout's shape, its `margin` 0: the crop is [width, height, x, y] on the frame.
  */
-export function splitRunShare({ face, split, own, tallest }) {
-  if (tallest === null || tallest === undefined) return own;
-  return splitCaptionPlace({ face, split, share: tallest }).how === "smaller" ? tallest : own;
+export function cutawayPersonWindow(face, numbers, W = WIDTH, H = HEIGHT, { y0 = null } = {}) {
+  const E = numbers;
+  const splitH = Math.floor(Math.floor(H * E.splitShare) / 2) * 2;
+  const stripH = H - splitH;
+  const maxWc = Math.floor(W / 2) * 2;
+  const maxHc = Math.min(Math.floor(H / 2) * 2, Math.floor(Math.floor((maxWc * stripH) / W) / 2) * 2);
+  let wc = Math.floor(Math.floor(W * E.crop.widthShare) / 2) * 2;
+  let hc = Math.floor(Math.floor((wc * stripH) / W) / 2) * 2;
+  const faceH = (face.bottom - face.top) * H;
+  const faceW = (face.right - face.left) * W;
+  // Tall enough for her face with its room above and below, and wide enough for its whole width (landing review).
+  const need = Math.max(faceH / (E.crop.faceBottom - E.crop.faceTop), (faceW * stripH) / W);
+  if (need > hc) {
+    hc = Math.min(maxHc, Math.ceil(need / 2) * 2);
+    wc = Math.min(maxWc, Math.ceil((hc * W) / stripH / 2) * 2);
+  }
+  const tooClose = faceH > (1 - 2 * E.crop.faceTop) * hc || faceW > wc;
+  const x0 = Math.round(Math.min(Math.max(((face.left + face.right) / 2) * W - wc / 2, 0), W - wc));
+  const top = y0 ?? face.top * H - E.crop.faceTop * hc;
+  const y = Math.round(Math.min(Math.max(top, 0), H - hc));
+  return { splitH, stripH, margin: 0, crop: [wc, hc, x0, y], ...(tooClose ? { tooClose: true } : {}) };
+}
+
+/**
+ * B-roll, inserts and overlays: her window slid down the take, two pixels at a time, so her face sits higher in her
+ * part, until `fits(window)` (the captions clear of her face); never so far that her face's top leaves the window, nor
+ * past the frame's foot. The first window that fits, the one given when it already does, or null when none does.
+ */
+export function cutawayWindowSlid(face, window, numbers, fits, W = WIDTH, H = HEIGHT) {
+  if (fits(window)) return window;
+  const [, hc, , y0] = window.crop;
+  const last = Math.min(H - hc, Math.floor(face.top * H));
+  for (let y = y0 + 2; y <= last; y += 2) {
+    const slid = cutawayPersonWindow(face, numbers, W, H, { y0: y });
+    if (fits(slid)) return slid;
+  }
+  return null;
+}
+
+/**
+ * B-roll, inserts and overlays: her window for a `speakerTop` item (cutawayPersonWindow), slid down the take until
+ * `fits(face)` holds for her face in her top half (speakerTopFace's), or unslid when no window does. firstCut passes the
+ * same check that lays the item full screen when it fails (the screens the burn shows on its run's frames, each at its
+ * height on the seam), so a window that clears them is always found when one exists.
+ */
+export function cutawaySeamWindow(face, fits, W = WIDTH, H = HEIGHT) {
+  const base = cutawayPersonWindow(face, CUTAWAY_SPEAKER_TOP, W, H);
+  if (base.tooClose) return base;
+  return cutawayWindowSlid(face, base, CUTAWAY_SPEAKER_TOP, (w) => fits(speakerTopFace(face, w, H)), W, H) ?? base;
+}
+
+/**
+ * B-roll, inserts and overlays: where a `split` item's captions sit, as splitCaptionPlace, in her window
+ * (cutawayPersonWindow): at EXTRA_SHOTS.captionsAt ("at"), else just under the chin ("below"); else her window slid
+ * down the take so her face sits higher and they fit under the chin ("slid"), never her picture shown smaller. When no
+ * window inside the frame fits, `fits` is false and the item is laid full screen (plan 0.12). `slide` false: the window
+ * stays (a run's window, chosen by its tallest screen).
+ */
+export function cutawaySplitPlace({ face, window, share, slide = true }, W = WIDTH, H = HEIGHT) {
+  const E = EXTRA_SHOTS;
+  const bandAt = (centre) => [Math.round((centre - E.captionsHalf) * 10_000) / 10_000, Math.round((centre + E.captionsHalf) * 10_000) / 10_000];
+  const at = bandAt(E.captionsAt);
+  if (bandClear(at, share, faceInStrip(face, window, H))) return { band: at, how: "at", split: window };
+  const under = (w) => faceInStrip(face, w, H).bottom + FACE_CLEAR_SHARE + share / 2;
+  const fits = (w) => under(w) + share / 2 <= E.captionsLowest + 1e-9;
+  if (fits(window)) return { band: bandAt(under(window)), how: "below", split: window };
+  const slid = slide ? cutawayWindowSlid(face, window, E, fits, W, H) : null;
+  if (slid) return { band: bandAt(under(slid)), how: "slid", split: slid };
+  return { band: bandAt(under(window)), how: "below", split: window, fits: false };
 }
 
 /** COP-384: a placed shot on the film's 24 fps frames: its first frame and how many it covers (at least one). */
@@ -9477,6 +9563,10 @@ export function splitCaptionsNote(shot) {
   }
   if (shot.captionsHow === "smaller") {
     return `extraShots: shot ${shot.n} shows the person smaller, so the face sits higher and the captions fit under the chin, at ${at} of the height: at ${E.captionsAt} they would touch the face, and under it they would pass ${E.captionsLowest}`;
+  }
+  // B-roll, inserts and overlays (cutawaySplitPlace): her window slid down the take, never her picture shown smaller.
+  if (shot.captionsHow === "slid") {
+    return `extraShots: shot ${shot.n} shows a lower part of the take, so the face sits higher and the captions fit under the chin, at ${at} of the height: at ${E.captionsAt} they would touch the face, and under it they would pass ${E.captionsLowest}`;
   }
   return `extraShots: while shot ${shot.n} is on, the captions sit at ${E.captionsAt} of the height, over the person's half`;
 }
@@ -11070,13 +11160,15 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         captionsHow: place.how, ...(place.fits ? {} : { captionsFit: false }),
       };
     };
-    // One crop a run: the tallest caption screen over any picture of a run of a burst (splitRunShare).
+    // One window a run: the tallest caption screen over any picture of a run of a burst chooses the window for all.
     const runTallest = new Map();
     for (const unit of cutawayUnitsOf(laid)) {
       if (unit.length < 2) continue;
       const shares = unit.map((l) => shareOver({ ...l, start: l.in / FPS, end: l.out / FPS })).filter((s) => s !== null);
       if (shares.length > 0) for (const l of unit) runTallest.set(l, Math.max(...shares));
     }
+    /** Each picture's run of a burst, its pictures back to back (a picture alone is its own). */
+    const runOf = new Map(cutawayUnitsOf(laid).flatMap((unit) => unit.map((l) => [l, unit])));
     const placed = laid.map((l) => {
       const start = l.in / FPS;
       const end = l.out / FPS;
@@ -11090,27 +11182,35 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         const corner = cornerLayout(face, WIDTH, HEIGHT);
         return { ...shot, corner, faced: true, ...captionsOf(shot, { top: corner.box[1] / HEIGHT }) };
       }
-      // Her crop's share that is fill past the frame's edge (the blurred margin): over CUTAWAY_FILL_MAX, full screen.
-      const fillOf = (split) => {
-        const fill = cutawayFillShare(split, WIDTH, face);
-        return { fill, ...(fill > CUTAWAY_FILL_MAX ? { pictureFills: false } : {}) };
-      };
-      if (layout === "speakerTop") {
-        const split = splitLayout(face, WIDTH, HEIGHT, { numbers: CUTAWAY_SPEAKER_TOP });
-        return { ...shot, split, faced: true, ...fillOf(split), ...captionsOf(shot, { face: speakerTopFace(face, split, HEIGHT) }) };
-      }
-      const split = splitLayout(face);
+      // Her window, a part of the take inside its frame (cutawayPersonWindow): her part is always real picture. When her
+      // face does not fit it (she is too close to the camera), the item is laid full screen (oneLayoutPerRun).
       const own = shareOver(shot);
-      const share = splitRunShare({ face, split, own, tallest: runTallest.get(l) ?? null });
-      if (share === null) return { ...shot, split, faced: true, ...fillOf(split) };
-      const place = splitCaptionPlace({ face, split, share });
-      // A picture with no screen of its own takes its run's smaller crop, and no captions' place.
-      if (own === null) return { ...shot, split: place.split, faced: true, ...fillOf(place.split) };
+      const tallest = runTallest.get(l) ?? own;
+      if (layout === "speakerTop") {
+        // The seam's captions clear of her face: her window slid down the take where they would touch it, measured as
+        // the check that lays it full screen measures them (captionsOf: the screens the burn shows on the frames of
+        // every picture of its run, each at its height on the seam), so one window serves the run (landing review).
+        const seamClear = (inHalf) => (runOf.get(l) ?? [l]).every((m) => captionsOf({ ...m, layout: "speakerTop" }, { face: inHalf }).captionsFit !== false);
+        const split = cutawaySeamWindow(face, seamClear, WIDTH, HEIGHT);
+        if (split.tooClose) return { ...shot, split, faced: true, tooClose: true };
+        return { ...shot, split, faced: true, ...captionsOf(shot, { face: speakerTopFace(face, split, HEIGHT) }) };
+      }
+      const base = cutawayPersonWindow(face, EXTRA_SHOTS, WIDTH, HEIGHT);
+      if (base.tooClose) return { ...shot, split: base, faced: true, tooClose: true };
+      if (tallest === null) return { ...shot, split: base, faced: true };
+      // The run's window, chosen by its tallest screen; each picture's own captions placed in it.
+      const run = cutawaySplitPlace({ face, window: base, share: tallest });
+      // A picture with no screen of its own takes the run's window and no captions' place. When no window fits the run's
+      // tallest screen, the picture it is over is marked (its place below does not fit), and the rest of the run follow
+      // it full screen as `run` (oneLayoutPerRun), never as `captions` for screens they do not have.
+      if (own === null) return { ...shot, split: run.split, faced: true };
+      const place = cutawaySplitPlace({ face, window: run.split, share: own, slide: false });
       // A split item's screens sit in its captions' band while it is on, as a split shot's (captionsOverSplits), and only then.
       const band = place.band ?? [EXTRA_SHOTS.captionsAt - EXTRA_SHOTS.captionsHalf, EXTRA_SHOTS.captionsAt + EXTRA_SHOTS.captionsHalf];
       const moves = caps ? screensOver(shot).map((o) => ({ s: o.c.s, e: o.c.e, band, from: shot.in, to: shot.out })) : [];
       return {
-        ...shot, split: place.split, faced: true, captionBand: place.band, captionsHow: place.how, ...fillOf(place.split),
+        ...shot, split: place.split, faced: true, captionBand: place.band,
+        captionsHow: run.how === "slid" && place.how !== "at" ? "slid" : place.how,
         ...(moves.length > 0 ? { captionMoves: moves } : {}), ...(place.fits === false ? { captionsFit: false } : {}),
       };
     });
@@ -11135,7 +11235,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     return placed.map((p) => {
       if (p.layout === "full" || !overCard(p)) return p;
       const full = { ...p, layout: "full", asked: p.frame, askedWhy: "card" };
-      for (const field of ["split", "corner", "faced", "captionBand", "captionsHow", "captionMoves", "captionKeeps", "captionsFit", "pictureFills", "fill"]) delete full[field];
+      for (const field of ["split", "corner", "faced", "captionBand", "captionsHow", "captionMoves", "captionKeeps", "captionsFit", "tooClose"]) delete full[field];
       return full;
     });
   };
@@ -11149,7 +11249,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       const why = p.askedWhy === "insert" ? "an insert is always full screen"
         : p.askedWhy === "no-face" ? `take ${p.take}'s face was not found, so the person could not be framed around it`
           : p.askedWhy === "captions" ? "the captions did not fit beside it"
-            : p.askedWhy === "fill" ? "her picture would not fill her part"
+            : p.askedWhy === "close" ? "she is too close to the camera for her face to fit her part"
             : p.askedWhy === "headline" ? "the headline at the top would sit over her face"
             : p.askedWhy === "card" ? "its captions would sit over the card"
               : p.askedWhy === "run" ? "another picture of its run of pictures is laid full screen, and a run keeps one layout"
@@ -11707,7 +11807,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       planId: cutawaysRead.planId,
       ...(cutawaysRefused ? { refused: cutawaysRefused } : {}),
       items: laid.map((p) => ({
-        n: p.n, key: p.key, template: p.template, family: p.family, frame: p.layout, ...(p.asked ? { asked: p.asked } : {}), ...(p.fill !== undefined ? { fill: p.fill } : {}),
+        n: p.n, key: p.key, template: p.template, family: p.family, frame: p.layout, ...(p.asked ? { asked: p.asked } : {}),
         in: p.in, out: p.out, start: roundMs(p.start), end: roundMs(p.end), word: p.word,
         ...(p.guessed ? { guessed: true } : {}), ...(p.burst ? { burst: p.burst } : {}), whoosh: p.whoosh, ...(p.snapped ? { snapped: p.snapped } : {}),
         ...(p.playSpeed !== undefined ? { playSpeed: p.playSpeed } : {}),

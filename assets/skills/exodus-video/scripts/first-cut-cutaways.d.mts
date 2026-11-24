@@ -282,16 +282,10 @@ export function cutawayLayoutOf(
 ): { layout: CutawayCutFrame; asked?: CutawayCutFrame; why?: "insert" | "no-face" | "not-laid" };
 /** The frame items laid, as units in film order: a shot alone, the insert, or a run of a burst (its pictures back to back). */
 export function cutawayUnitsOf<P extends { in: number; out: number; burst?: number }>(laid: readonly P[]): P[][];
-/** One layout per run of a burst: an item whose captions do not fit its layout or whose picture of her would be mostly fill, and every picture of a run that is not laid whole in one layout around one take's face, laid full screen instead. */
-export function oneLayoutPerRun<P extends { in: number; out: number; layout: string; frame?: string; burst?: number; take?: number | null; captionsFit?: boolean; pictureFills?: boolean }>(
+/** One layout per run of a burst: an item whose captions do not fit its layout or whose face does not fit her window (she is too close to the camera), and every picture of a run that is not laid whole in one layout around one take's face, laid full screen instead. */
+export function oneLayoutPerRun<P extends { in: number; out: number; layout: string; frame?: string; burst?: number; take?: number | null; captionsFit?: boolean; tooClose?: boolean }>(
   placed: readonly P[],
-): (P | (P & { layout: "full"; asked?: string; askedWhy: "captions" | "fill" | "run" }))[];
-/** The most of her part of a split or speakerTop layout that may be blurred margin beside her face; over it, full screen. */
-export const CUTAWAY_FILL_MAX: number;
-/** The share of her crop that is fill past the frame's edge on a side her face reaches (splitLayout's `margin` and `crop`). */
-export function cutawayFillShare(layout: { margin: number; crop: readonly number[] }, W?: number, face?: { left: number; right: number } | null): number;
-/** How near the frame's edge her face must reach for the fill on that side to count. */
-export const CUTAWAY_FILL_EDGE: number;
+): (P | (P & { layout: "full"; asked?: string; askedWhy: "captions" | "close" | "run" }))[];
 
 /** A face box as parts of the frame (first-cut.mjs faceBoxOf). */
 export interface CutawayFace {

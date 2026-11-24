@@ -394,7 +394,7 @@ export interface CutPace {
     shots: Array<{
       n: number; word: string; start: number; end: number; layout: "full" | "split"; crop?: [number, number, number, number];
       /** Where a split shot's captions sat (splitCaptionPlace), when the cut drew captions over it. */
-      captions?: { how: "at" | "below" | "smaller"; band: [number, number]; fits?: false };
+      captions?: { how: "at" | "below" | "smaller" | "slid"; band: [number, number]; fits?: false };
     }>;
     whoosh?: Record<string, unknown>;
   };
@@ -418,7 +418,7 @@ export interface CutPace {
       guessed?: true; burst?: 1 | 2; whoosh: boolean; snapped?: { in?: number; out?: number };
       /** A b-roll clip's speed when it is not the usual 1.5x (its clip is too short for its window at 1.5x). */
       playSpeed?: number;
-      place?: { crop: [number, number, number, number]; captions?: { how: "at" | "below" | "smaller"; band: [number, number] } };
+      place?: { crop: [number, number, number, number]; captions?: { how: "at" | "below" | "slid"; band: [number, number] } };
     }>;
     /**
      * Each drawn item laid (first-cut-cutaways.mjs scheduleDrawnTrack): its window in whole frames of the finished film,
@@ -928,7 +928,22 @@ export function splitCaptionPlace(
   H?: number,
 ): { band: [number, number]; how: "at" | "below" | "smaller"; split: CutSplitLayout; fits?: boolean };
 /** B-roll, inserts and overlays: the share a split picture's captions are placed with, one crop for a run of a burst. */
-export function splitRunShare(at: { face: CutFaceBox | null; split: CutSplitLayout; own: number | null; tallest: number | null }): number | null;
+/** B-roll, inserts and overlays: her window for a split or speakerTop item, a part of the take inside its frame; `tooClose` when her face does not fit it. */
+export function cutawayPersonWindow(
+  face: CutFaceBox, numbers: unknown, W?: number, H?: number, opts?: { y0?: number | null },
+): CutSplitLayout & { tooClose?: true };
+/** B-roll, inserts and overlays: her window slid down the take until `fits`, her face inside it and the window inside the frame, or null. */
+export function cutawayWindowSlid(
+  face: CutFaceBox, window: CutSplitLayout, numbers: unknown, fits: (window: CutSplitLayout) => boolean, W?: number, H?: number,
+): CutSplitLayout | null;
+/** B-roll, inserts and overlays: her speakerTop window slid down the take until `fits` holds for her face in her top half, or unslid when none does. */
+export function cutawaySeamWindow(
+  face: CutFaceBox, fits: (face: { top: number; bottom: number }) => boolean, W?: number, H?: number,
+): CutSplitLayout & { tooClose?: true };
+/** B-roll, inserts and overlays: where a split item's captions sit in her window: at 0.76, under the chin, or her window slid so they fit. */
+export function cutawaySplitPlace(
+  at: { face: CutFaceBox; window: CutSplitLayout; share: number; slide?: boolean }, W?: number, H?: number,
+): { band: [number, number]; how: "at" | "below" | "slid"; split: CutSplitLayout; fits?: false };
 /** COP-384: the cut's note of where a split shot's captions sit, and why (`captionsFit` false: past 0.86 all the same). */
 export function splitCaptionsNote(shot: { n: number; captionsHow: "at" | "below" | "smaller"; captionBand: [number, number]; captionsFit?: boolean }): string;
 /** COP-384: caption screens shown while a split shot is on, in the shot's own band, else at EXTRA_SHOTS.captionsAt of the height. */

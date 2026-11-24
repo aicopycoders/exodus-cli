@@ -1217,36 +1217,7 @@ export function cutawayLayoutOf(frame, face, track = "broll") {
 export const CUTAWAY_FACE_MIN = 0.02;
 
 /** The fields of a layout other than full screen, which a picture laid full screen after all does not keep. */
-const LAYOUT_FIELDS = ["split", "corner", "faced", "captionBand", "captionsHow", "captionMoves", "captionKeeps", "captionsFit", "pictureFills"];
-
-/**
- * The most of her part of a `split` or `speakerTop` layout that may be the blurred margin (the canvas filled past the
- * frame's edge, first-cut.mjs splitLayout), as a share of her crop's width. Over it the shot is laid full screen
- * (cutawayFillShare, oneLayoutPerRun). Set on one real take and two lab films (Nov 24): the Guided One-take run's
- * close selfie, whose face reaches the frame's right edge, has 0.28 of her half filled there, a smeared copy of her own
- * face, and looks worse than the shot alone; Smooche's take 2 (0.31 filled, in two even bands clear of her face) and
- * FurLife's split (0.375, today's split crop widened to the canvas) look right, so only fill beside her face counts.
- */
-export const CUTAWAY_FILL_MAX = 0.15;
-
-/** How near the frame's edge her face box must reach for the fill on that side to count, as a share of the width. */
-export const CUTAWAY_FILL_EDGE = 0.02;
-
-/**
- * The share of her crop that is fill beside her face, for a `split` or `speakerTop` layout (splitLayout's `margin` and
- * `crop` [width, height, x, y] on the canvas the frame sits in, `margin` from its left; `face` the take's box on the
- * film the layout was made from): the crop's part past the frame's left or right edge, counted on a side only where her
- * face box reaches within CUTAWAY_FILL_EDGE of that edge, so the blurred margin there continues her own face; over the
- * crop's width. Fill on a side her face does not reach is the blurred background today's split shows, and does not
- * count. The crop is set once for the item, so the share is the same on every frame of the shot. A `corner` crop stays
- * inside the frame: none.
- */
-export function cutawayFillShare(layout, W = 1080, face = null) {
-  const [wc, , x0] = layout.crop;
-  const left = face && face.left > CUTAWAY_FILL_EDGE ? 0 : Math.max(0, layout.margin - x0);
-  const right = face && face.right < 1 - CUTAWAY_FILL_EDGE ? 0 : Math.max(0, x0 + wc - (layout.margin + W));
-  return Math.round(((left + right) / wc) * 10_000) / 10_000;
-}
+const LAYOUT_FIELDS = ["split", "corner", "faced", "captionBand", "captionsHow", "captionMoves", "captionKeeps", "captionsFit", "tooClose"];
 
 /**
  * The frame items laid, as the units the track timed them in, in film order: a shot alone, the insert, or a run of a
@@ -1277,17 +1248,18 @@ export function cutawayUnitsOf(laid) {
  *   jumps, inside it: a run keeps its layout (split, speakerTop or corner) only when every picture of it is laid in that
  *   one layout around the same take's face. Otherwise every picture of it not laid full screen is laid full screen too,
  *   with the reason `run` (its own captions not fitting stay `captions`).
- * - The same for a picture whose crop of her would be more fill than CUTAWAY_FILL_MAX (`pictureFills: false`), with the
- *   reason `fill` (it wins over its own `captions`); the rest of its run say `run`.
+ * - The same for a picture whose face does not fit her window inside the take's frame (`tooClose`: she is too close
+ *   to the camera, first-cut.mjs cutawayPersonWindow), with the reason `close` (it wins over its own `captions`); the
+ *   rest of its run say `run`.
  * Another run of the same burst, with the take between them, keeps its own layout.
  */
 export function oneLayoutPerRun(placed) {
   const why = new Map();
   for (const unit of cutawayUnitsOf(placed)) {
-    const oneLayout = unit.every((p) => p.layout !== "full" && p.layout === unit[0].layout && p.captionsFit !== false && p.pictureFills !== false && p.take === unit[0].take);
+    const oneLayout = unit.every((p) => p.layout !== "full" && p.layout === unit[0].layout && p.captionsFit !== false && p.tooClose !== true && p.take === unit[0].take);
     for (const p of unit) {
       if (p.layout === "full") continue;
-      if (p.pictureFills === false) why.set(p, "fill");
+      if (p.tooClose === true) why.set(p, "close");
       else if (p.captionsFit === false) why.set(p, "captions");
       else if (!oneLayout) why.set(p, "run");
     }
@@ -1301,11 +1273,12 @@ export function oneLayoutPerRun(placed) {
 }
 
 /**
- * `speakerTop` (plan 4.7): today's split (first-cut.mjs splitLayout, read with these numbers
- * in place of EXTRA_SHOTS') with four changes: the person's strip on top and the shot below it; the halves equal, the
- * seam at 0.50 of the height; the face larger in her half (its top `crop.faceTop`, its bottom at most `crop.faceBottom`
- * down the crop, the app's 0.12 and 0.46); the captions on the seam (`captionsAt`), in a band `captionsHalf` each side.
- * The crop's width and the blurred margin are the app's.
+ * `speakerTop` (plan 4.7): today's split's shares read with these numbers in place of EXTRA_SHOTS' (her window,
+ * first-cut.mjs cutawayPersonWindow) with four changes: the person's strip on top and the shot below it; the halves
+ * equal, the seam at 0.50 of the height; the face larger in her half (its top `crop.faceTop`, its bottom at most
+ * `crop.faceBottom` down the window, the app's 0.12 and 0.46); the captions on the seam (`captionsAt`), in a band
+ * `captionsHalf` each side. Her window is a part of the take inside its frame: no blurred margin (`marginShare` is
+ * today's split's, unused here).
  */
 export const CUTAWAY_SPEAKER_TOP = Object.freeze({
   splitShare: 0.5,

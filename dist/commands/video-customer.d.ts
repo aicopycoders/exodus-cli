@@ -92,6 +92,7 @@ export interface CustomerRun {
             state: string;
             line: string;
         };
+        cutawayLines?: FilmCutawayLines;
     } | null;
     canRetry: boolean;
     canCutAgain?: boolean;
@@ -259,6 +260,11 @@ export declare function cutawayUnreadLines(read: {
     readonly cutaways?: StopCutaways;
     readonly cutawaysUnread?: string;
 }): string[];
+export interface FilmCutawayLines {
+    readonly heading?: string;
+    readonly lines: readonly string[];
+}
+export declare function filmCutawayLines(film: FilmCutawayLines | undefined): string[];
 export declare function withItemsCode(line: string, id: string, list: StopCutaways | undefined): string;
 export declare function spendAskLines(run: {
     spendAsk?: {

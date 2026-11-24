@@ -1073,6 +1073,54 @@ price names. Set one only on the member's word. As `sheet` prints them:
   can drop one there (`exodus video drop-shot <runId> --shot <n>`); after the
   takes, each is drawn and filmed on the member's Kie key (a line of the
   price). A shot that cannot be made is left out and the video still finishes.
+- B-roll, inserts and overlays (in development, untested), only when `sheet`
+  lists their rows (then it lists no `extraShots`): `brollLevel` (`off`, `few`,
+  `normal`, `many`) with `brollLayout` (`full`, `split`, `speakerTop`,
+  `corner`), and `brollProblemWords` and `brollReliefWords`, the member's own
+  words for a problem shot and a life-after shot; `overlayLabels` (`on`,
+  `off`); `overlayCards` (`drawn`, `off`) with the member's own
+  `overlayOfferWords`, `overlayChartWords` and `overlayGuaranteeWords`;
+  `overlayMarks` (`off`, `drawn`) for emoji and an arrow. The insert and the
+  ingredient stickers are not available yet: the sheet keeps them off for
+  every product today, so never offer them. The b-roll and label rows start
+  from the reading of their ad; cards and emoji start `off`. When the price
+  prints a b-roll line, say with it why: the row's reason ("Their ad cuts to
+  other shots while the person talks"), that b-roll is in development,
+  untested, and that `brollLevel=off` turns it off. Labels, cards and emoji are drawn by code and cost nothing. At `many`
+  the plan may hold a burst: 3 or 4 quick b-roll pictures back to back, each
+  its own numbered item whose line says its burst and its number. A shot's
+  line names its layout and, for any layout but `full`, the reasons it may be
+  laid full screen instead; say them as the line does.
+  At the storyboard, `status` and `exodus video storyboard <runId>` print the
+  plan: one numbered line an item, the total the kept items add and what each
+  key pays, the items left out at planning, the code after `Code:`, and the
+  approve line with that code. Say them in your words, and tell the member
+  b-roll, inserts and overlays are in development, untested; the pictures are
+  made after the takes, so the yes is for the plan. A plan that cannot be read is
+  one sentence in its place: none of it is made, and the plain approve stands.
+  Drop only the item the member names, on their word: `exodus video drop-item
+  <runId> --item <n> --items <code>` drops it and, when the code typed is the
+  list's, prints the new code and the approve line that carries it. Approve
+  only on the member's yes, with the line the storyboard printed: `exodus
+  video approve <runId> --items <code>`. An approve with no code or an old one
+  is refused and buys nothing. On a Guided video only the member approves the
+  plan; the AI director leaves this stop to them. A One-shot video does not
+  stop here: its video step approves the whole plan itself before it makes
+  anything. An edit of the storyboard at this stop that changes the words of
+  a take a planned item sits in clears the plan: its items are left out, the
+  code changes, and an approve with the old code is refused.
+  After the cut, `status` prints the plan's lines under the end card's: each
+  item in the film, dropped by you, not made, left out while it was made or
+  when the video was cut, not in the film, or not ready yet (still being made
+  or checked when the video was cut), each with its reason; when no AI shot
+  was made at all (a take held for a check, or the step stopped), that reason
+  comes once, before the items, each AI shot says only "not made", and the
+  drawn items are in the film where their lines say so. A made
+  item that is not in the film says it was paid for. Then what each paid item
+  cost by key, and the sum, which leaves out the whoosh and the call that
+  planned them. Show them as printed. Never say an item is in the film unless
+  its line does; with the member's own uploaded cut, the lines say nothing of
+  it.
 - `cardPlace`: over the chest while the first line is said (`chest`), a
   headline at the top for the opening (`top`), or one for the whole video
   (`top-film`), for which every take is asked for room above the head; when

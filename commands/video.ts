@@ -53,6 +53,8 @@ import {
   customerStoryboardLines,
   cutawayLines,
   cutawayUnreadLines,
+  filmCutawayLines,
+  type FilmCutawayLines,
   openingLines,
   withItemsCode,
   type StopCutaways,
@@ -1308,6 +1310,12 @@ export interface VideoRun {
   cutaways?: StopCutaways;
   /** In place of `cutaways`: the one sentence of a plan that cannot be read. */
   cutawaysUnread?: string;
+  /**
+   * B-roll, inserts and overlays (convex videoRunView.ts cutawayLinesForCli): once the video is cut, the film record's
+   * lines of the run's plan, the same the member's view carries. Absent on a run that froze no plan, and from older
+   * servers.
+   */
+  cutawayLines?: FilmCutawayLines;
   castLock?: PullCastLock | null;
   /**
    * #1869: whose saved format rules this run followed (`runProvenance`). Read
@@ -6433,6 +6441,8 @@ export async function statusFlow(
           // COP-393: the end card, absent when the lock asks for none, as the fields above.
           ...(run.endCard ? { endCard: run.endCard } : {}),
           ...(run.endCardAfter ? { endCardAfter: run.endCardAfter } : {}),
+          // B-roll, inserts and overlays: absent when the server sent none, as the fields above.
+          ...(run.cutawayLines ? { cutawayLines: run.cutawayLines } : {}),
         }),
       ],
     };
@@ -6499,6 +6509,8 @@ export async function statusFlow(
     ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run), endCard: run.endCardAsked === true })] : []),
     // COP-393: what became of the end card the lock asked for, once the video is cut.
     ...(run.endCardAfter ? [run.endCardAfter.line] : []),
+    // B-roll, inserts and overlays: what became of each planned item, and what it cost.
+    ...filmCutawayLines(run.cutawayLines),
     ...planFailureLines(failedStoryboard, runId),
     ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
     ...(run.director ? ["", ...directorLines(run.director)] : []),

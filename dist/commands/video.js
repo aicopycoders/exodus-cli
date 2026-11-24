@@ -14,7 +14,7 @@ import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoic
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX, SET_OPTION_LEDGER_BASE, } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { faceBoxOf } from "../lib/faceBox.js";
-import { customerAnswer, customerRunPage, listedWords, endCardLines, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, cutawayLines, cutawayUnreadLines, openingLines, withItemsCode, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, listedWords, endCardLines, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, cutawayLines, cutawayUnreadLines, filmCutawayLines, openingLines, withItemsCode, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
@@ -4526,6 +4526,7 @@ export async function statusFlow(runId, json, deps) {
                     ...(run.cutCheck?.length ? { cutCheck: run.cutCheck } : {}),
                     ...(run.endCard ? { endCard: run.endCard } : {}),
                     ...(run.endCardAfter ? { endCardAfter: run.endCardAfter } : {}),
+                    ...(run.cutawayLines ? { cutawayLines: run.cutawayLines } : {}),
                 }),
             ],
         };
@@ -4576,6 +4577,7 @@ export async function statusFlow(runId, json, deps) {
         ...guidance,
         ...(stop.at === "running" && run.pauseAhead ? [pauseAheadLine(run.pauseAhead, { placeFirst: boardDrawsThePlaceFirst(run), endCard: run.endCardAsked === true })] : []),
         ...(run.endCardAfter ? [run.endCardAfter.line] : []),
+        ...filmCutawayLines(run.cutawayLines),
         ...planFailureLines(failedStoryboard, runId),
         ...said.map((w) => `Heads-up (${w.step}): ${w.warning}`),
         ...(run.director ? ["", ...directorLines(run.director)] : []),

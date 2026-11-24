@@ -116,6 +116,8 @@ export function endCardLayersOf(
 
 /** #4585: the seconds between the last heard word's end and the end card. */
 export const END_CARD_AFTER_VOICE_SEC: number;
+/** COP-382: the words over the last shot: where they come in before the last word ends, and their look. */
+export const ENDING: Readonly<{ linkWithinSec: number; lastSentenceSec: number; runOnSec: number; popSec: number; pop: readonly number[]; y: number; captionsClearSec: number }>;
 /** COP-353: the worker's silence probe numbers (media-probe.ts SILENCE_NOISE, SILENCE_MIN_DURATION_SEC), at which the cut reads the voice's silences. */
 export const GUARD_SILENCE: { noise: string; minSec: number };
 
@@ -893,6 +895,20 @@ export function captionsOffFace<S extends { s: number; e: number }>(
   W?: number,
   H?: number,
 ): { screens: (S & { band?: [number, number] })[]; notes: string[]; takes: { take: number; band: [number, number]; fewer: boolean }[] };
+/** pacePass: the speeds a manifest's paceSpeed may play the finished cut at. */
+export const PACE_SPEED_RANGE: { min: number; max: number };
+/** cutPace: the most a cut that runs past its kind's target is sped up. */
+export const SPEED_MAX: number;
+/**
+ * captionsByLine: the cut's words in its own time, each the script's word as written with its line, timed by the heard
+ * words that say it; with `everyWord`, a script word with nothing heard in its place is kept, `guessed`, between the
+ * words around it.
+ */
+export function lineWords(
+  timeline: { spine: readonly { startSec: number; lineIds?: readonly string[]; words?: readonly { w: string; s: number; e: number }[] }[] },
+  storyboard: { script?: readonly { lineId: string; text: string }[] } | null | undefined,
+  opts?: { everyWord?: boolean },
+): { text: string; start: number; end: number; line: string; guessed?: boolean }[];
 /** COP-384: a run's sheet's extra shots, Luke's numbers for when and how each is cut in. */
 export const EXTRA_SHOTS: {
   most: number; seconds: number; leadSec: number; notBeforeSec: number; gapSec: number; minSec: number; lastLineClearSec: number; endClearSec: number;

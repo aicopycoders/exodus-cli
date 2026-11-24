@@ -108,8 +108,17 @@ export interface CustomerRun {
   /**
    * COP-393: `endCard`, one line about the end card the run's lock asked for (in the film, the simple card and why, or
    * left out and why). Absent when the lock asked for none, and from older servers.
+   * B-roll, inserts and overlays: `cutawayLines`, the film record's lines of the run's plan (convex customerRunView.ts).
+   * Absent on a run that froze no plan, and from older servers.
    */
-  video: { url: string; wordsOff: boolean; speech?: SpeechSummary; notes?: string[]; endCard?: { state: string; line: string } } | null;
+  video: {
+    url: string;
+    wordsOff: boolean;
+    speech?: SpeechSummary;
+    notes?: string[];
+    endCard?: { state: string; line: string };
+    cutawayLines?: FilmCutawayLines;
+  } | null;
   canRetry: boolean;
   /** #3366: the app's cut failed with every clip done, so the video's page can cut the same clips again, free. */
   canCutAgain?: boolean;
@@ -452,6 +461,22 @@ export function cutawayLines(list: StopCutaways | undefined, id: string, opts: {
  */
 export function cutawayUnreadLines(read: { readonly cutaways?: StopCutaways; readonly cutawaysUnread?: string }): string[] {
   return !read.cutaways && read.cutawaysUnread ? [read.cutawaysUnread] : [];
+}
+
+/** The film record's lines of a run's b-roll, inserts and overlays, as the server sends them (video/lib CutawayFilmLines). */
+export interface FilmCutawayLines {
+  readonly heading?: string;
+  readonly lines: readonly string[];
+}
+
+/**
+ * B-roll, inserts and overlays after the film: the server's heading, then one line an item, each in the server's words.
+ * Read by both status prints (the beta tester's and the team's), right after the end card's line. Nothing when the
+ * server sent none, so every other run prints as it did.
+ */
+export function filmCutawayLines(film: FilmCutawayLines | undefined): string[] {
+  if (!film) return [];
+  return [...(film.heading ? [film.heading] : []), ...film.lines.filter((line) => line.trim() !== "").map((line) => `  ${line}`)];
 }
 
 /** An approve line with the plan's code, when the stop lists a plan: the server refuses an approve without it. */
@@ -1066,6 +1091,8 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
         ...(run.video?.notes ?? []),
         // COP-393: what became of the end card the lock asked for, after the cut's own notes.
         ...(run.video?.endCard ? [run.video.endCard.line] : []),
+        // B-roll, inserts and overlays: what became of each planned item, and what it cost.
+        ...filmCutawayLines(run.video?.cutawayLines),
         ...(run.video?.wordsOff
           ? ["Some words may not match your script exactly. Watch it through before you post it."]
           : []),

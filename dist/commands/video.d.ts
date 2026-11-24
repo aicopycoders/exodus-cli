@@ -3,7 +3,7 @@ import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
 import { type FaceBox } from "../lib/faceBox.js";
-import { type StopEndCard, type StopCutaways, type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
+import { type StopEndCard, type FilmCutawayLines, type StopCutaways, type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
 export type ScriptRunOptions = {
@@ -276,6 +276,7 @@ export interface VideoRun {
     };
     cutaways?: StopCutaways;
     cutawaysUnread?: string;
+    cutawayLines?: FilmCutawayLines;
     castLock?: PullCastLock | null;
     provenance?: RunProvenance;
     musicBed?: boolean;

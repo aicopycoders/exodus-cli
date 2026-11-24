@@ -130,6 +130,11 @@ export function cutawayLines(list, id, opts = {}) {
 export function cutawayUnreadLines(read) {
     return !read.cutaways && read.cutawaysUnread ? [read.cutawaysUnread] : [];
 }
+export function filmCutawayLines(film) {
+    if (!film)
+        return [];
+    return [...(film.heading ? [film.heading] : []), ...film.lines.filter((line) => line.trim() !== "").map((line) => `  ${line}`)];
+}
 export function withItemsCode(line, id, list) {
     return list ? line.replace(`exodus video approve ${id}`, `exodus video approve ${id} --items ${list.code}`) : line;
 }
@@ -492,6 +497,7 @@ export function customerStageLines(run, page) {
                 ...speechSummaryLines(run.video?.speech),
                 ...(run.video?.notes ?? []),
                 ...(run.video?.endCard ? [run.video.endCard.line] : []),
+                ...filmCutawayLines(run.video?.cutawayLines),
                 ...(run.video?.wordsOff
                     ? ["Some words may not match your script exactly. Watch it through before you post it."]
                     : []),

@@ -51,7 +51,11 @@ import {
   customerStageLines,
   customerStatusLines,
   customerStoryboardLines,
+  cutawayLines,
+  cutawayUnreadLines,
   openingLines,
+  withItemsCode,
+  type StopCutaways,
   customerVoicesLines,
   speechSummaryLines,
   type SpeechSummary,
@@ -180,6 +184,10 @@ The whole loop, in order:
        A One-take storyboard that lists openings: take 1 starts with
        opening n. Copy the line the storyboard prints, code and all.
        Without --opening, opening 1.
+     exodus video approve <runId> --items <code>
+       A storyboard that lists b-roll, inserts and overlays (in
+       development, untested): the code it prints under them, so the yes
+       is for the plan you read. Copy the line it prints.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
      exodus video broll <runId>
@@ -267,6 +275,12 @@ The whole loop, in order:
        yes (status shows it), as "Drop" on the video's page does. It orders
        and refunds nothing; the video ends on the last word.
 
+     exodus video drop-item <runId> --item <n> --items <code>
+       Drop item n of the b-roll, inserts and overlays a storyboard
+       planned (in development, untested), by its number and the code
+       exodus video storyboard prints, while it waits for the yes. It
+       orders and refunds nothing; the item is neither made nor laid.
+
      exodus video keep-going <runId>
      exodus video stop-here <runId>
        A video that reached the estimate it showed before the start stops
@@ -297,7 +311,7 @@ Usage:
   exodus video storyboard <runId> [--json]
   exodus video map <runId> [--place <place>] [--json]
   exodus video move <runId> --move <who>=<x>,<y> [--move ...] [--place <place>] [--note "..."] [--json]
-  exodus video approve <runId> [--opening <n> --openings <code>] [--approve-stale-cut] [--json]
+  exodus video approve <runId> [--opening <n> --openings <code>] [--approve-stale-cut] [--json] [--items <code>]
   exodus video approve <runId> --max-usd <n> [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
   exodus video broll <runId> [--json]
@@ -309,6 +323,7 @@ Usage:
   exodus video keep <runId> --scene <n> [--json]
   exodus video drop-shot <runId> --shot <n> [--json]
   exodus video drop-card <runId> [--json]
+  exodus video drop-item <runId> --item <n> --items <code> [--json]
   exodus video keep-going <runId> [--json]
   exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
@@ -413,6 +428,10 @@ Options:
   --openings <code>    With --opening: the code exodus video storyboard prints
                        with the openings, so the pick is of those openings. If
                        the storyboard was made again since, nothing is approved
+  --items <code>       The code exodus video storyboard prints under the b-roll,
+                       inserts and overlays it lists (approve, drop-item). If
+                       the plan changed since, nothing is approved or dropped
+  --item <n>           Which item to drop, by its number in that list (drop-item)
   --set <who>=<voice>  Give a character a voice (voices). The voice is a
                        catalog voice's name, like George, or an ElevenLabs
                        voice ID. Name the character by its ID or by the name
@@ -867,6 +886,8 @@ export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
 /** COP-393: drop the end card a One-take board drew, at its stop. */
 export const END_CARD_PATH = "/api/v2/video/storyboard/end-card";
+/** B-roll, inserts and overlays: drop one item of the plan at the storyboard stop, by its key and the plan's code. */
+export const CUTAWAY_PATH = "/api/v2/video/storyboard/cutaway";
 /** #4582: the member's answer to a video that reached its estimate. */
 export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
@@ -1283,6 +1304,10 @@ export interface VideoRun {
   endCardAsked?: true;
   endCard?: StopEndCard;
   endCardAfter?: { state: string; line: string };
+  /** B-roll, inserts and overlays: at the storyboard stop, the plan's list and its code (videoRunView.cutawaysForCli). */
+  cutaways?: StopCutaways;
+  /** In place of `cutaways`: the one sentence of a plan that cannot be read. */
+  cutawaysUnread?: string;
   castLock?: PullCastLock | null;
   /**
    * #1869: whose saved format rules this run followed (`runProvenance`). Read
@@ -1695,6 +1720,10 @@ export type RunStop =
       cutout?: { imageUrl: string | null; check?: { line: string } };
       /** COP-393: the end card the run's lock asked for, as the run read carries it (VideoRun.endCard). */
       endCard?: StopEndCard;
+      /** B-roll, inserts and overlays: the plan's list and its code (VideoRun.cutaways); `--json` carries it here. */
+      cutaways?: StopCutaways;
+      /** In place of `cutaways`: the one sentence of a plan that cannot be read. */
+      cutawaysUnread?: string;
     }
   // #2266: `missingScenes` is absent when every scene has a clip. `framesNodeId`
   // is the step whose stills a refused picture is redrawn on.
@@ -1944,6 +1973,9 @@ export function classifyRun(run: VideoRun): RunStop {
         ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true as const } : {}),
         ...(run.songCalls ? { songCalls: run.songCalls } : {}),
         ...(run.endCard ? { endCard: run.endCard } : {}),
+        // B-roll, inserts and overlays: the stop's list and its code (the run read's `cutaways`); absent with no plan.
+        ...(run.cutaways ? { cutaways: run.cutaways } : {}),
+        ...(!run.cutaways && run.cutawaysUnread ? { cutawaysUnread: run.cutawaysUnread } : {}),
       };
     }
     if (parkedAtFinalWatch(run)) {
@@ -2556,6 +2588,11 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     // COP-393: the end card the lock asked for, named among what waits only when one is shown, and its lines.
     const card = stop.endCard?.state === "ready" ? ["the end card"] : [];
     const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl);
+    // B-roll, inserts and overlays: with a plan, the stop's list, its code and the approve that carries it, as the
+    // storyboard prints it (cutawayLines), in place of the plain approve, which the server refuses without the code.
+    const plan = stop.cutaways;
+    // A plan that cannot be read: the server's one sentence, and the plain approve (the server asks no code then).
+    const planned = (approve: string) => (plan ? cutawayLines(plan, runId, { approve }) : [...cutawayUnreadLines(stop), approve]);
     const lines = [
       ...(stop.heldReason ? [stop.heldReason] : []),
       // COP-337: the CLI cannot tell whether a person was picked on the sheet (the run read does not say), so it names
@@ -2569,7 +2606,7 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
             ...stopPictureText(pictures),
             ...cardLines,
             `Read them:    exodus video storyboard ${runId}`,
-            `Approve them: exodus video approve ${runId}`,
+            ...planned(`Approve them: exodus video approve ${runId}`),
           ]
         : stop.noPictureBeforeApproval
         ? [
@@ -2578,13 +2615,13 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
               : "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
             ...cardLines,
             `Read them:    exodus video storyboard ${runId}`,
-            `Approve them: exodus video approve ${runId}`,
+            ...planned(`Approve them: exodus video approve ${runId}`),
           ]
         : [
             "Parked: the storyboard is waiting for your yes.",
             ...cardLines,
             `Read it:    exodus video storyboard ${runId}`,
-            ...(songCallsProblem(stop.songCalls) ? [] : [`Approve it: exodus video approve ${runId}`]),
+            ...(songCallsProblem(stop.songCalls) ? [] : planned(`Approve it: exodus video approve ${runId}`)),
           ]),
     ];
     if (stop.showAd) {
@@ -6816,6 +6853,10 @@ interface GateCards {
   openingPicked?: { n: number; name: string };
   /** COP-393: the end card at the stop (VideoRun.endCard). Absent when the lock asks for none, and from older servers. */
   endCard?: StopEndCard;
+  /** B-roll, inserts and overlays: the plan's list and its code while the board waits. Absent otherwise. */
+  cutaways?: StopCutaways;
+  /** In place of `cutaways`: the one sentence of a plan that cannot be read. */
+  cutawaysUnread?: string;
   /** The check before pictures, on a kind that runs it. `open`: a block still holds the storyboard. */
   logicFindings?: {
     findings: Array<{ id: string; severity: string; kind: string; scenes: number[]; what: string }>;
@@ -6871,7 +6912,10 @@ export async function storyboardFlow(
     for (const scene of loose) lines.push(...sceneCardLines(scene));
   }
   // COP-381: take 1's openings to pick from, numbered, while the storyboard waits; past it, the one picked.
-  lines.push(...openingLines(cards.openings, runId, cards.openingsDigest));
+  lines.push(...openingLines(cards.openings, runId, cards.openingsDigest, false, cards.cutaways?.code));
+  // B-roll, inserts and overlays: the plan's list and its code, which the approve below sends.
+  if (cards.cutaways) lines.push("", ...cutawayLines(cards.cutaways, runId));
+  else if (cards.cutawaysUnread) lines.push("", cards.cutawaysUnread);
   if (!cards.openings && cards.openingPicked) lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
   // COP-393: the end card the board drew, as status prints it.
   const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId));
@@ -6928,8 +6972,8 @@ export async function storyboardFlow(
     lines.push(
       "",
       logic?.open
-        ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
-        : `approve with: exodus video approve ${runId}`,
+        ? withItemsCode(`a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`, runId, cards.cutaways)
+        : withItemsCode(`approve with: exodus video approve ${runId}`, runId, cards.cutaways),
     );
   }
   if (showAd) {
@@ -7103,7 +7147,7 @@ export function approveOpeningsDigestOf(occurrences: readonly FlagOccurrence[]):
 
 export async function approveFlow(
   runId: string,
-  opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string; auditionDigest?: string; maxUsd?: number; opening?: number; openingsDigest?: string },
+  opts: { json: boolean; approveStaleCut: boolean; acceptFindings?: boolean; requestQuoteHash?: string; auditionDigest?: string; maxUsd?: number; opening?: number; openingsDigest?: string; itemsCode?: string },
   deps: VideoDeps,
 ): Promise<FlowResult> {
   let requestQuote: { quotes: PreparedQuoteView[] } | undefined;
@@ -7134,6 +7178,8 @@ export async function approveFlow(
     ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
     // COP-381: the opening take 1 starts with, sent only when the member typed --opening; the server checks it.
     ...(opts.opening !== undefined ? { opening: opts.opening, ...(opts.openingsDigest ? { openings: opts.openingsDigest } : {}) } : {}),
+    // B-roll, inserts and overlays: the plan's code, sent only when the member typed --items; the server checks it.
+    ...(opts.itemsCode !== undefined ? { items: opts.itemsCode } : {}),
   });
   // #1845: a refused approve (a chosen voice ElevenLabs is certain is gone) comes
   // back 400 with one plain sentence — printed as-is, exit 1, nothing approved.
@@ -7146,7 +7192,16 @@ export async function approveFlow(
     if (!opts.json && videoApiError(res).includes("accept the findings")) {
       // Landing review of #4981: with the opening picked, so going on films the one the member asked for.
       const opening = opts.opening !== undefined ? ` --opening ${opts.opening}${opts.openingsDigest ? ` --openings ${opts.openingsDigest}` : ""}` : "";
-      return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId}${opening} --accept-findings`] };
+      // B-roll, inserts and overlays: the plan's code the member typed goes with it, or the server refuses the retry.
+      const items = opts.itemsCode ? ` --items ${opts.itemsCode}` : "";
+      return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId}${opening}${items} --accept-findings`] };
+    }
+    // B-roll, inserts and overlays: an approve sent without the plan's code, or with one the plan no longer has: the
+    // storyboard prints the list and its code.
+    // The server's "Update Exodus" is for a CLI from before the plan: this one prints the plan, so it says what is missing.
+    if (!opts.json && asksForItemsCode(res)) {
+      const read = `Read the plan and its code: exodus video storyboard ${runId}`;
+      return { ...refusal, lines: [...(asksForItemsCode(res, "needs") ? [ITEMS_CODE_NEEDED] : refusal.lines), read] };
     }
     // An older server's "still being put together" names no scene; a list under it would contradict it.
     const waiting =
@@ -8443,6 +8498,107 @@ export async function dropShotFlow(runId: string, shot: number, json: boolean, d
   return {
     code: 0,
     lines: [`Extra shot ${shot} dropped. It won't be made, and nothing was ordered.`, `See the rest: exodus video status ${runId}`],
+  };
+}
+
+/**
+ * B-roll, inserts and overlays: the plan's code `--items <code>` sends, as `exodus video storyboard` printed it;
+ * undefined when none was typed, "bad" for anything else. The last one typed wins.
+ */
+export function itemsCodeOf(occurrences: readonly FlagOccurrence[]): string | undefined | "bad" {
+  const typed = occurrences.filter((occurrence) => occurrence.flag === "items");
+  if (typed.length === 0) return undefined;
+  const value = typed[typed.length - 1].value?.trim().toLowerCase();
+  return value !== undefined && /^[0-9a-f]{16}$/.test(value) ? value : "bad";
+}
+
+/**
+ * The server's refusals of an approve that carries no code, or a code the plan no longer has (convex/cutawayGate.ts
+ * CUTAWAY_APPROVE_NEEDS_CODE and CUTAWAY_PLAN_CHANGED, word for word; a test holds them equal). The CLI prints the
+ * server's sentence whole and adds only where the list and its code are printed.
+ */
+export const ITEMS_CODE_REFUSALS = [
+  "Update Exodus to see this storyboard's plan of b-roll, inserts and overlays (in development, untested), then approve.",
+  "This plan of b-roll, inserts and overlays (in development, untested) changed since you read it. Read it again, then drop or approve.",
+] as const;
+
+/**
+ * The route codes the server answers those two refusals with (convex/cutawayGate.ts CUTAWAY_NEEDS_CODE_ROUTE_CODE and
+ * CUTAWAY_PLAN_CHANGED_ROUTE_CODE; a test holds them equal).
+ */
+export const ITEMS_CODE_REFUSAL_CODES = ["CUTAWAY_APPROVE_NEEDS_CODE", "CUTAWAY_PLAN_CHANGED"] as const;
+
+/**
+ * Whether a refused approve or drop asks for the plan's code: by the route's code, or, from a server that answers both
+ * with BAD_REQUEST, by the server's sentence.
+ */
+function asksForItemsCode(res: ApiResponse<unknown>, only?: "needs"): boolean {
+  const pairs = ITEMS_CODE_REFUSAL_CODES.map((code, i) => [code, ITEMS_CODE_REFUSALS[i]] as const).slice(0, only === "needs" ? 1 : 2);
+  const code = (res.data as { error?: { code?: unknown } } | null)?.error?.code;
+  const message = videoApiError(res);
+  return pairs.some(([routeCode, sentence]) => code === routeCode || message.includes(sentence));
+}
+
+/** What this CLI says in place of the server's "Update Exodus" refusal, since it prints the plan and its code. */
+export const ITEMS_CODE_NEEDED =
+  "Nothing was approved: this storyboard lists b-roll, inserts and overlays (in development, untested), and the approve needs the code printed under them.";
+
+/** What an older server, with no drop route for the plan's items, leaves the member. */
+const DROP_ITEM_NOT_ON_THIS_SERVER = "This Exodus server cannot drop an item of the plan yet, so nothing changed. Drop it on the video's page:";
+
+/**
+ * B-roll, inserts and overlays (in development, untested): `exodus video drop-item <runId> --item <n> --items <code>`,
+ * the run page's "Drop" beside one item of the plan, while the video waits at its storyboard. It reads the storyboard
+ * for the key of item n (the number it printed), then sends that key with the code the member typed; the server
+ * refuses a code that is not the plan's now, so a plan made again since drops nothing. It orders and refunds nothing.
+ * It hands out the new code only when the code typed is the code of the list it just read, so the member never gets a
+ * code for a list they did not read; an item the list shows dropped already is said so, and nothing is posted.
+ */
+export async function dropItemFlow(runId: string, item: number, itemsCode: string, json: boolean, deps: VideoDeps): Promise<FlowResult> {
+  const read = await deps.get(`${STORYBOARD_PATH}?runId=${encodeURIComponent(runId)}`);
+  if (!read.ok) return errorResult(read, json);
+  const board = read.data as { cutaways?: StopCutaways; cutawaysUnread?: string } | null;
+  const list = board?.cutaways;
+  const refuse = (line: string): FlowResult => ({ code: 1, lines: json ? [JSON.stringify({ ok: false, error: line })] : [line] });
+  // A plan that cannot be read has nothing to drop: the server's own sentence says so.
+  if (!list && board?.cutawaysUnread) return refuse(board.cutawaysUnread);
+  if (!list) return refuse(`This video's storyboard lists no b-roll, inserts or overlays (in development, untested), so nothing changed. Read it: exodus video storyboard ${runId}`);
+  const row = list.rows.find((one) => one.n === item);
+  if (!row) return refuse(`This plan has no item ${item}, so nothing changed. Read it again: exodus video storyboard ${runId}`);
+  const readFirst = `Read the plan before you approve: exodus video storyboard ${runId}`;
+  // A code that is not the list's now (another drop came first, or the plan was made again) is said stale, never
+  // "dropped already" (Neon, landing review): the server refuses that code too.
+  if (row.dropped && itemsCode !== list.code) {
+    const line = ITEMS_CODE_REFUSALS[1];
+    const read = `Read the plan and its code: exodus video storyboard ${runId}`;
+    return { code: 1, lines: json ? [JSON.stringify({ ok: false, error: line })] : [line, read] };
+  }
+  if (row.dropped) {
+    const line = `Item ${item} is dropped already, so nothing changed. ${readFirst}`;
+    return { code: 0, lines: json ? [JSON.stringify({ ok: true, runId, item, dropped: "already" })] : [line] };
+  }
+  const res = await deps.post(CUTAWAY_PATH, { runId, key: row.key, items: itemsCode });
+  if (missingRouteLine(res, "exodus video drop-item")) {
+    const line = `${DROP_ITEM_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+    return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+  }
+  if (!res.ok) {
+    const refused = errorResult(res, json);
+    // A code the plan no longer has: the storyboard prints the list and its code today.
+    return !json && asksForItemsCode(res) ? { ...refused, lines: [...refused.lines, `Read the plan and its code: exodus video storyboard ${runId}`] } : refused;
+  }
+  const code = (res.data as { code?: unknown } | null)?.code;
+  // The new code is the member's only when the code they typed is the code of the list read just now.
+  const newCode = typeof code === "string" && itemsCode === list.code ? code : undefined;
+  if (json) return { code: 0, lines: [JSON.stringify({ ok: true, runId, item, ...(newCode ? { code: newCode } : {}) })] };
+  return {
+    code: 0,
+    lines: [
+      `Item ${item} dropped. It won't be made, and nothing was ordered.`,
+      ...(newCode
+        ? [`The plan's code is now ${newCode}.`, `Approve with: exodus video approve ${runId} --items ${newCode}`, `See the rest: exodus video storyboard ${runId}`]
+        : [readFirst]),
+    ],
   };
 }
 
@@ -10145,6 +10301,9 @@ const VALUE_FLAGS = new Set([
   // COP-381: `approve --opening <n> --openings <code>`, so neither value is read as the run's id.
   "opening",
   "openings",
+  // B-roll, inserts and overlays: `approve --items <code>` and `drop-item --item <n> --items <code>`.
+  "item",
+  "items",
 ]);
 
 /** Value flags of `video swipe find` alone. Every other verb reads them as on dev: a switch, its next word a positional. */
@@ -10304,6 +10463,7 @@ export async function run(
     "keep",
     "drop-shot",
     "drop-card",
+    "drop-item",
     "keep-going",
     "stop-here",
     "voices",
@@ -10429,6 +10589,9 @@ export async function run(
     if (typeof opening === "number" && openingsDigest === undefined) {
       usage("--opening goes with --openings <code>, as exodus video storyboard prints it with the openings.");
     }
+    // B-roll, inserts and overlays: the plan's code, as exodus video storyboard prints it under the plan.
+    const itemsCode = itemsCodeOf(occurrences);
+    if (itemsCode === "bad") usage("--items needs the code exodus video storyboard prints under the b-roll, inserts and overlays.");
     return printResult(
       await approveFlow(
         runId,
@@ -10440,6 +10603,7 @@ export async function run(
           ...(auditionDigest ? { auditionDigest } : {}),
           ...(maxUsd !== undefined ? { maxUsd: Number(maxUsd) } : {}),
           ...(typeof opening === "number" ? { opening, ...(typeof openingsDigest === "string" ? { openingsDigest } : {}) } : {}),
+          ...(typeof itemsCode === "string" ? { itemsCode } : {}),
         },
         defaultDeps,
       ),
@@ -10501,6 +10665,16 @@ export async function run(
 
   if (sub === "drop-card") {
     return printResult(await dropCardFlow(runId, json, defaultDeps));
+  }
+
+  if (sub === "drop-item") {
+    const itemRaw = flagString(flags, "item");
+    if (itemRaw === undefined) usage("video drop-item needs --item <n>, the number exodus video storyboard lists the item by.");
+    const item = Number(itemRaw);
+    if (!Number.isInteger(item) || item < 1) usage(`video drop-item --item must be a whole item number, not "${itemRaw}".`);
+    const itemsCode = itemsCodeOf(occurrences);
+    if (itemsCode === undefined || itemsCode === "bad") usage("video drop-item needs --items <code>, the code exodus video storyboard prints under the plan.");
+    return printResult(await dropItemFlow(runId, item, itemsCode as string, json, defaultDeps));
   }
 
   if (sub === "keep") {

@@ -111,6 +111,28 @@ export function extraShotLines(run, id) {
         `Drop one:     exodus video drop-shot ${id} --shot <n>`,
     ];
 }
+export function cutawayLines(list, id, opts = {}) {
+    if (!list)
+        return [];
+    const rowLine = (row) => `  ${row.n}. ${row.label}: ${row.line}${row.dropped ? " Dropped." : ""}`;
+    const kept = list.rows.some((row) => !row.dropped);
+    return [
+        list.title,
+        list.note,
+        ...(list.rows.length > 0 ? list.rows.map(rowLine) : ["  No item was planned."]),
+        ...(list.totalLine ? [`  ${list.totalLine}`] : []),
+        ...(list.left.length > 0 ? ["  Left out at planning:", ...list.left.map((one) => `    ${one.sentence}`)] : []),
+        `Code:         ${list.code}`,
+        ...(opts.approve ? [withItemsCode(opts.approve, id, list)] : []),
+        ...(kept ? [`Drop one:     exodus video drop-item ${id} --item <n> --items ${list.code}`] : []),
+    ];
+}
+export function cutawayUnreadLines(read) {
+    return !read.cutaways && read.cutawaysUnread ? [read.cutawaysUnread] : [];
+}
+export function withItemsCode(line, id, list) {
+    return list ? line.replace(`exodus video approve ${id}`, `exodus video approve ${id} --items ${list.code}`) : line;
+}
 function noPictureBeforeApproval(run) {
     return run.stage === "review" && run.planHold?.atBoard === true && run.planHold.beforePictures !== true;
 }
@@ -221,7 +243,7 @@ function storyboardPictureLines(pictures, page) {
     const lines = stopPictureText(stopPictureLines({ face: as(pictures.face), place: as(pictures.place), cutout: as(pictures.cutout) }, page));
     return lines.length > 0 ? ["", ...lines] : [];
 }
-export function openingLines(openings, id, digest, acceptFindings = false) {
+export function openingLines(openings, id, digest, acceptFindings = false, itemsCode) {
     if (!openings || openings.length < 2)
         return [];
     return [
@@ -233,8 +255,8 @@ export function openingLines(openings, id, digest, acceptFindings = false) {
             ...(opening.words ? [`     Words on screen: "${opening.words}"`] : []),
         ]),
         acceptFindings
-            ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""} --accept-findings`
-            : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
+            ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}${itemsCode ? ` --items ${itemsCode}` : ""} --accept-findings`
+            : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}${itemsCode ? ` --items ${itemsCode}` : ""}`,
     ];
 }
 function storyboardEndCardLines(board, page) {
@@ -415,8 +437,10 @@ export function customerStageLines(run, page) {
                     ...stopPictureText(stopPictureLines(run, page).filter((picture) => picture.drawn)),
                     ...noPhotoLines(run),
                     ...endCardLines(run.endCard, id, page),
+                    ...cutawayLines(run.cutaways, id),
+                    ...cutawayUnreadLines(run),
                     `Read it:      exodus video storyboard ${id}`,
-                    acceptFindingsLine(id),
+                    withItemsCode(acceptFindingsLine(id), id, run.cutaways),
                     `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
                 ];
             }
@@ -430,7 +454,7 @@ export function customerStageLines(run, page) {
                     ...endCardLines(run.endCard, id, page),
                     ...extraShotLines(run, id),
                     `Read them:    exodus video storyboard ${id}`,
-                    `Approve them: exodus video approve ${id}`,
+                    ...(run.cutaways ? cutawayLines(run.cutaways, id, { approve: `Approve them: exodus video approve ${id}` }) : [...cutawayUnreadLines(run), `Approve them: exodus video approve ${id}`]),
                 ];
             }
             if (noPictureBeforeApproval(run)) {
@@ -442,14 +466,16 @@ export function customerStageLines(run, page) {
                     ...endCardLines(run.endCard, id, page),
                     ...extraShotLines(run, id),
                     `Read them:    exodus video storyboard ${id}`,
-                    `Approve them: exodus video approve ${id}`,
+                    ...(run.cutaways ? cutawayLines(run.cutaways, id, { approve: `Approve them: exodus video approve ${id}` }) : [...cutawayUnreadLines(run), `Approve them: exodus video approve ${id}`]),
                 ];
             }
             return [
                 "Your storyboard is ready for your review.",
                 ...songNoticeLines(run.songNotice),
+                ...cutawayLines(run.cutaways, id),
+                ...cutawayUnreadLines(run),
                 `See it:      exodus video storyboard ${id}`,
-                ...(songCallsProblem(run.songCalls) ? [] : [`Approve it:  exodus video approve ${id}`]),
+                ...(songCallsProblem(run.songCalls) ? [] : [withItemsCode(`Approve it:  exodus video approve ${id}`, id, run.cutaways)]),
                 ...songCallStopLines(run.songCalls, page),
             ];
         case "ready":
@@ -517,7 +543,9 @@ export function customerStoryboardLines(board, page, songCalls) {
     }
     const scriptLines = (scenes) => scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]);
     const found = board.findings?.length ? ["", "What the app's check found:", ...findingLines(board.findings)] : [];
-    const approve = board.findings?.length ? acceptFindingsLine(id) : `approve with: exodus video approve ${id}`;
+    const approve = withItemsCode(board.findings?.length ? acceptFindingsLine(id) : `approve with: exodus video approve ${id}`, id, board.cutaways);
+    const unread = cutawayUnreadLines(board);
+    const cutaways = board.cutaways ? ["", ...cutawayLines(board.cutaways, id)] : unread.length > 0 ? ["", ...unread] : [];
     if (board.noPictureBeforeApproval) {
         return [
             "Script",
@@ -527,7 +555,8 @@ export function customerStoryboardLines(board, page, songCalls) {
             ...storyboardNoPhotoLines(board),
             ...storyboardEndCardLines(board, page),
             ...hardWordLines(board.hardWords),
-            ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0),
+            ...cutaways,
+            ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0, board.cutaways?.code),
             "",
             "No take gets a picture before you approve.",
             approve,
@@ -542,6 +571,7 @@ export function customerStoryboardLines(board, page, songCalls) {
             ...hardWordLines(board.hardWords),
             ...storyboardNoPhotoLines(board),
             ...storyboardEndCardLines(board, page),
+            ...cutaways,
             "",
             "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
             approve,
@@ -561,7 +591,8 @@ export function customerStoryboardLines(board, page, songCalls) {
                 ? `See the pictures each video call is filmed from: exodus video status ${id}`
                 : problem ?? "No picture a video call is filmed from is listed yet.",
             SONG_CALL_NO_ONE_SCENE,
-            `approve with: exodus video approve ${id}`,
+            ...cutaways,
+            withItemsCode(`approve with: exodus video approve ${id}`, id, board.cutaways),
         ];
     }
     const stillDrawing = board.scenes.some((s) => s.frameStatus === "pending" || s.frameStatus === "drawing");
@@ -570,11 +601,12 @@ export function customerStoryboardLines(board, page, songCalls) {
         ...board.scenes.flatMap(sceneLines),
         ...hardWordLines(board.hardWords),
         ...storyboardNoPhotoLines(board),
+        ...cutaways,
         "",
         ...notice,
         stillDrawing
             ? "Waiting for every scene to finish drawing before you can approve."
-            : `approve with: exodus video approve ${id}`,
+            : withItemsCode(`approve with: exodus video approve ${id}`, id, board.cutaways),
         `redo one scene's picture: exodus video retry-frame ${id} --scene <n>`,
         `pick voices: exodus video voices ${id}`,
         `See the pictures: ${page}`,

@@ -415,6 +415,8 @@ export interface CutPace {
       /** Its word's first frame. */
       word: number;
       guessed?: true; burst?: 1 | 2; whoosh: boolean; snapped?: { in?: number; out?: number };
+      /** A b-roll clip's speed when it is not the usual 1.5x (its clip is too short for its window at 1.5x). */
+      playSpeed?: number;
       place?: { crop: [number, number, number, number]; captions?: { how: "at" | "below" | "smaller"; band: [number, number] } };
     }>;
     left: CutawayCutLeft[];
@@ -826,8 +828,8 @@ export function songCaptionScreens(
   words: readonly { text: string; start: number; end: number; line?: string }[], look: SongCaptionLook,
 ): { text: string; s: number; e: number; line?: string; words: { text: string; start: number }[] }[];
 export function songLitScreens<T extends { text: string; s: number; e: number; line?: string; words?: { text: string; start: number }[] }>(
-  screens: readonly T[], look: SongCaptionLook | null,
-): { text: string; s: number; e: number; line?: string }[];
+  screens: readonly T[], look: SongCaptionLook | null, opts?: { pieces?: boolean },
+): { text: string; s: number; e: number; line?: string; band?: readonly number[] }[];
 
 /** COP-383: a take's face box, as parts of its frame (video/lib/faceBox.ts). */
 export type CutFaceBox = { top: number; bottom: number; left: number; right: number };

@@ -50,7 +50,8 @@ import { planText, READOUT_INSET_BOX } from "./first-cut-text.mjs";
 import { createTextRenderer, measuredTextAss, textFrameWindow } from "./first-cut-text-render.mjs";
 import { isZeroDurationSpeech, parseAuthoredBeat, templateActionWindows, templateJoinAnchors, templateSpeechEdit, TEMPLATE_SPEECH_LEAD_SEC, TEMPLATE_SPEECH_TAIL_SEC, DIALOGUE_BREATH_LEAD_SEC, DIALOGUE_BREATH_TAIL_SEC } from "./first-cut-speech.mjs";
 import { captionSync, placementHeard, retimeWords, soundPictureCheck } from "./first-cut-sync.mjs";
-import { CUTAWAY_INSERT_CLIP, cutawayFrame, cutawayLayoutOf, cutawayLinesOf, cutawaysOf, cutawaysRefusalOf, oneLayoutPerRun, scheduleFrameTrack } from "./first-cut-cutaways.mjs";
+import { CUTAWAY_BROLL_CLIP, CUTAWAY_INSERT_CLIP, cutawayFrame, cutawayLayoutOf, cutawayLinesOf, cutawaysOf, cutawaysRefusalOf, oneLayoutPerRun, scheduleFrameTrack } from "./first-cut-cutaways.mjs";
+import { cutawayCaptionPieces, cutawayScreenFrames, cutawayFillShare, CUTAWAY_FILL_MAX, CUTAWAY_CORNER, CUTAWAY_SPEAKER_TOP, cornerLayout, cutawayCaptionPlace, speakerTopFace } from "./first-cut-cutaways.mjs";
 
 const USAGE = "usage: first-cut.mjs <pulled-dir> [--out cut.mp4] [--skip 2,5] [--no-music] [--still-fill]";
 const WIDTH = 1080;
@@ -5919,7 +5920,8 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       const { first, frames } = shotFrames(s);
       return { first, frames, shown: `between(t,${sec((first - 0.5) / FPS)},${sec((first + frames - 0.5) / FPS)})` };
     };
-    const splits = xs.shots.filter((s) => s.layout === "split");
+    // A frame item's person: a split's strip below the shot, a speakerTop one's above it, a corner one's rectangle.
+    const splits = xs.shots.filter((s) => s.layout === "split" || s.layout === "speakerTop" || s.layout === "corner");
     /** The person's strip of each split shot, by the shot's place in `xs.shots`. */
     const strips = new Map();
     if (splits.length > 0) {
@@ -5929,7 +5931,7 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       // blur and the overlay work in the windows alone, and each shot's crop is cut from it.
       const anyWindow = splits.map((s) => windowOf(s).shown).join("+");
       // A shot showing the person smaller (splitCaptionPlace) widens the canvas; each crop keeps its place on the frame.
-      const margin = Math.max(...splits.map((s) => s.split.margin));
+      const margin = Math.max(0, ...splits.map((s) => s.split?.margin ?? 0));
       filters.push(`[${videoLabel}]split=2[xsbase][xsrc]`);
       filters.push(`[xsrc]split=2[xsa][xsb]`);
       filters.push(`[xsa]scale=${WIDTH + 2 * margin}:${HEIGHT},boxblur=${E.blur}:enable='${anyWindow}'[xsbg]`);
@@ -5938,15 +5940,17 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
       if (splits.length > 1) filters.push(`[xscv]split=${splits.length}${canvases.map((c) => `[${c}]`).join("")}`);
       splits.forEach((s, j) => {
         const k = xs.shots.indexOf(s);
-        const { stripH, crop: [wc, hc, x0, y0] } = s.split;
-        filters.push(`[${canvases[j]}]crop=${wc}:${hc}:${x0 + margin - s.split.margin}:${y0},scale=${WIDTH}:${stripH},setsar=1[xst${k}]`);
+        // A corner one's crop is of the film's own frame, so it sits `margin` into the canvas, and is scaled to its box.
+        const [wc, hc, x0, y0] = s.corner ? s.corner.crop : s.split.crop;
+        const size = s.corner ? `${s.corner.box[2]}:${s.corner.box[3]}` : `${WIDTH}:${s.split.stripH}`;
+        filters.push(`[${canvases[j]}]crop=${wc}:${hc}:${x0 + margin - (s.corner ? 0 : s.split.margin)}:${y0},scale=${size},setsar=1[xst${k}]`);
         strips.set(k, `xst${k}`);
       });
       videoLabel = "xsbase";
     }
     xs.shots.forEach((s, k) => {
       const { first, frames, shown } = windowOf(s);
-      const hh = s.layout === "split" ? s.split.splitH : HEIGHT;
+      const hh = s.layout === "split" || s.layout === "speakerTop" ? s.split.splitH : HEIGHT;
       // The clip runs one frame past its window: an overlay whose second stream has ended passes the film through on the
       // frame it ends at. Its first frame is put on the film's frame `first` exactly, in whole ticks of its clock.
       // An insert (CUTAWAY_INSERT_CLIP) plays from its own first frame at 1.0x, a hard cut with no zoom.
@@ -5958,16 +5962,23 @@ export function buildFfmpegArgs(timeline, { resolve, music, out, finish = null, 
             `setsar=1,trim=end_frame=${frames + 1},setpts=PTS-STARTPTS+round(${first}/(${FPS}*TB))[xs${k}]`,
         );
       }
-      const i = s.clip === "insert" ? null : addInput("-ss", sec(E.clipFromSec), "-t", sec((frames / FPS) * E.playSpeed + E.clipFromSec + 0.5), "-i", resolve(s.file));
+      // A b-roll clip too short for its window at `playSpeed` plays at its own, slower one (`s.playSpeed`,
+      // first-cut-cutaways.mjs cutawayClipSpeed): a number from its slowest to the usual, else the graph is not built.
+      const rate = s.playSpeed ?? E.playSpeed;
+      if (!(typeof rate === "number" && Number.isFinite(rate) && rate >= CUTAWAY_BROLL_CLIP.slowest && rate <= E.playSpeed)) {
+        throw new Error(`buildFfmpegArgs: shot ${k + 1}'s playSpeed is ${JSON.stringify(s.playSpeed)}, not a speed from ${CUTAWAY_BROLL_CLIP.slowest} to ${E.playSpeed}`);
+      }
+      const i = s.clip === "insert" ? null : addInput("-ss", sec(E.clipFromSec), "-t", sec((frames / FPS) * rate + E.clipFromSec + 0.5), "-i", resolve(s.file));
       if (i !== null) filters.push(
-        `[${i}:v]setpts=PTS/${E.playSpeed},fps=${FPS},scale=${2 * WIDTH}:${2 * hh}:force_original_aspect_ratio=increase,crop=${2 * WIDTH}:${2 * hh},` +
+        `[${i}:v]setpts=PTS/${rate},fps=${FPS},scale=${2 * WIDTH}:${2 * hh}:force_original_aspect_ratio=increase,crop=${2 * WIDTH}:${2 * hh},` +
           `zoompan=z='max(1,${E.zoomFrom}-${round2(E.zoomFrom - 1)}*on/${E.zoomFrames})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${WIDTH}x${hh}:fps=${FPS},` +
           `setsar=1,trim=end_frame=${frames + 1},setpts=PTS-STARTPTS+round(${first}/(${FPS}*TB))[xs${k}]`,
       );
-      filters.push(`[${videoLabel}][xs${k}]overlay=0:0:eof_action=pass:enable='${shown}'[xo${k}]`);
+      filters.push(`[${videoLabel}][xs${k}]overlay=0:${s.layout === "speakerTop" ? s.split.stripH : 0}:eof_action=pass:enable='${shown}'[xo${k}]`);
       videoLabel = `xo${k}`;
       if (!strips.has(k)) return;
-      filters.push(`[${videoLabel}][${strips.get(k)}]overlay=0:${s.split.splitH}:enable='${shown}'[xp${k}]`);
+      const place = s.corner ? `${s.corner.box[0]}:${s.corner.box[1]}` : s.layout === "speakerTop" ? "0:0" : `0:${s.split.splitH}`;
+      filters.push(`[${videoLabel}][${strips.get(k)}]overlay=${place}:enable='${shown}'[xp${k}]`);
       videoLabel = `xp${k}`;
     });
   }
@@ -6733,8 +6744,11 @@ function songWordTurns(words) {
  * COP-273 W2 cut, songCaptions "lit": each screen once for each of its words, that word in the look's lit colour, from
  * its start (the screen's start for the first) to the next word's start (the screen's end for the last), as Luke's
  * finish lights the word being sung. A look with no lit colour keeps its screens as they are.
+ * `pieces`: the screens are split at frame items' edges (first-cut-cutaways.mjs cutawayCaptionPieces), so each lit screen
+ * keeps its piece's band and its times unrounded: a piece's edge is a frame's exact time, and a millisecond rounded down
+ * would start the moved piece a frame before its item.
  */
-export function songLitScreens(screens, look) {
+export function songLitScreens(screens, look, { pieces = false } = {}) {
   if (!look?.lit) return screens;
   return screens.flatMap((c) => {
     const words = c.words ?? [];
@@ -6743,6 +6757,7 @@ export function songLitScreens(screens, look) {
       const e = Math.min(c.e, j + 1 < words.length ? words[j + 1].start : c.e);
       if (!(e > s)) return [];
       const text = words.map((x, k) => (k === j ? `{\\1c${look.lit}}${x.text}{\\1c&HFFFFFF&}` : x.text)).join(" ");
+      if (pieces) return [{ text, s, e, line: c.line, ...(Array.isArray(c.band) ? { band: c.band } : {}) }];
       return [{ text, s: roundMs(s), e: roundMs(e), line: c.line }];
     });
   });
@@ -9232,10 +9247,11 @@ export function placeExtraShots(shots, rows, { filmSec, stopAt = null, notBefore
  * right as parts of the frame) or null. Luke's crop is 0.72 of the width, as tall as the strip's shape; with a box it
  * grows (to the canvas at most) until the face fits between EXTRA_SHOTS.crop.faceTop and faceBottom of its height, and
  * sits with the face's top at faceTop; with none it centres (0.5, 0.40) as his does. `minHc`: a crop at least this tall
- * (the person shown smaller, splitCaptionPlace), with the canvas widened as far as it needs.
+ * (the person shown smaller, splitCaptionPlace), with the canvas widened as far as it needs. `numbers`: the split's
+ * shares, EXTRA_SHOTS' or a `speakerTop` item's (first-cut-cutaways.mjs CUTAWAY_SPEAKER_TOP).
  */
-export function splitLayout(face, W = WIDTH, H = HEIGHT, { minHc = 0 } = {}) {
-  const E = EXTRA_SHOTS;
+export function splitLayout(face, W = WIDTH, H = HEIGHT, { minHc = 0, numbers = EXTRA_SHOTS } = {}) {
+  const E = numbers;
   const splitH = Math.floor(Math.floor(H * E.splitShare) / 2) * 2;
   const stripH = H - splitH;
   let margin = Math.floor(Math.floor(W * E.crop.marginShare) / 2) * 2;
@@ -10676,6 +10692,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
   let fontsDir = null;
   // The caption screens and text cards burned in, which cutChecks reads.
   let burned = null;
+  // The caption screens as the burn draws them: whole, or split at a frame item's edges (cutawayCaptionPieces).
+  let burnPieces = (list) => list;
   let burnedCards = [];
   // A copied ad: its words in the record's boxes and its product photos from the product sheet.
   const copied = sourceAd && finish?.cards ? sourceAdEdit(storyboard, sourceAd, timeline.sourceGroups ?? []) : null;
@@ -10779,8 +10797,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       return null;
     }
   };
-  // The insert's length in whole frames, rounded down so it never counts a frame it does not hold; NaN when ffprobe
-  // fails or finds no length, which the track leaves out as a file it could not read (never a failed cut).
+  // A clip's length (the insert's, a b-roll shot's) in whole frames, rounded down so it never counts a frame it does
+  // not hold; NaN when ffprobe fails or finds no length, which the track leaves out as a file it could not read (never a
+  // failed cut).
   const clipFrames = (file) => {
     try {
       const { seconds } = probe(file);
@@ -10800,7 +10819,8 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       for (const item of cutawaysRead.items) leaveCutaway(item, cutawaysRefused);
     } else {
       // A paid item's file: in the folder (really: not a link out of it), a video ffmpeg can read where the cut starts
-      // reading it, and an insert's length in frames for its window. A drawn item's file is checked by the part that
+      // reading it, and its length in frames for its window (an insert's whole window; a b-roll clip's at the speed it
+      // plays, first-cut-cutaways.mjs CUTAWAY_BROLL_CLIP). A drawn item's file is checked by the part that
       // lays it (it is left out as `cut-drawn-later` here).
       for (const item of cutawaysRead.items) {
         if (item.track === "drawn") {
@@ -10811,7 +10831,7 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
         const fromSec = item.track === "insert" ? CUTAWAY_INSERT_CLIP.fromSec : EXTRA_SHOTS.clipFromSec;
         if (file === undefined) leaveCutaway(item, "cut-no-file");
         else if (file === null || !shotClipReadable(here(file), fromSec)) leaveCutaway(item, "cut-file-unreadable");
-        else cutawayItems.push(item.track === "insert" ? { ...item, file, fileFrames: clipFrames(file) } : { ...item, file });
+        else cutawayItems.push({ ...item, file, fileFrames: clipFrames(file) });
       }
     }
   }
@@ -10855,37 +10875,85 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       rows, ...(lines.length > 0 ? { lines } : {}), joins, notBefore, stopAt, filmFrames: filmFrames(pictureSec, speed),
     });
   };
-  // Each frame item in the layout cutawayLayoutOf chooses, around the face of the take on screen at its middle; a split
-  // one's captions as a split shot's, marked when they do not fit.
-  const layCutaways = (laid, shareOver = () => null) => {
+  // Each frame item in the layout cutawayLayoutOf chooses, around the face of the take on screen at its middle (a run of
+  // a burst keeps one layout: oneLayoutPerRun, after). A split one's captions as a split shot's; a speakerTop or corner
+  // one's as cutawayCaptionPlace says, given the caption screens (`caps`: the screens, the band they sit in when none is set, their drawn height at a place). Marked when
+  // they do not fit in her part of the layout. Each item says where each screen sits while it is on (`captionMoves`,
+  // with the item's frames), and the burn splits the screen there (cutawayCaptionPieces).
+  // Each caption screen with the frames the burn shows it on (editAss: from its first word's frame to its own end or the
+  // next screen's start).
+  const burnFrames = (list) => list.map((c, k) => ({
+    ...c,
+    ...cutawayScreenFrames(captionStartCs(c.s / speed), Math.min(Math.round(Math.max(0, c.e / speed) * 100), list[k + 1] ? captionStartCs(list[k + 1].s / speed) : Infinity)),
+  }));
+  // `headline`: the headline at the top, { from, to } in seconds of the finished film, or null. A speakerTop item it is
+  // over is laid full screen: her face sits in the top half, under the headline (landing review of #5199).
+  const layCutaways = (laid, shareOver = () => null, caps = null, headline = null) => {
     const faces = filmFaces(timeline, new Map(manifest.scenes.flatMap((scene) => (faceBoxOf(scene.faceBox) ? [[scene.sceneIndex, faceBoxOf(scene.faceBox)]] : []))));
+    const takeOf = (l) => takeAt(timeline, ((l.in + l.out) / 2 / FPS) * speed);
+    // The screens shown on a frame of an item. A screen is moved only for the item's own frames (plan 0.40:
+    // cutawayCaptionPieces splits it at the item's edges), so only her part of the layout counts here.
+    const screensOver = (shot) => burnFrames(caps.screens).flatMap((c) => (c.first < shot.out && c.last > shot.in ? [{ c, band: Array.isArray(c.band) ? c.band : caps.base }] : []));
+    const captionsOf = (shot, opts) => {
+      if (!caps) return {};
+      const over = screensOver(shot);
+      if (over.length === 0) return {};
+      const place = cutawayCaptionPlace(shot.layout, { ...opts, over, shareAt: (o, centre) => caps.shareAt(o.c, centre), clear: FACE_CLEAR_SHARE });
+      return {
+        captionMoves: place.moves.map((m) => ({ s: m.screen.c.s, e: m.screen.c.e, band: m.band, from: shot.in, to: shot.out })),
+        ...(place.keeps.length > 0 ? { captionKeeps: place.keeps.map((m) => ({ s: m.screen.c.s, e: m.screen.c.e, band: m.band })) } : {}),
+        captionsHow: place.how, ...(place.fits ? {} : { captionsFit: false }),
+      };
+    };
     const placed = laid.map((l) => {
       const start = l.in / FPS;
       const end = l.out / FPS;
-      const take = takeAt(timeline, ((start + end) / 2) * speed);
+      const take = takeOf(l);
       const face = faces.get(take) ?? null;
       const { layout, asked, why } = cutawayLayoutOf(l.frame, face, l.track);
       const shot = { ...l, start, end, layout, take, ...(asked ? { asked, askedWhy: why } : {}), clip: l.track === "insert" ? "insert" : "broll" };
-      if (layout !== "split") return shot;
+      if (layout === "speakerTop" && headline && start < headline.to && end > headline.from) return { ...shot, layout: "full", asked: "speakerTop", askedWhy: "headline" };
+      if (layout === "full") return shot;
+      if (layout === "corner") {
+        const corner = cornerLayout(face, WIDTH, HEIGHT);
+        return { ...shot, corner, faced: true, ...captionsOf(shot, { top: corner.box[1] / HEIGHT }) };
+      }
+      // Her crop's share that is fill past the frame's edge (the blurred margin): over CUTAWAY_FILL_MAX, full screen.
+      const fillOf = (split) => {
+        const fill = cutawayFillShare(split, WIDTH, face);
+        return { fill, ...(fill > CUTAWAY_FILL_MAX ? { pictureFills: false } : {}) };
+      };
+      if (layout === "speakerTop") {
+        const split = splitLayout(face, WIDTH, HEIGHT, { numbers: CUTAWAY_SPEAKER_TOP });
+        return { ...shot, split, faced: true, ...fillOf(split), ...captionsOf(shot, { face: speakerTopFace(face, split, HEIGHT) }) };
+      }
       const split = splitLayout(face);
       const share = shareOver(shot);
-      if (share === null) return { ...shot, split, faced: true };
+      if (share === null) return { ...shot, split, faced: true, ...fillOf(split) };
       const place = splitCaptionPlace({ face, split, share });
-      return { ...shot, split: place.split, faced: true, captionBand: place.band, captionsHow: place.how, ...(place.fits === false ? { captionsFit: false } : {}) };
+      // A split item's screens sit in its captions' band while it is on, as a split shot's (captionsOverSplits), and only then.
+      const band = place.band ?? [EXTRA_SHOTS.captionsAt - EXTRA_SHOTS.captionsHalf, EXTRA_SHOTS.captionsAt + EXTRA_SHOTS.captionsHalf];
+      const moves = caps ? screensOver(shot).map((o) => ({ s: o.c.s, e: o.c.e, band, from: shot.in, to: shot.out })) : [];
+      return {
+        ...shot, split: place.split, faced: true, captionBand: place.band, captionsHow: place.how, ...fillOf(place.split),
+        ...(moves.length > 0 ? { captionMoves: moves } : {}), ...(place.fits === false ? { captionsFit: false } : {}),
+      };
     });
     return placed;
   };
   // Placed and laid; a run of a burst keeps one layout, and an item whose captions do not fit its layout is laid full
   // screen instead (plan 0.12, oneLayoutPerRun). Then each item laid in another layout than it asked for says why.
-  const placeAndLayCutaways = (notBefore = 0, shareOver = undefined) => {
+  const placeAndLayCutaways = (notBefore = 0, shareOver = undefined, caps = null, headline = null) => {
     const { laid, left } = placeCutaways(notBefore);
     cutawaysLeft.push(...left);
-    const placed = oneLayoutPerRun(layCutaways(laid, shareOver));
+    const placed = oneLayoutPerRun(layCutaways(laid, shareOver, caps, headline));
     for (const p of placed.filter((x) => x.asked)) {
       const why = p.askedWhy === "insert" ? "an insert is always full screen"
         : p.askedWhy === "no-face" ? `take ${p.take}'s face was not found, so the person could not be framed around it`
           : p.askedWhy === "captions" ? "the captions did not fit beside it"
-            : p.askedWhy === "run" ? "another picture of its run of pictures is laid full screen, and a run keeps one layout"
+            : p.askedWhy === "fill" ? "her picture would not fill her part"
+            : p.askedWhy === "headline" ? "the headline at the top would sit over her face"
+              : p.askedWhy === "run" ? "another picture of its run of pictures is laid full screen, and a run keeps one layout"
               : `this cut does not lay ${p.asked} yet`;
       notes.push(`oneTakeCutaways: item ${p.n} (${p.template}) is laid full screen, not ${p.asked}: ${why}`);
     }
@@ -10984,12 +11052,26 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
       };
       // B-roll, inserts and overlays: the same, for their frame track.
       if (cutawayItems.length > 0) {
-        cutawaysPlaced = placeAndLayCutaways(drawn && finish.cardPlace === "top" ? drawn.out / speed : 0, finish.captions ? shareOver : undefined);
+        // The caption screens as drawn now, for a speakerTop or corner item's captions (cutawayCaptionPlace).
+        const caps = finish.captions ? {
+          screens,
+          base: songLook ? [songLook.y, songLook.y] : Array.isArray(cap?.place) && cap.place.length === 2 ? cap.place : CAPTION_BANDS.bottom,
+          shareAt: (c, centre) => captionBlockShare(c, cap, WIDTH, HEIGHT, capShare, Math.round(centre * HEIGHT)),
+        } : null;
+        cutawaysPlaced = placeAndLayCutaways(drawn && finish.cardPlace === "top" ? drawn.out / speed : 0, finish.captions ? shareOver : undefined, caps, drawn ? { from: drawn.in / speed, to: drawn.out / speed } : null);
         if (drawn && finish.cardPlace === "top-film" && cutawaysPlaced.length > 0) notes.push("oneTakeCutaways: the headline at the top for the whole video stays over the frame items");
         if (finish.captions && cutawaysPlaced.some((p) => p.layout === "split")) {
-          screens = captionsOverSplits(screens, cutawaysPlaced, speed);
-          burned = screens;
-          for (const p of cutawaysPlaced.filter((x) => x.captionsHow)) notes.push(splitCaptionsNote(p).replace(/^extraShots: (while )?shot /, (_, w) => `oneTakeCutaways: ${w ?? ""}item `));
+          for (const p of cutawaysPlaced.filter((x) => x.layout === "split" && x.captionsHow)) notes.push(splitCaptionsNote(p).replace(/^extraShots: (while )?shot /, (_, w) => `oneTakeCutaways: ${w ?? ""}item `));
+        }
+        // Each screen over a split, speakerTop or corner item sits in the place its layout gives it while the item is on,
+        // and in its own place on its other frames (cutawayCaptionPieces). The screens the checks read stay whole.
+        const windows = cutawaysPlaced.flatMap((p) => p.captionMoves ?? []);
+        if (windows.length > 0) {
+          burnPieces = (list) => cutawayCaptionPieces(burnFrames(list), windows, speed);
+          for (const p of cutawaysPlaced.filter((x) => x.captionMoves?.length && x.layout !== "split")) {
+            const at = p.captionMoves.map((m) => ((m.band[0] + m.band[1]) / 2).toFixed(2));
+            notes.push(`oneTakeCutaways: while item ${p.n} is on, ${p.captionMoves.length} caption screen${p.captionMoves.length === 1 ? " sits" : "s sit"} ${p.captionsHow === "seam" ? "on the seam" : "just above the speaker's rectangle"}, at ${[...new Set(at)].join(", ")} of the height`);
+          }
         }
       }
       if (shotsUsable.length > 0) {
@@ -11006,8 +11088,9 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
           ? "cardPlace: the card is a headline at the top for the whole video; every step closer keeps the frame's top edge"
           : `cardPlace: the card is a headline at the top, from the first frame to ${roundMs(drawn.out / speed)} s`);
       }
+      const toBurn = burnPieces(screens);
       writeFileSync(here(ass), editAss({
-        captions: songLook ? songLitScreens(screens, songLook) : finish.captionColours ? colourScreens(screens, storyboard) : screens,
+        captions: songLook ? songLitScreens(toBurn, songLook, { pieces: toBurn !== screens }) : finish.captionColours ? colourScreens(toBurn, storyboard) : toBurn,
         cap,
         ...(songLook ? { songLook } : finish.captionsByLine ? { capMaxShare: CAPTION_MAX_SHARE } : {}),
         cards: burnedCards,
@@ -11319,18 +11402,25 @@ export function firstCut({ dir, out: outOpt, skip = new Set(), music: musicOn = 
     }
     if (laid.length > 0) cutawayFrames = { shots: laid, ...(whoosh ? { whoosh } : {}) };
     for (const p of laid) {
-      notes.push(`oneTakeCutaways: item ${p.n} (${p.template}), its word at frame ${p.word}, frames ${p.in} to ${p.out} (${p.start.toFixed(2)} to ${p.end.toFixed(2)} s), ${p.layout === "split" ? `split screen, the person's crop around take ${p.take}'s face` : "full screen"}`);
+      notes.push(`oneTakeCutaways: item ${p.n} (${p.template}), its word at frame ${p.word}, frames ${p.in} to ${p.out} (${p.start.toFixed(2)} to ${p.end.toFixed(2)} s), ${{ split: `split screen, the person's crop around take ${p.take}'s face`, speakerTop: `split screen with the person on top, the crop around take ${p.take}'s face`, corner: `full screen with the person small in the lower ${CUTAWAY_CORNER.side} corner, the crop around take ${p.take}'s face` }[p.layout] ?? "full screen"}${p.playSpeed !== undefined ? `, its clip played at ${p.playSpeed}x, as it is too short to cover the window at ${EXTRA_SHOTS.playSpeed}x` : ""}`);
     }
     for (const l of cutawaysLeft) notes.push(`oneTakeCutaways: item ${l.n ?? "?"}${l.template ? ` (${l.template})` : ""} was left out: ${l.code}`);
+    // A screen moved for a speakerTop or corner item: when it shows on the finished film, and its band.
+    // Each screen moved, for the part of it shown while the item is on (its other part stays in its own place).
+    const movedOf = (p) => p.captionMoves.map((m) => ({ start: roundMs(Math.max(m.s / speed, m.from / FPS)), end: roundMs(Math.min(m.e / speed, m.to / FPS)), band: m.band }));
     cutawaysRecord = {
       version: cutawaysRead.version,
       planId: cutawaysRead.planId,
       ...(cutawaysRefused ? { refused: cutawaysRefused } : {}),
       items: laid.map((p) => ({
-        n: p.n, key: p.key, template: p.template, family: p.family, frame: p.layout, ...(p.asked ? { asked: p.asked } : {}),
+        n: p.n, key: p.key, template: p.template, family: p.family, frame: p.layout, ...(p.asked ? { asked: p.asked } : {}), ...(p.fill !== undefined ? { fill: p.fill } : {}),
         in: p.in, out: p.out, start: roundMs(p.start), end: roundMs(p.end), word: p.word,
         ...(p.guessed ? { guessed: true } : {}), ...(p.burst ? { burst: p.burst } : {}), whoosh: p.whoosh, ...(p.snapped ? { snapped: p.snapped } : {}),
-        ...(p.split ? { place: { crop: p.split.crop, ...(p.captionsHow ? { captions: { how: p.captionsHow, band: p.captionBand } } : {}) } } : {}),
+        ...(p.playSpeed !== undefined ? { playSpeed: p.playSpeed } : {}),
+        ...(p.layout === "split" ? { place: { crop: p.split.crop, ...(p.captionsHow ? { captions: { how: p.captionsHow, band: p.captionBand } } : {}) } } : {}),
+        // speakerTop: her strip on top, the seam where the shot begins; corner: her rectangle; each with its screens moved.
+        ...(p.layout === "speakerTop" ? { place: { crop: p.split.crop, seam: p.split.stripH, ...(p.captionMoves ? { captions: { how: p.captionsHow, moved: movedOf(p) } } : {}) } } : {}),
+        ...(p.layout === "corner" ? { place: { box: p.corner.box, crop: p.corner.crop, ...(p.captionMoves ? { captions: { how: p.captionsHow, moved: movedOf(p) } } : {}) } } : {}),
       })),
       left: [...cutawaysLeft].sort((a, b) => (a.n ?? 0) - (b.n ?? 0)),
       ...(whooshRecord ? { whoosh: whooshRecord } : {}),

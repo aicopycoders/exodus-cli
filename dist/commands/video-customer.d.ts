@@ -161,6 +161,8 @@ export interface CustomerRun {
         }>;
     };
     endCard?: StopEndCard;
+    cutaways?: StopCutaways;
+    cutawaysUnread?: string;
 }
 export type StopEndCard = {
     state: "ready";
@@ -224,6 +226,40 @@ export declare function noPhotoLines(run: {
 }): string[];
 export declare function listedWords(words: readonly string[]): string;
 export declare function extraShotLines(run: Pick<CustomerRun, "extraShots">, id: string): string[];
+export interface StopCutaways {
+    title: string;
+    note: string;
+    code: string;
+    rows: ReadonlyArray<{
+        n: number;
+        key: string;
+        label: string;
+        words: readonly string[];
+        lineId: string;
+        word: string;
+        maker: string;
+        layout?: string;
+        layoutLabel?: string;
+        layoutNote?: string;
+        arrow: boolean;
+        price: string;
+        dropped: boolean;
+        burst?: string;
+        line: string;
+    }>;
+    totalLine?: string | null;
+    left: ReadonlyArray<{
+        sentence: string;
+    }>;
+}
+export declare function cutawayLines(list: StopCutaways | undefined, id: string, opts?: {
+    readonly approve?: string;
+}): string[];
+export declare function cutawayUnreadLines(read: {
+    readonly cutaways?: StopCutaways;
+    readonly cutawaysUnread?: string;
+}): string[];
+export declare function withItemsCode(line: string, id: string, list: StopCutaways | undefined): string;
 export declare function spendAskLines(run: {
     spendAsk?: {
         sentence: string;
@@ -281,6 +317,8 @@ export interface CustomerStoryboard {
         line: string;
     };
     endCard?: StopEndCard;
+    cutaways?: StopCutaways;
+    cutawaysUnread?: string;
 }
 export interface StoryboardPicture {
     drawn: boolean;
@@ -291,7 +329,7 @@ export interface StoryboardOpening {
     seen: string;
     words: string | null;
 }
-export declare function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string, acceptFindings?: boolean): string[];
+export declare function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string, acceptFindings?: boolean, itemsCode?: string): string[];
 export interface CustomerPlanFinding {
     text: string;
     scenes: number[];

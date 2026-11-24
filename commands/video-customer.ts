@@ -189,6 +189,10 @@ export interface CustomerRun {
    * printed), or why none was drawn, or that it was dropped. Absent when the lock asks for no card, and from older servers.
    */
   endCard?: StopEndCard;
+  /** B-roll, inserts and overlays: at that stop, the plan's list and its code. Absent otherwise, and from older servers. */
+  cutaways?: StopCutaways;
+  /** In place of `cutaways`: the one sentence of a plan that cannot be read. */
+  cutawaysUnread?: string;
 }
 
 /**
@@ -381,6 +385,78 @@ export function extraShotLines(run: Pick<CustomerRun, "extraShots">, id: string)
     ...shots.map((shot) => `  ${shot.n}. ${shot.label}, on "${shot.word}", ${layout[shot.layout]}${shot.usd !== null ? `, $${shot.usd.toFixed(2)}` : ""}`),
     `Drop one:     exodus video drop-shot ${id} --shot <n>`,
   ];
+}
+
+/**
+ * B-roll, inserts and overlays (plan 4.5): the plan's list at the storyboard stop, as the server sends it
+ * (convex/lib/video/customerRunView.ts CustomerRunView.cutaways, built by video/lib/cutawayPlan.ts cutawayStopListOf).
+ * Plain strings, so a newer server's values never break this CLI; the heading and the sentences are the server's own.
+ */
+export interface StopCutaways {
+  /** The feature's short name, which says "in development, untested" once. */
+  title: string;
+  /** That the pictures are made after the takes, so the yes is for the plan. */
+  note: string;
+  code: string;
+  rows: ReadonlyArray<{
+    n: number;
+    key: string;
+    label: string;
+    words: readonly string[];
+    lineId: string;
+    word: string;
+    maker: string;
+    layout?: string;
+    /** The server's words for the layout; the CLI keeps none of its own. */
+    layoutLabel?: string;
+    layoutNote?: string;
+    arrow: boolean;
+    price: string;
+    dropped: boolean;
+    burst?: string;
+    /** The row's small line, one sentence the server builds from the parts above; printed as it is. */
+    line: string;
+  }>;
+  /** The kept items' total in one sentence, when the server sends it; printed as it is. */
+  totalLine?: string | null;
+  left: ReadonlyArray<{ sentence: string }>;
+}
+
+/**
+ * The plan's lines, the one print of the stop's list for `exodus video storyboard` and `exodus video status` (the
+ * member's and the team's): its title and note (the server's; the title says "in development, untested" once), one line
+ * an item by the number `drop-item --item` takes, its label and its small line as the server words them, the total
+ * sentence when the server sends it, the items left out at planning, then the code, the approve line with the code
+ * (`approve`, when the caller prints its approve here) and the drop line. The CLI's own words are only "Dropped." and
+ * the commands.
+ */
+export function cutawayLines(list: StopCutaways | undefined, id: string, opts: { readonly approve?: string } = {}): string[] {
+  if (!list) return [];
+  const rowLine = (row: StopCutaways["rows"][number]) => `  ${row.n}. ${row.label}: ${row.line}${row.dropped ? " Dropped." : ""}`;
+  const kept = list.rows.some((row) => !row.dropped);
+  return [
+    list.title,
+    list.note,
+    ...(list.rows.length > 0 ? list.rows.map(rowLine) : ["  No item was planned."]),
+    ...(list.totalLine ? [`  ${list.totalLine}`] : []),
+    ...(list.left.length > 0 ? ["  Left out at planning:", ...list.left.map((one) => `    ${one.sentence}`)] : []),
+    `Code:         ${list.code}`,
+    ...(opts.approve ? [withItemsCode(opts.approve, id, list)] : []),
+    ...(kept ? [`Drop one:     exodus video drop-item ${id} --item <n> --items ${list.code}`] : []),
+  ];
+}
+
+/**
+ * A plan that cannot be read: the server's one sentence, in place of the list (`cutawaysUnread`). The approve then needs
+ * no code, so the plain approve line stands.
+ */
+export function cutawayUnreadLines(read: { readonly cutaways?: StopCutaways; readonly cutawaysUnread?: string }): string[] {
+  return !read.cutaways && read.cutawaysUnread ? [read.cutawaysUnread] : [];
+}
+
+/** An approve line with the plan's code, when the stop lists a plan: the server refuses an approve without it. */
+export function withItemsCode(line: string, id: string, list: StopCutaways | undefined): string {
+  return list ? line.replace(`exodus video approve ${id}`, `exodus video approve ${id} --items ${list.code}`) : line;
 }
 
 /**
@@ -588,6 +664,10 @@ export interface CustomerStoryboard {
   productNoPhoto?: { name: string; line: string };
   /** COP-393: the end card the board drew, drawn or not (never its address). Absent otherwise, and from older servers. */
   endCard?: StopEndCard;
+  /** B-roll, inserts and overlays: the plan's list and its code. Absent otherwise, and from older servers. */
+  cutaways?: StopCutaways;
+  /** In place of `cutaways`: the one sentence of a plan that cannot be read. */
+  cutawaysUnread?: string;
 }
 
 /** COP-381: one opening a storyboard offers to pick from, in plain words, as the server sends it. */
@@ -619,7 +699,7 @@ export interface StoryboardOpening {
  * COP-380 landing: at a stop the check before filming holds (`acceptFindings`), the pick carries --accept-findings, as the
  * approve there must, or the server refuses it.
  */
-export function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string, acceptFindings = false): string[] {
+export function openingLines(openings: readonly StoryboardOpening[] | undefined, id: string, digest?: string, acceptFindings = false, itemsCode?: string): string[] {
   if (!openings || openings.length < 2) return [];
   return [
     "",
@@ -631,8 +711,8 @@ export function openingLines(openings: readonly StoryboardOpening[] | undefined,
     ]),
     // COP-380 landing: at a held stop the pick says what it accepts, as the approve line does (acceptFindingsLine).
     acceptFindings
-      ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""} --accept-findings`
-      : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}`,
+      ? `pick another opening, accepting what the check found:  exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}${itemsCode ? ` --items ${itemsCode}` : ""} --accept-findings`
+      : `pick another opening: exodus video approve ${id} --opening <n>${digest ? ` --openings ${digest}` : ""}${itemsCode ? ` --items ${itemsCode}` : ""}`,
   ];
 }
 
@@ -918,8 +998,12 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           ...noPhotoLines(run),
           // COP-393: the end card the board drew, and how to drop it.
           ...endCardLines(run.endCard, id, page),
+          // B-roll, inserts and overlays: the plan's list, whose code the approve below must carry (a Guided board held
+          // for a short take, COP-386).
+          ...cutawayLines(run.cutaways, id),
+          ...cutawayUnreadLines(run),
           `Read it:      exodus video storyboard ${id}`,
-          acceptFindingsLine(id),
+          withItemsCode(acceptFindingsLine(id), id, run.cutaways),
           `If the check is right, stop this video on its page and start a new one with your script changed: ${page}`,
         ];
       }
@@ -936,7 +1020,8 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           ...endCardLines(run.endCard, id, page),
           ...extraShotLines(run, id),
           `Read them:    exodus video storyboard ${id}`,
-          `Approve them: exodus video approve ${id}`,
+          // B-roll, inserts and overlays: with a plan, its list, its code and the approve that carries it (cutawayLines).
+          ...(run.cutaways ? cutawayLines(run.cutaways, id, { approve: `Approve them: exodus video approve ${id}` }) : [...cutawayUnreadLines(run), `Approve them: exodus video approve ${id}`]),
         ];
       }
       if (noPictureBeforeApproval(run)) {
@@ -948,15 +1033,19 @@ export function customerStageLines(run: CustomerRun, page: string): string[] {
           ...endCardLines(run.endCard, id, page),
           ...extraShotLines(run, id),
           `Read them:    exodus video storyboard ${id}`,
-          `Approve them: exodus video approve ${id}`,
+          // B-roll, inserts and overlays: with a plan, its list, its code and the approve that carries it (cutawayLines).
+          ...(run.cutaways ? cutawayLines(run.cutaways, id, { approve: `Approve them: exodus video approve ${id}` }) : [...cutawayUnreadLines(run), `Approve them: exodus video approve ${id}`]),
         ];
       }
       return [
         "Your storyboard is ready for your review.",
         // P7 stage 4 fix (M2): what the song step said of the kept take, read first.
         ...songNoticeLines(run.songNotice),
+        // B-roll, inserts and overlays: the list above the approve whose code it carries (Neon, landing review).
+        ...cutawayLines(run.cutaways, id),
+        ...cutawayUnreadLines(run),
         `See it:      exodus video storyboard ${id}`,
-        ...(songCallsProblem(run.songCalls) ? [] : [`Approve it:  exodus video approve ${id}`]),
+        ...(songCallsProblem(run.songCalls) ? [] : [withItemsCode(`Approve it:  exodus video approve ${id}`, id, run.cutaways)]),
         // P7 stage 4: a sung run filmed in calls: the pictures each call is filmed from (none on any other run).
         ...songCallStopLines(run.songCalls, page),
       ];
@@ -1038,7 +1127,10 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
     scenes.flatMap((scene) => [`  Scene ${scene.sceneIndex}`, `    ${scene.line ? `"${scene.line}"` : "No spoken line"}`]);
   // #4825: the check before pictures' findings, which the approve below accepts.
   const found = board.findings?.length ? ["", "What the app's check found:", ...findingLines(board.findings)] : [];
-  const approve = board.findings?.length ? acceptFindingsLine(id) : `approve with: exodus video approve ${id}`;
+  const approve = withItemsCode(board.findings?.length ? acceptFindingsLine(id) : `approve with: exodus video approve ${id}`, id, board.cutaways);
+  // B-roll, inserts and overlays: the plan's list, where the member approves, after a blank line.
+  const unread = cutawayUnreadLines(board);
+  const cutaways = board.cutaways ? ["", ...cutawayLines(board.cutaways, id)] : unread.length > 0 ? ["", ...unread] : [];
   // COP-337: a stop that draws no picture before its approval is the takes' script, with nothing to wait for.
   if (board.noPictureBeforeApproval) {
     return [
@@ -1052,8 +1144,9 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
       // COP-393: the end card the board drew, and how to drop it.
       ...storyboardEndCardLines(board, page),
       ...hardWordLines(board.hardWords),
+      ...cutaways,
       // COP-381: take 1's openings to pick from, numbered.
-      ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0),
+      ...openingLines(board.openings, id, board.openingsDigest, (board.findings?.length ?? 0) > 0, board.cutaways?.code),
       "",
       "No take gets a picture before you approve.",
       approve,
@@ -1069,6 +1162,7 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
       ...hardWordLines(board.hardWords),
       ...storyboardNoPhotoLines(board),
       ...storyboardEndCardLines(board, page),
+      ...cutaways,
       "",
       "No scene pictures are drawn before you approve. Any pictures of the people or the place were drawn already, inside the price you were shown.",
       approve,
@@ -1092,7 +1186,8 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
         ? `See the pictures each video call is filmed from: exodus video status ${id}`
         : problem ?? "No picture a video call is filmed from is listed yet.",
       SONG_CALL_NO_ONE_SCENE,
-      `approve with: exodus video approve ${id}`,
+      ...cutaways,
+      withItemsCode(`approve with: exodus video approve ${id}`, id, board.cutaways),
     ];
   }
   const stillDrawing = board.scenes.some((s) => s.frameStatus === "pending" || s.frameStatus === "drawing");
@@ -1101,11 +1196,12 @@ export function customerStoryboardLines(board: CustomerStoryboard, page: string,
     ...board.scenes.flatMap(sceneLines),
     ...hardWordLines(board.hardWords),
     ...storyboardNoPhotoLines(board),
+    ...cutaways,
     "",
     ...notice,
     stillDrawing
       ? "Waiting for every scene to finish drawing before you can approve."
-      : `approve with: exodus video approve ${id}`,
+      : withItemsCode(`approve with: exodus video approve ${id}`, id, board.cutaways),
     `redo one scene's picture: exodus video retry-frame ${id} --scene <n>`,
     `pick voices: exodus video voices ${id}`,
     `See the pictures: ${page}`,

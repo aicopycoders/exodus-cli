@@ -3,7 +3,7 @@ import { type ApiResponse } from "../lib/client.js";
 import type { FlagOccurrence } from "../lib/args.js";
 import { type RunProvenance, type WorkflowRun } from "./workflow.js";
 import { type FaceBox } from "../lib/faceBox.js";
-import { type StopEndCard, type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
+import { type StopEndCard, type StopCutaways, type SpeechSummary, type CustomerItem, type CustomerRun, SONG_CALL_NEW_VIDEO } from "./video-customer.js";
 declare const VOICE_MODES: readonly ["native", "voice-first"];
 type VoiceMode = (typeof VOICE_MODES)[number];
 export type ScriptRunOptions = {
@@ -32,6 +32,7 @@ export declare const FINAL_PATH = "/api/v2/video/final";
 export declare const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export declare const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
 export declare const END_CARD_PATH = "/api/v2/video/storyboard/end-card";
+export declare const CUTAWAY_PATH = "/api/v2/video/storyboard/cutaway";
 export declare const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export declare const VOICES_PATH = "/api/v2/video/voices";
 export declare const PICKS_PATH = "/api/v2/video/picks";
@@ -273,6 +274,8 @@ export interface VideoRun {
         state: string;
         line: string;
     };
+    cutaways?: StopCutaways;
+    cutawaysUnread?: string;
     castLock?: PullCastLock | null;
     provenance?: RunProvenance;
     musicBed?: boolean;
@@ -442,6 +445,8 @@ export type RunStop = {
         };
     };
     endCard?: StopEndCard;
+    cutaways?: StopCutaways;
+    cutawaysUnread?: string;
 } | {
     at: "final-watch";
     missingScenes?: MissingScene[];
@@ -789,6 +794,7 @@ export declare function approveFlow(runId: string, opts: {
     maxUsd?: number;
     opening?: number;
     openingsDigest?: string;
+    itemsCode?: string;
 }, deps: VideoDeps): Promise<FlowResult>;
 export interface PicksPicture {
     n: number;
@@ -1046,6 +1052,11 @@ export type RevoiceTarget = ClipRedoTarget | {
 };
 export declare function keepFlow(runId: string, sceneIndex: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function dropShotFlow(runId: string, shot: number, json: boolean, deps: VideoDeps): Promise<FlowResult>;
+export declare function itemsCodeOf(occurrences: readonly FlagOccurrence[]): string | undefined | "bad";
+export declare const ITEMS_CODE_REFUSALS: readonly ["Update Exodus to see this storyboard's plan of b-roll, inserts and overlays (in development, untested), then approve.", "This plan of b-roll, inserts and overlays (in development, untested) changed since you read it. Read it again, then drop or approve."];
+export declare const ITEMS_CODE_REFUSAL_CODES: readonly ["CUTAWAY_APPROVE_NEEDS_CODE", "CUTAWAY_PLAN_CHANGED"];
+export declare const ITEMS_CODE_NEEDED = "Nothing was approved: this storyboard lists b-roll, inserts and overlays (in development, untested), and the approve needs the code printed under them.";
+export declare function dropItemFlow(runId: string, item: number, itemsCode: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function dropCardFlow(runId: string, json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function spendAnswerFlow(runId: string, answer: "go" | "stop", json: boolean, deps: VideoDeps): Promise<FlowResult>;
 export declare function revoiceFlow(runId: string, target: RevoiceTarget, json: boolean, deps: VideoDeps): Promise<FlowResult>;

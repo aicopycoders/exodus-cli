@@ -2564,6 +2564,9 @@ exodus video drop-shot <runId> --shot <n>                 drop one planned extra
                                                           stop; orders nothing; only on the member's word
 exodus video drop-card <runId>                            drop the end card at the storyboard stop; orders
                                                           and refunds nothing; only on the member's word
+exodus video drop-item <runId> --item <n> --items <code>  drop one planned b-roll, insert or overlay at the
+                                                          storyboard stop (in development, untested);
+                                                          orders nothing; only on the member's word
 exodus video keep-going <runId>                           a video waiting at its estimate films on;
                                                           only after the member's own yes
 exodus video stop-here <runId>                            a video waiting at its estimate orders nothing

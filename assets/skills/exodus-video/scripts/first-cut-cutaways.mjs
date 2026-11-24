@@ -73,6 +73,7 @@ export const CUTAWAY_CUT_CODES = Object.freeze([
   "cut-no-file",
   "cut-file-unreadable",
   "cut-insert-short",
+  "cut-clip-short",
   // Its word (cutawayAnchorOf).
   "cut-line-not-heard",
   "cut-word-not-found",
@@ -237,6 +238,44 @@ export const CUTAWAY_TIMING = Object.freeze({
 /** The insert's clip (plan 4.7): from its first frame at 1.0x, with no zoom, its whole window. A b-roll clip is today's (EXTRA_SHOTS). */
 export const CUTAWAY_INSERT_CLIP = Object.freeze({ fromSec: 0, playSpeed: 1 });
 
+/**
+ * A b-roll clip (plan 4.7): read as today's extra shots are (first-cut.mjs EXTRA_SHOTS: from 0.3 s, at 1.5x; a test pins
+ * the two equal). A clip too short for its window at 1.5x plays slower, down to `slowest` and no slower, from the same
+ * start; still too short, its window ends where the clip does, or earlier clear of a picture cut (cutawayClipSpeed,
+ * cutawayClipMostFrames, clipFitOf). The take never shows through a picture.
+ */
+export const CUTAWAY_BROLL_CLIP = Object.freeze({ fromSec: 0.3, playSpeed: 1.5, slowest: 1 });
+
+/**
+ * The frames of a b-roll clip of `fileFrames` frames that ffmpeg reads from CUTAWAY_BROLL_CLIP.fromSec on: a seek to
+ * 0.3 s keeps the frames that start at it or after, so it skips ceil(0.3 x 24) = 8 frames, not 7.2.
+ */
+const clipReadFrames = (fileFrames) => fileFrames - Math.ceil(CUTAWAY_BROLL_CLIP.fromSec * CUTAWAY_FPS - 1e-9);
+
+/**
+ * The speed a b-roll clip of `fileFrames` frames plays at to cover a window of `frames` frames on the film, from
+ * CUTAWAY_BROLL_CLIP.fromSec: its usual 1.5x when that covers it, else the fastest speed in hundredths that does, 1.0x at
+ * the least; null when even 1.0x does not. A clip covers a window as the insert's file does (plan 4.7): it holds the
+ * window and one frame more, the frame the overlay ends on. Played at speed s, the frames it reads give floor(read / s)
+ * frames of film (measured with ffmpeg), so it covers `frames` when (frames + 1) x s is at most the frames it reads.
+ * Today's 4 s clips (97 frames, 89 read) cover a shot's longest window, 41 frames, at 1.5x, and a chain's longest
+ * picture, 59 frames, at 1.48x.
+ */
+export function cutawayClipSpeed(fileFrames, frames) {
+  const C = CUTAWAY_BROLL_CLIP;
+  const read = clipReadFrames(fileFrames);
+  if (!(Number.isFinite(read) && Number.isFinite(frames) && frames > 0)) return null;
+  if ((frames + 1) * C.playSpeed <= read) return C.playSpeed;
+  const speed = Math.floor((read / (frames + 1)) * 100) / 100;
+  return speed >= C.slowest ? speed : null;
+}
+
+/** The most frames of film a b-roll clip of `fileFrames` frames covers, at its slowest speed (and one frame more). */
+export function cutawayClipMostFrames(fileFrames) {
+  const most = Math.floor(clipReadFrames(fileFrames) / CUTAWAY_BROLL_CLIP.slowest) - 1;
+  return Number.isFinite(most) ? Math.max(0, most) : 0;
+}
+
 /** A row with a line and both its times, as the track reads one: a row without them times nothing. */
 const isTimedRow = (r) => isObject(r) && typeof r.lineId === "string" && Number.isFinite(r.start) && Number.isFinite(r.end);
 /** A line with both its frames. */
@@ -267,7 +306,7 @@ export function cutawayLinesOf(rows) {
  * Where each frame item of the key goes on the finished film (plan 4.7 and 0.2), in whole frames: the insert first, then
  * every b-roll shot in spoken order, each window checked against those already laid.
  * - `items`: as cutawaysOf reads them; a drawn item is left out (`cut-drawn-later`), as the drawn track is a later part
- *   of the cut; the insert carries `fileFrames`, its file's length in frames, when it was probed;
+ *   of the cut; the insert and a b-roll item carry `fileFrames`, their file's length in frames, when it was probed;
  * - `rows`: the film's words (seconds of the finished film), each with its `lineId`; `lines`: the film's lines in
  *   spoken order (cutawayLinesOf, with any line no word was heard on placed by the caller);
  * - `joins`: the film's picture cuts, `notBefore`: where an opening headline ends, `stopAt`: where an end card or words
@@ -317,7 +356,7 @@ function placeTrack(items, { rows, lines, joins = [], notBefore = 0, stopAt = nu
   const T = CUTAWAY_TIMING;
   const laid = [];
   const left = [];
-  const leave = (item, code) => left.push({ n: item.n, key: item.key, template: item.template, code });
+  const leave = (item, code, extra = {}) => left.push({ n: item.n, key: item.key, template: item.template, code, ...extra });
   const rowList = Array.isArray(rows) ? rows : [];
   const lineList = (Array.isArray(lines) ? lines.filter(isTimedLine) : cutawayLinesOf(rowList)).sort(bySpokenOrder);
   const cuts = [...new Set((Array.isArray(joins) ? joins : []).filter(Number.isFinite).map(cutawayFrame))].sort((a, b) => a - b);
@@ -391,11 +430,20 @@ function placeTrack(items, { rows, lines, joins = [], notBefore = 0, stopAt = nu
     if (kept) laid.push(laidOf(pic, kept, true));
     else leave(pic.item, fails(windows.at(-1), ctx));
   }
+  // A b-roll clip's length in frames, when probed: a value that is not a number of frames is a file the cut could not
+  // read, as the insert's.
+  const shots = anchored.filter((p) => {
+    if (p.item.track !== "broll") return false;
+    const { fileFrames } = p.item;
+    if (fileFrames === undefined || (Number.isFinite(fileFrames) && fileFrames >= 0)) return true;
+    leave(p.item, "cut-file-unreadable");
+    return false;
+  });
   // A burst whose pictures stand apart is timed as runs, each its own unit, in spoken order with the rest.
-  const queue = unitsOf(anchored.filter((p) => p.item.track === "broll"));
+  const queue = unitsOf(shots);
   while (queue.length > 0) {
     const { pictures, left: out, rests } = timeUnit(queue.shift(), ctx);
-    for (const { pic, code } of out) leave(pic.item, code);
+    for (const { pic, code, clip } of out) leave(pic.item, code, clip);
     laid.push(...pictures);
     if (rests.length > 0) queue.push(...rests);
     queue.sort((x, y) => x[0].word - y[0].word || x[0].index - y[0].index);
@@ -530,6 +578,9 @@ const spanOf = (w) => ({ in: w[0].in, out: w.at(-1).out, rawIn: w[0].snapped?.in
  * A burst's pictures run back to back: where one would not run on to the next (its words more than `burstChainFrames`
  * apart, plan 0.2), the pictures from the next on are handed back (`rests`) as a unit of their own, timed after this
  * one is laid. So each run of pictures is a unit with its own edges, whoosh and gap, and a picture alone is a shot.
+ * Each picture's clip is held to its window (clipFitOf), and the rules judge the windows as the clips play them: a
+ * window its clip cannot cover breaks the run after that picture, or leaves the picture out (`cut-clip-short`), and the
+ * rest is timed again. A run is laid only once laidRunFails passes it.
  */
 function timeUnit(unit, ctx) {
   const T = CUTAWAY_TIMING;
@@ -543,9 +594,38 @@ function timeUnit(unit, ctx) {
     const failsIn = (w, c) => (w.some((p) => p.out - p.in < least) ? "cut-too-short" : windowFails(spanOf(w), least, c));
     const windows = timePictures(kept, ctx);
     const tries = [ctx, ...unsnappedTries(windows[0], windows.at(-1), kept[0].item.key, kept.at(-1).item.key, ctx)];
+    let clipShort = null;
+    // The most snapped timing whose windows held their rules as timed but not once held to their clips (laidRunFails).
+    let unlaid = null;
     for (const c of tries) {
       const w = c === ctx ? windows : timePictures(kept, c);
-      if (!failsIn(w, c)) return { pictures: kept.map((pic, k) => laidOf(pic, w[k], k === 0)), left, rests };
+      // The windows as they play, each held to its clip, are the ones the rules judge: a window its clip shortened or
+      // slowed is a window like any other. So a shot whose full window would run onto the end card, but whose clip ends it
+      // before, is laid where it plays. Every run is laid only through laidRunFails, whatever branch timed it.
+      const fit = clipFitOf(kept, w, least, c);
+      if (fit.windows) {
+        const fails = laidRunFails(kept, w, fit.windows, least, c);
+        if (!fails) return { pictures: kept.map((pic, k) => laidOf(pic, fit.windows[k], k === 0)), left, rests };
+        if (!failsIn(w, c)) unlaid ??= fails;
+        continue;
+      }
+      // A run broken after a picture checks both its sides whole itself (clipFitOf), so a chain whose full windows fail
+      // (its last picture's onto the end card, say) may still break there. Else the least snapped timing whose rules held
+      // decides, and its window is the one the left-out entry gives.
+      if (failsIn(w, c)) {
+        if (fit.split) clipShort ??= fit;
+        continue;
+      }
+      clipShort = fit;
+    }
+    if (clipShort) {
+      if (clipShort.split) rests.push(kept.splice(clipShort.at + 1));
+      else left.push({ pic: kept.splice(clipShort.at, 1)[0], code: "cut-clip-short", clip: clipShort.clip });
+      continue;
+    }
+    if (unlaid) {
+      left.push({ pic: kept.splice(unlaid.at, 1)[0], code: unlaid.code, ...(unlaid.clip ? { clip: unlaid.clip } : {}) });
+      continue;
     }
     const bare = tries.at(-1);
     const plain = timePictures(kept, bare);
@@ -563,6 +643,168 @@ function timeUnit(unit, ctx) {
   return { pictures: [], left, rests };
 }
 
+/**
+ * Each picture's window held to its clip (CUTAWAY_BROLL_CLIP; one whose clip was not probed, or a window of no frames,
+ * keeps its window), before laidRunFails judges the run as it plays:
+ * 1. the clip covers its window at 1.5x: as timed;
+ * 2. else it plays slower, at cutawayClipSpeed, 1.0x at the least;
+ * 3. else the last picture of its run, or a shot alone, ends where its clip does (at 1.0x, its out not snapped), when
+ *    that leaves it its floor (`least`), and never 1 to `snapFrames` frames before a picture cut (clearOfCuts: it ends
+ *    earlier still, with that many frames of the take and one more before the cut). A picture in a chain cannot end
+ *    early: the next comes in on its own word, and the take would show between them. The run is broken after it instead
+ *    (as for pictures more than `burstChainFrames` apart, each side a run of its own), when both sides hold every rule
+ *    whole: the side before it, this picture last and held to its clip, and the side after it, against what is laid and
+ *    the side before it;
+ * 4. else it is left out, `cut-clip-short`, with the clip's frames and the window's.
+ * Returns the windows, each with its `playSpeed` when that is not 1.5x, or the first picture whose clip does not cover
+ * it (`at`), with `split` when the run breaks after it.
+ */
+function clipFitOf(kept, w, least, ctx) {
+  const T = CUTAWAY_TIMING;
+  const C = CUTAWAY_BROLL_CLIP;
+  const fitted = [];
+  for (const [k, pic] of kept.entries()) {
+    const { fileFrames } = pic.item;
+    const frames = w[k].out - w[k].in;
+    // A window of no frames is the rules' to leave out (cut-too-short): it is never lengthened to its clip.
+    if (fileFrames === undefined || !(frames > 0)) {
+      fitted.push(w[k]);
+      continue;
+    }
+    const speed = cutawayClipSpeed(fileFrames, frames);
+    if (speed !== null) {
+      // The last of a run whose clip covers its window but could not reach a picture cut 1 to `snapFrames` frames after
+      // it ends clear of that cut, as one its clip cuts short does, when that keeps its floor (else laidRunFails leaves
+      // it out). A sliver its clip could close is the snap's to take or leave.
+      const cut = k === kept.length - 1 ? sliverCutAfter(w[k].out, ctx) : undefined;
+      if (cut !== undefined && cutawayClipSpeed(fileFrames, cut - w[k].in) === null) {
+        const out = clearOfCuts(w[k].out, ctx);
+        const cleared = out - w[k].in >= least ? cutawayClipSpeed(fileFrames, out - w[k].in) : null;
+        if (cleared !== null) {
+          const inOnly = w[k].snapped?.in !== undefined ? { snapped: { in: w[k].snapped.in } } : {};
+          fitted.push({ in: w[k].in, out, ...inOnly, ...(cleared === C.playSpeed ? {} : { playSpeed: cleared }) });
+          continue;
+        }
+      }
+      fitted.push(speed === C.playSpeed ? w[k] : { ...w[k], playSpeed: speed });
+      continue;
+    }
+    const most = cutawayClipMostFrames(fileFrames);
+    const clip = { clipFrames: fileFrames, windowFrames: frames };
+    if (k === kept.length - 1) {
+      // A snap only lengthens an out, so the window with its out where it was before the snap holds every rule the
+      // snapped one does (its raw edges are the ones the gap is read from). When the clip covers that, the picture keeps
+      // it; it is never made longer than it: past its line, past `brollMaxFrames`, or nearer the next item.
+      // Its out, wherever the clip ends it, keeps clear of a picture cut it could not snap onto (clearOfCuts).
+      const inOnly = w[k].snapped?.in !== undefined ? { snapped: { in: w[k].snapped.in } } : {};
+      const rawOut = w[k].snapped?.out;
+      if (rawOut !== undefined && w[k].in + most >= rawOut) {
+        const out = clearOfCuts(rawOut, ctx);
+        const bare = cutawayClipSpeed(fileFrames, out - w[k].in);
+        if (bare === null || out - w[k].in < least) return { at: k, clip };
+        fitted.push({ in: w[k].in, out, ...inOnly, ...(bare === C.playSpeed ? {} : { playSpeed: bare }) });
+        continue;
+      }
+      const out = clearOfCuts(w[k].in + most, ctx);
+      if (out - w[k].in < least) return { at: k, clip };
+      const speed = cutawayClipSpeed(fileFrames, out - w[k].in) ?? C.slowest;
+      fitted.push({ in: w[k].in, out, ...inOnly, ...(speed === C.playSpeed ? {} : { playSpeed: speed }) });
+      continue;
+    }
+    // A chain broken after this picture: both sides are runs of their own, and each is checked whole before the break is
+    // taken. The side before it, this picture last, with its clip held to its window as above, keeps every rule; the
+    // side after it, timed as a run with its own first in, keeps its floors and every rule against what is laid and the
+    // side before it (the gap between them among them). Its clips are held when it is timed, by these same rules.
+    const before = kept.slice(0, k + 1);
+    const beforeLeast = before.length === 1 ? T.brollMinFrames : T.burstMinFrames;
+    const beforeTimed = timePictures(before, ctx);
+    const beforeFit = clipFitOf(before, beforeTimed, beforeLeast, ctx);
+    const beforeHolds = Boolean(beforeFit.windows) && !laidRunFails(before, beforeTimed, beforeFit.windows, beforeLeast, ctx);
+    let afterHolds = false;
+    if (beforeHolds) {
+      // The side before as it would be laid, with where each of its edges was before a snap (the gap is read from them).
+      const first = beforeFit.windows[0];
+      const last = beforeFit.windows.at(-1);
+      const moved = { ...(first.snapped?.in !== undefined ? { in: first.snapped.in } : {}), ...(last.snapped?.out !== undefined ? { out: last.snapped.out } : {}) };
+      const laidBefore = { in: first.in, out: last.out, ...(Object.keys(moved).length > 0 ? { snapped: moved } : {}) };
+      const afterCtx = { ...ctx, placed: [...ctx.placed, laidBefore] };
+      // Its clips held as they will be when it is timed: a picture of it its own clip leaves out is out of it either way,
+      // so the rest is checked without it (none left, the break holds); one its clip breaks again is checked as timed.
+      const after = kept.slice(k + 1);
+      for (;;) {
+        if (after.length === 0) {
+          afterHolds = true;
+          break;
+        }
+        const afterLeast = after.length === 1 ? T.brollMinFrames : T.burstMinFrames;
+        const afterTimed = timePictures(after, afterCtx);
+        const afterFit = clipFitOf(after, afterTimed, afterLeast, afterCtx);
+        if (!afterFit.windows && !afterFit.split) {
+          after.splice(afterFit.at, 1);
+          continue;
+        }
+        afterHolds = !laidRunFails(after, afterTimed, afterFit.windows ?? afterTimed, afterLeast, afterCtx);
+        break;
+      }
+    }
+    return { at: k, clip, ...(afterHolds ? { split: true } : {}) };
+  }
+  return { windows: fitted };
+}
+
+/**
+ * The picture cut of the film (a take or pause join, the in of an item laid, where the end card or the words over the
+ * last shot begin) that falls 1 to `snapFrames` frames after `out`, or undefined: the take would show for that sliver
+ * before the cut.
+ */
+function sliverCutAfter(out, ctx) {
+  const cuts = [...ctx.cuts, ...ctx.placed.map((p) => p.in), ...(Number.isFinite(ctx.stop) ? [ctx.stop] : [])];
+  return cuts.find((c) => c - out >= 1 && c - out <= CUTAWAY_TIMING.snapFrames);
+}
+
+/**
+ * The out of a picture its clip ends early, moved earlier while a picture cut falls 1 to `snapFrames` frames after it
+ * (sliverCutAfter): a snap cannot close that sliver of the take, since the clip has no more frames, so `snapFrames` + 1
+ * frames of the take or more show before the cut instead.
+ */
+function clearOfCuts(out, ctx) {
+  let at = out;
+  for (let near = sliverCutAfter(at, ctx); near !== undefined; near = sliverCutAfter(at, ctx)) at = near - CUTAWAY_TIMING.snapFrames - 1;
+  return at;
+}
+
+/**
+ * The one check a run of b-roll passes before it is laid (timeUnit, and each side of a run clipFitOf breaks), whatever
+ * branch timed it: `fitted`, its windows as their clips play them, against `timed`, the windows its timing gave.
+ * - Each keeps its timed in and is never longer than its timed window: a clip only shortens one, and only the last of
+ *   a run, so the run stays back to back (its bounds, the most frames and its line's end, are its timing's).
+ * - Every picture keeps its floor (`least`) and the run's span every window rule (windowFails: the first and last line,
+ *   the floor of the film, the end, the gap to every item laid).
+ * - Its out is not 1 to `snapFrames` frames before a picture cut its clip could not reach (sliverCutAfter): the take
+ *   would show there and no snap could close it. A sliver a clip could close is the snap's to take or leave (0.6: the
+ *   snap is optional and never costs a shot).
+ * Returns the picture it fails on (`at`) and its code, with the clip's frames for `cut-clip-short`, or null.
+ */
+function laidRunFails(kept, timed, fitted, least, ctx) {
+  const clipOf = (k) => ({ clipFrames: kept[k].item.fileFrames, windowFrames: timed[k].out - timed[k].in });
+  const last = fitted.length - 1;
+  for (const [k, f] of fitted.entries()) {
+    const asTimed = f.in === timed[k].in && (k === last ? f.out <= timed[k].out : f.out === timed[k].out);
+    const shortened = f.out !== timed[k].out;
+    if (!asTimed || (shortened && f.out - f.in < least)) return { at: k, code: "cut-clip-short", clip: clipOf(k) };
+    if (f.out - f.in < least) return { at: k, code: "cut-too-short" };
+  }
+  // Only the last out can have moved, and only earlier: a rule the span newly fails is about that picture.
+  const code = windowFails(spanOf(fitted), least, ctx);
+  if (code) return { at: last, code };
+  const cut = sliverCutAfter(fitted[last].out, ctx);
+  const { fileFrames } = kept[last].item;
+  if (cut !== undefined && fileFrames !== undefined && cutawayClipSpeed(fileFrames, cut - fitted[last].in) === null) {
+    return { at: last, code: "cut-clip-short", clip: clipOf(last) };
+  }
+  return null;
+}
+
 /** An item as the track lays it. */
 function laidOf(pic, w, whoosh) {
   const { item, row } = pic;
@@ -574,30 +816,68 @@ function laidOf(pic, w, whoosh) {
     ...(item.burst ? { burst: item.burst } : {}),
     whoosh,
     ...(w.snapped ? { snapped: w.snapped } : {}),
+    ...(w.playSpeed !== undefined ? { playSpeed: w.playSpeed } : {}),
   };
 }
 
 // ---------------------------------------------------------------------------------------------------- the layouts
 
-/** The layouts this cut lays (first-cut.mjs splitLayout for `split`); another one asked is laid full screen. */
-export const CUTAWAY_LAID_FRAMES = Object.freeze(["full", "split"]);
+/**
+ * The layouts this cut lays: `full`, `split` (first-cut.mjs splitLayout, the shot on top), `speakerTop` (the same split
+ * the other way up, CUTAWAY_SPEAKER_TOP) and `corner` (the shot full frame, the speaker small, CUTAWAY_CORNER).
+ */
+export const CUTAWAY_LAID_FRAMES = Object.freeze(["full", "split", "speakerTop", "corner"]);
 
 /**
  * The one place a frame item's layout is chosen (plan 4.7, "Layouts", and 0.10): the layout it asked for when the cut
  * lays it and its take's face was found (`face`, the take's box on the film, or null); else full screen, with `asked`
- * and the reason: `insert` (the insert is always full screen), `no-face` (a crop could cut the head off, as dev lays a
- * split shot) or `not-laid` (a layout a later part of the cut adds).
+ * and the reason: `insert` (the insert is always full screen), `not-laid` (a frame this cut does not know) or `no-face`
+ * (a crop could cut the head off, as dev lays a split shot). A run of a burst keeps one layout (oneLayoutPerRun).
+ * A face box narrower or shorter than CUTAWAY_FACE_MIN counts as none: on the film it is a sliver (zoomedFaceBox
+ * clamps a face a zoom pushes past the frame to its edge), with no face to frame the person around.
  */
 export function cutawayLayoutOf(frame, face, track = "broll") {
   if (frame === "full") return { layout: "full" };
   if (track === "insert") return { layout: "full", asked: frame, why: "insert" };
   if (!CUTAWAY_LAID_FRAMES.includes(frame)) return { layout: "full", asked: frame, why: "not-laid" };
-  if (!face) return { layout: "full", asked: frame, why: "no-face" };
+  if (!face || !(face.right - face.left >= CUTAWAY_FACE_MIN) || !(face.bottom - face.top >= CUTAWAY_FACE_MIN)) return { layout: "full", asked: frame, why: "no-face" };
   return { layout: frame };
 }
 
+/** The least a face box on the film must span, as a part of the width and of the height, to frame the person round it. */
+export const CUTAWAY_FACE_MIN = 0.02;
+
 /** The fields of a layout other than full screen, which a picture laid full screen after all does not keep. */
-const LAYOUT_FIELDS = ["split", "faced", "captionBand", "captionsHow", "captionsFit"];
+const LAYOUT_FIELDS = ["split", "corner", "faced", "captionBand", "captionsHow", "captionMoves", "captionKeeps", "captionsFit", "pictureFills"];
+
+/**
+ * The most of her part of a `split` or `speakerTop` layout that may be the blurred margin (the canvas filled past the
+ * frame's edge, first-cut.mjs splitLayout), as a share of her crop's width. Over it the shot is laid full screen
+ * (cutawayFillShare, oneLayoutPerRun). Set on one real take and two lab films (Nov 24): the Guided One-take run's
+ * close selfie, whose face reaches the frame's right edge, has 0.28 of her half filled there, a smeared copy of her own
+ * face, and looks worse than the shot alone; Smooche's take 2 (0.31 filled, in two even bands clear of her face) and
+ * FurLife's split (0.375, today's split crop widened to the canvas) look right, so only fill beside her face counts.
+ */
+export const CUTAWAY_FILL_MAX = 0.15;
+
+/** How near the frame's edge her face box must reach for the fill on that side to count, as a share of the width. */
+export const CUTAWAY_FILL_EDGE = 0.02;
+
+/**
+ * The share of her crop that is fill beside her face, for a `split` or `speakerTop` layout (splitLayout's `margin` and
+ * `crop` [width, height, x, y] on the canvas the frame sits in, `margin` from its left; `face` the take's box on the
+ * film the layout was made from): the crop's part past the frame's left or right edge, counted on a side only where her
+ * face box reaches within CUTAWAY_FILL_EDGE of that edge, so the blurred margin there continues her own face; over the
+ * crop's width. Fill on a side her face does not reach is the blurred background today's split shows, and does not
+ * count. The crop is set once for the item, so the share is the same on every frame of the shot. A `corner` crop stays
+ * inside the frame: none.
+ */
+export function cutawayFillShare(layout, W = 1080, face = null) {
+  const [wc, , x0] = layout.crop;
+  const left = face && face.left > CUTAWAY_FILL_EDGE ? 0 : Math.max(0, layout.margin - x0);
+  const right = face && face.right < 1 - CUTAWAY_FILL_EDGE ? 0 : Math.max(0, x0 + wc - (layout.margin + W));
+  return Math.round(((left + right) / wc) * 10_000) / 10_000;
+}
 
 /**
  * The frame items laid, as the units the track timed them in, in film order: a shot alone, the insert, or a run of a
@@ -625,19 +905,22 @@ export function cutawayUnitsOf(laid) {
  * - Each item laid and marked so (`captionsFit: false`) is laid full screen instead, where the captions stay where they
  *   are, with `asked` and the reason `captions`, as a take with no face box is.
  * - A run of a burst (cutawayUnitsOf) has one frame for all its pictures, so the person never blinks in and out, or
- *   jumps, inside it: a run stays split only when every picture of it is laid split around the same take's face.
- *   Otherwise every picture of it laid split is laid full screen too, with the reason `run` (its own captions not
- *   fitting stay `captions`).
+ *   jumps, inside it: a run keeps its layout (split, speakerTop or corner) only when every picture of it is laid in that
+ *   one layout around the same take's face. Otherwise every picture of it not laid full screen is laid full screen too,
+ *   with the reason `run` (its own captions not fitting stay `captions`).
+ * - The same for a picture whose crop of her would be more fill than CUTAWAY_FILL_MAX (`pictureFills: false`), with the
+ *   reason `fill` (it wins over its own `captions`); the rest of its run say `run`.
  * Another run of the same burst, with the take between them, keeps its own layout.
  */
 export function oneLayoutPerRun(placed) {
   const why = new Map();
   for (const unit of cutawayUnitsOf(placed)) {
-    const oneSplit = unit.every((p) => p.layout === "split" && p.captionsFit !== false && p.take === unit[0].take);
+    const oneLayout = unit.every((p) => p.layout !== "full" && p.layout === unit[0].layout && p.captionsFit !== false && p.pictureFills !== false && p.take === unit[0].take);
     for (const p of unit) {
       if (p.layout === "full") continue;
-      if (p.captionsFit === false) why.set(p, "captions");
-      else if (!oneSplit) why.set(p, "run");
+      if (p.pictureFills === false) why.set(p, "fill");
+      else if (p.captionsFit === false) why.set(p, "captions");
+      else if (!oneLayout) why.set(p, "run");
     }
   }
   return placed.map((p) => {
@@ -645,5 +928,157 @@ export function oneLayoutPerRun(placed) {
     const full = { ...p, layout: "full", asked: p.frame, askedWhy: why.get(p) };
     for (const field of LAYOUT_FIELDS) delete full[field];
     return full;
+  });
+}
+
+/**
+ * `speakerTop` (plan 4.7): today's split (first-cut.mjs splitLayout, read with these numbers
+ * in place of EXTRA_SHOTS') with four changes: the person's strip on top and the shot below it; the halves equal, the
+ * seam at 0.50 of the height; the face larger in her half (its top `crop.faceTop`, its bottom at most `crop.faceBottom`
+ * down the crop, the app's 0.12 and 0.46); the captions on the seam (`captionsAt`), in a band `captionsHalf` each side.
+ * The crop's width and the blurred margin are the app's.
+ */
+export const CUTAWAY_SPEAKER_TOP = Object.freeze({
+  splitShare: 0.5,
+  faceAt: Object.freeze([0.5, 0.4]),
+  crop: Object.freeze({ widthShare: 0.72, marginShare: 0.3, faceTop: 0.1, faceBottom: 0.78 }),
+  captionsAt: 0.5,
+  captionsHalf: 0.04,
+});
+
+/** Where the face sits in her top half while a `speakerTop` item is on (`layout` splitLayout's), as parts of the height. */
+export function speakerTopFace(face, layout, H) {
+  const [, hc, , y0] = layout.crop;
+  const at = (v) => Math.round(((((v * H - y0) * layout.stripH) / hc) / H) * 10_000) / 10_000;
+  return { top: at(face.top), bottom: at(face.bottom) };
+}
+
+/**
+ * `corner` (plan 4.7): the shot full frame and the speaker's own frames in
+ * a plain rectangle with no border, `widthShare` of the width and `heightShare` of the height (the lab's cards were
+ * 0.33 tall), in the lower corner on `side`, touching the frame's edges. Her frames are cropped round the face: the crop
+ * `faceWidths` face widths wide, of the box's shape, the face's top `faceTop` down it; taller when the face would pass
+ * `faceBottom` of it; inside the frame. Never narrower than half the box (`minScale`, so her frames are scaled up 2x
+ * at most): a face box on the film can be a sliver (zoomedFaceBox clamps a face cut off by a zoom to the frame's edge),
+ * and a crop of a few pixels, or none, would be a smear or an ffmpeg error.
+ */
+export const CUTAWAY_CORNER = Object.freeze({ widthShare: 0.37, heightShare: 0.33, side: "right", faceWidths: 1.5, faceTop: 0.08, faceBottom: 0.75, minScale: 0.5 });
+
+const evenDown = (v) => Math.floor(v / 2) * 2;
+
+/**
+ * A `corner` item's frame, in pixels of the film: `box` [x, y, width, height] where her rectangle is laid, and `crop`
+ * [width, height, x, y] of the film's frame scaled into it. `face` is the take's box on the film (parts of the frame).
+ */
+export function cornerLayout(face, W, H) {
+  const C = CUTAWAY_CORNER;
+  const bw = evenDown(W * C.widthShare + 1);
+  const bh = evenDown(H * C.heightShare + 1);
+  const box = [C.side === "right" ? W - bw : 0, H - bh, bw, bh];
+  const shape = bw / bh;
+  const faceW = (face.right - face.left) * W;
+  const faceH = (face.bottom - face.top) * H;
+  const wide = Math.max(C.faceWidths * faceW, (faceH / (C.faceBottom - C.faceTop)) * shape, C.minScale * bw);
+  const wc = evenDown(Math.min(wide, W, H * shape));
+  const hc = evenDown(Math.min(H, wc / shape));
+  const x0 = Math.round(Math.min(Math.max(((face.left + face.right) / 2) * W - wc / 2, 0), W - wc));
+  const y0 = Math.round(Math.min(Math.max(face.top * H - C.faceTop * hc, 0), H - hc));
+  return { box, crop: [wc, hc, x0, y0] };
+}
+
+/**
+ * Where the caption screens shown over a `speakerTop` or `corner` item sit while the item is on (plan 4.7, "Layouts").
+ * A screen is moved only for the frames of the item (cutawayCaptionPieces): outside them it stays in its own place, so
+ * only her part of the layout matters here. Each screen of `over`: `band` [top, bottom] where it sits now.
+ * `shareAt(screen, centre)`: its drawn height centred there, `clear` the room kept from a face (first-cut.mjs
+ * FACE_CLEAR_SHARE), all parts of the height.
+ * - `speakerTop`: every screen on the seam, clear of her face in her top half (`face`, speakerTopFace's);
+ * - `corner`: a screen clear of her rectangle (`top`, its top) stays where it is, else it sits just above it.
+ * Returns each screen moved with its band, each screen a corner item keeps where it is (`keeps`), `how` ("seam" or
+ * "above"), and `fits` false when one cannot be placed so: then the item is laid full screen and the captions stay (plan
+ * 0.12, oneLayoutPerRun).
+ */
+export function cutawayCaptionPlace(layout, { face = null, top = null, over, shareAt, clear }) {
+  const half = CUTAWAY_SPEAKER_TOP.captionsHalf;
+  const round4 = (v) => Math.round(v * 10_000) / 10_000;
+  const bandAt = (centre) => [round4(centre - half), round4(centre + half)];
+  const moves = [];
+  const keeps = [];
+  let fits = true;
+  for (const screen of over) {
+    let centre;
+    let share;
+    if (layout === "speakerTop") {
+      centre = CUTAWAY_SPEAKER_TOP.captionsAt;
+      share = shareAt(screen, centre);
+      if (face && centre - share / 2 - clear < face.bottom) fits = false;
+    } else {
+      const now = (screen.band[0] + screen.band[1]) / 2;
+      if (now + shareAt(screen, now) / 2 + clear <= top) {
+        keeps.push({ screen, band: screen.band });
+        continue;
+      }
+      share = shareAt(screen, top - clear - shareAt(screen, now) / 2);
+      centre = top - clear - share / 2;
+      if (centre - share / 2 < 0) fits = false;
+    }
+    moves.push({ screen, band: bandAt(centre) });
+  }
+  return { moves, keeps, how: layout === "speakerTop" ? "seam" : "above", fits };
+}
+
+/**
+ * The frames a caption screen shows on, as the burn draws it (editAss): frame f when its start (`startCs`,
+ * centiseconds) is at or before f/24 and its end (`endCs`) is after f/24. `first` is its first frame, `last` the first
+ * frame after it.
+ */
+export function cutawayScreenFrames(startCs, endCs) {
+  return { first: Math.ceil((startCs * CUTAWAY_FPS) / 100 - 1e-9), last: Math.ceil((endCs * CUTAWAY_FPS) / 100 - 1e-9) };
+}
+
+/**
+ * A caption screen is split at a frame item's edges (plan 0.40): while the item is on, the screen sits where
+ * the item's layout puts it; on its other frames, in its own place. Its words and their times do not change, and the
+ * picture cut hides the jump. `screens`: the caption screens in burn order (times `s`, `e` on the cut's clock before
+ * the speed step), each with `first` and `last` (cutawayScreenFrames). `windows`: each a screen's place over one item,
+ * `{ s, e, from, to, band }` (the screen by its `s` and `e`; frames `from` to `to`, exclusive, of the finished film).
+ * Returns the screens to burn, each whole or in pieces in time order, every piece the screen with its own `s`, `e` and
+ * `band`: a piece's edge is the item's frame, `f / 24 * speed`, so editAss starts the next piece on that frame exactly.
+ * Two windows that touch with one band make one piece. A screen with no window is returned as it was.
+ */
+export function cutawayCaptionPieces(screens, windows, speed = 1) {
+  return screens.flatMap(({ first, last, ...c }) => {
+    const mine = windows
+      .filter((w) => w.s === c.s && w.e === c.e)
+      .map((w) => ({ from: Math.max(first, w.from), to: Math.min(last, w.to), band: w.band }))
+      .filter((w) => w.to > w.from)
+      .sort((a, b) => a.from - b.from);
+    if (mine.length === 0) return [c];
+    const own = c.band;
+    const spans = [];
+    let at = first;
+    // Items never overlap on the film; should two windows, the later one starts where the earlier ends, so no frame is
+    // drawn twice and no piece runs backwards.
+    for (const w of mine) {
+      if (w.to <= at) continue;
+      if (w.from > at) spans.push({ from: at, to: w.from, band: own });
+      spans.push({ ...w, from: Math.max(w.from, at) });
+      at = w.to;
+    }
+    if (at < last) spans.push({ from: at, to: last, band: own });
+    const same = (a, b) => (a === b) || (Array.isArray(a) && Array.isArray(b) && a[0] === b[0] && a[1] === b[1]);
+    const joined = spans.reduce((out, sp) => {
+      const prev = out.at(-1);
+      if (prev && prev.to === sp.from && same(prev.band, sp.band)) prev.to = sp.to;
+      else out.push({ ...sp });
+      return out;
+    }, []);
+    const timeOf = (f) => (f / CUTAWAY_FPS) * speed;
+    return joined.map((sp, k) => {
+      const piece = { ...c, s: k === 0 ? c.s : timeOf(sp.from), e: k === joined.length - 1 ? c.e : timeOf(sp.to) };
+      if (sp.band === undefined) delete piece.band;
+      else piece.band = sp.band;
+      return piece;
+    });
   });
 }

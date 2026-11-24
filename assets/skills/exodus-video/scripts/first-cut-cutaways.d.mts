@@ -15,7 +15,7 @@ export const CUTAWAY_FRAMES: readonly CutawayCutFrame[];
 
 export type CutawayCutCode =
   | "cut-unread" | "cut-version" | "cut-both-keys" | "cut-staged-text" | "cut-mapped" | "cut-template"
-  | "cut-no-file" | "cut-file-unreadable" | "cut-insert-short"
+  | "cut-no-file" | "cut-file-unreadable" | "cut-insert-short" | "cut-clip-short"
   | "cut-line-not-heard" | "cut-word-not-found"
   | "cut-first-last-line" | "cut-too-early" | "cut-too-close" | "cut-too-short" | "cut-end"
   | "cut-drawn-later";
@@ -86,6 +86,9 @@ export interface CutawayCutLeft {
   key?: string;
   template?: string;
   code: CutawayCutCode;
+  /** `cut-clip-short`: the clip's frames, and the frames of the window it could not cover. */
+  clipFrames?: number;
+  windowFrames?: number;
 }
 
 export interface CutawaysRead {
@@ -123,6 +126,12 @@ export const CUTAWAY_TIMING: Readonly<{
 }>;
 /** The insert's clip: from its first frame at 1.0x, with no zoom. */
 export const CUTAWAY_INSERT_CLIP: Readonly<{ fromSec: number; playSpeed: number }>;
+/** A b-roll clip: from `fromSec` at `playSpeed` (today's extra shots'), slower down to `slowest` when it is too short. */
+export const CUTAWAY_BROLL_CLIP: Readonly<{ fromSec: number; playSpeed: number; slowest: number }>;
+/** The speed a b-roll clip of `fileFrames` frames plays at to cover `frames` frames of film, or null when even the slowest does not. */
+export function cutawayClipSpeed(fileFrames: number, frames: number): number | null;
+/** The most frames of film a b-roll clip of `fileFrames` frames covers, at its slowest speed. */
+export function cutawayClipMostFrames(fileFrames: number): number;
 
 /** A line of the film, from its first word's first frame to its last word's last. */
 export interface CutawayLine {
@@ -153,6 +162,8 @@ export interface CutawayLaid {
   whoosh: boolean;
   /** Where an edge was before it moved onto a picture cut. */
   snapped?: { in?: number; out?: number };
+  /** A b-roll clip's speed when it is not the usual 1.5x: its clip is too short for its window at that speed. */
+  playSpeed?: number;
 }
 
 /**
@@ -162,7 +173,10 @@ export interface CutawayLaid {
  */
 export function scheduleFrameTrack(
   items: readonly (CutawayCutItem & {
-    /** The insert's file, in frames, when it was probed: under its window plus one frame, it is left out. */
+    /**
+     * The file, in frames, when it was probed. The insert's under its window plus one frame is left out; a b-roll
+     * clip's is held to its window by CUTAWAY_BROLL_CLIP (slower, shorter, or left out as `cut-clip-short`).
+     */
     fileFrames?: number;
   })[],
   opts: {
@@ -187,10 +201,61 @@ export function cutawayLayoutOf(
   frame: CutawayCutFrame,
   face: unknown,
   track?: "broll" | "insert",
-): { layout: "full" | "split"; asked?: CutawayCutFrame; why?: "insert" | "no-face" | "not-laid" };
+): { layout: CutawayCutFrame; asked?: CutawayCutFrame; why?: "insert" | "no-face" | "not-laid" };
 /** The frame items laid, as units in film order: a shot alone, the insert, or a run of a burst (its pictures back to back). */
 export function cutawayUnitsOf<P extends { in: number; out: number; burst?: number }>(laid: readonly P[]): P[][];
-/** One layout per run of a burst: an item whose captions do not fit its layout, and every split picture of a run that is not split whole around one take's face, laid full screen instead. */
-export function oneLayoutPerRun<P extends { in: number; out: number; layout: string; frame?: string; burst?: number; take?: number | null; captionsFit?: boolean }>(
+/** One layout per run of a burst: an item whose captions do not fit its layout or whose picture of her would be mostly fill, and every picture of a run that is not laid whole in one layout around one take's face, laid full screen instead. */
+export function oneLayoutPerRun<P extends { in: number; out: number; layout: string; frame?: string; burst?: number; take?: number | null; captionsFit?: boolean; pictureFills?: boolean }>(
   placed: readonly P[],
-): (P | (P & { layout: "full"; asked?: string; askedWhy: "captions" | "run" }))[];
+): (P | (P & { layout: "full"; asked?: string; askedWhy: "captions" | "fill" | "run" }))[];
+/** The most of her part of a split or speakerTop layout that may be blurred margin beside her face; over it, full screen. */
+export const CUTAWAY_FILL_MAX: number;
+/** The share of her crop that is fill past the frame's edge on a side her face reaches (splitLayout's `margin` and `crop`). */
+export function cutawayFillShare(layout: { margin: number; crop: readonly number[] }, W?: number, face?: { left: number; right: number } | null): number;
+/** How near the frame's edge her face must reach for the fill on that side to count. */
+export const CUTAWAY_FILL_EDGE: number;
+
+/** A face box as parts of the frame (first-cut.mjs faceBoxOf). */
+export interface CutawayFace {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+/** `speakerTop`: today's split numbers with four changes (the person on top, equal halves, her face larger, the captions on the seam). */
+export const CUTAWAY_SPEAKER_TOP: Readonly<{
+  splitShare: number;
+  faceAt: readonly [number, number];
+  crop: Readonly<{ widthShare: number; marginShare: number; faceTop: number; faceBottom: number }>;
+  captionsAt: number;
+  captionsHalf: number;
+}>;
+/** Where the face sits in her top half while a `speakerTop` item is on, as parts of the height. */
+export function speakerTopFace(face: CutawayFace, layout: { stripH: number; crop: readonly number[] }, H: number): { top: number; bottom: number };
+/** The least a face box on the film spans, as a part of the width and of the height, for a layout round it. */
+export const CUTAWAY_FACE_MIN: number;
+/** `corner`: the speaker small in a lower corner. */
+export const CUTAWAY_CORNER: Readonly<{
+  widthShare: number; heightShare: number; side: "left" | "right"; faceWidths: number; faceTop: number; faceBottom: number; minScale: number;
+}>;
+/** A `corner` item's frame in pixels: her rectangle [x, y, width, height] and the crop of the film [width, height, x, y]. */
+export function cornerLayout(face: CutawayFace, W: number, H: number): { box: [number, number, number, number]; crop: [number, number, number, number] };
+/** Where the caption screens shown over a `speakerTop` or `corner` item sit, and whether they fit. */
+export function cutawayCaptionPlace<S extends { band: readonly number[] }>(
+  layout: "speakerTop" | "corner",
+  opts: {
+    face?: { top: number; bottom: number } | null;
+    top?: number | null;
+    over: readonly S[];
+    shareAt: (screen: S, centre: number) => number;
+    clear: number;
+  },
+): { moves: { screen: S; band: [number, number] }[]; keeps: { screen: S; band: readonly number[] }[]; how: "seam" | "above"; fits: boolean };
+/** The frames a caption screen shows on as the burn draws it: its first, and the first after it. */
+export function cutawayScreenFrames(startCs: number, endCs: number): { first: number; last: number };
+/** The caption screens to burn, each split at the frame items' edges: the layout's place while an item is on, its own place else. */
+export function cutawayCaptionPieces<C extends { s: number; e: number; band?: readonly number[] }>(
+  screens: readonly (C & { first: number; last: number })[],
+  windows: readonly { s: number; e: number; from: number; to: number; band: readonly number[] }[],
+  speed?: number,
+): C[];

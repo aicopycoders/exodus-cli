@@ -14,7 +14,7 @@ import { ASSET_UPLOAD_POLICY, boardDrawsThePlaceFirst, pauseAheadLine, parseVoic
 import { HELPER_LEDGER_BASE, ONE_TAKE_BOARD_CUTOUT_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_LEDGER_INDEX, ONE_TAKE_BOARD_CUTOUT_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_LEDGER_INDEX, ONE_TAKE_BOARD_FACE_REDRAW_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_CHECK_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_LEDGER_INDEX, ONE_TAKE_BOARD_PLACE_REDRAW_LEDGER_INDEX, SET_OPTION_LEDGER_BASE, } from "../lib/helperLedgerBase.js";
 import { ONE_TAKE_HOLD_CODES } from "../lib/oneTakeHolds.js";
 import { faceBoxOf } from "../lib/faceBox.js";
-import { customerAnswer, customerRunPage, listedWords, endCardLines, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, openingLines, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
+import { customerAnswer, customerRunPage, listedWords, endCardLines, stopPictureLines, stopPictureText, customerStageIsWorking, finalApproveLines, finalApprovedLines, customerCutHeld, approveWaitingLines, waitingSceneLines, customerStageLines, customerStatusLines, customerStoryboardLines, cutawayLines, cutawayUnreadLines, openingLines, withItemsCode, customerVoicesLines, speechSummaryLines, spendAskLines, onOwnDashboard, songCallStopLines, songCallsProblem, SONG_CALL_NEW_VIDEO, SONG_CALL_NO_ONE_SCENE, SONG_CALL_NO_SCENE_PICTURES, VOICE_RETRY_COST, } from "./video-customer.js";
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
@@ -100,6 +100,10 @@ The whole loop, in order:
        A One-take storyboard that lists openings: take 1 starts with
        opening n. Copy the line the storyboard prints, code and all.
        Without --opening, opening 1.
+     exodus video approve <runId> --items <code>
+       A storyboard that lists b-roll, inserts and overlays (in
+       development, untested): the code it prints under them, so the yes
+       is for the plan you read. Copy the line it prints.
      exodus video retry-frame <runId> --node <nodeId> --scene <n>
        Redo ONE still at the pixel gate. Neighbours stay. The gate holds.
      exodus video broll <runId>
@@ -187,6 +191,12 @@ The whole loop, in order:
        yes (status shows it), as "Drop" on the video's page does. It orders
        and refunds nothing; the video ends on the last word.
 
+     exodus video drop-item <runId> --item <n> --items <code>
+       Drop item n of the b-roll, inserts and overlays a storyboard
+       planned (in development, untested), by its number and the code
+       exodus video storyboard prints, while it waits for the yes. It
+       orders and refunds nothing; the item is neither made nor laid.
+
      exodus video keep-going <runId>
      exodus video stop-here <runId>
        A video that reached the estimate it showed before the start stops
@@ -217,7 +227,7 @@ Usage:
   exodus video storyboard <runId> [--json]
   exodus video map <runId> [--place <place>] [--json]
   exodus video move <runId> --move <who>=<x>,<y> [--move ...] [--place <place>] [--note "..."] [--json]
-  exodus video approve <runId> [--opening <n> --openings <code>] [--approve-stale-cut] [--json]
+  exodus video approve <runId> [--opening <n> --openings <code>] [--approve-stale-cut] [--json] [--items <code>]
   exodus video approve <runId> --max-usd <n> [--json]
   exodus video retry-frame <runId> [--node <nodeId>] --scene <n> [--note "..."] [--json]
   exodus video broll <runId> [--json]
@@ -229,6 +239,7 @@ Usage:
   exodus video keep <runId> --scene <n> [--json]
   exodus video drop-shot <runId> --shot <n> [--json]
   exodus video drop-card <runId> [--json]
+  exodus video drop-item <runId> --item <n> --items <code> [--json]
   exodus video keep-going <runId> [--json]
   exodus video stop-here <runId> [--json]
   exodus video voices <runId> [--set <character>=<voice>] [--clear <character>] [--from <file.json>] [--json]
@@ -333,6 +344,10 @@ Options:
   --openings <code>    With --opening: the code exodus video storyboard prints
                        with the openings, so the pick is of those openings. If
                        the storyboard was made again since, nothing is approved
+  --items <code>       The code exodus video storyboard prints under the b-roll,
+                       inserts and overlays it lists (approve, drop-item). If
+                       the plan changed since, nothing is approved or dropped
+  --item <n>           Which item to drop, by its number in that list (drop-item)
   --set <who>=<voice>  Give a character a voice (voices). The voice is a
                        catalog voice's name, like George, or an ElevenLabs
                        voice ID. Name the character by its ID or by the name
@@ -772,6 +787,7 @@ export const FINAL_PATH = "/api/v2/video/final";
 export const KEEP_SCENE_PATH = "/api/v2/video/keep-scene";
 export const EXTRA_SHOT_PATH = "/api/v2/video/storyboard/extra-shot";
 export const END_CARD_PATH = "/api/v2/video/storyboard/end-card";
+export const CUTAWAY_PATH = "/api/v2/video/storyboard/cutaway";
 export const SPEND_ANSWER_PATH = "/api/v2/video/spend-answer";
 export const VOICES_PATH = "/api/v2/video/voices";
 export const PICKS_PATH = "/api/v2/video/picks";
@@ -1105,6 +1121,8 @@ export function classifyRun(run) {
                 ...(noPictureBeforeApproval(run, pausedNode) ? { noPictureBeforeApproval: true } : {}),
                 ...(run.songCalls ? { songCalls: run.songCalls } : {}),
                 ...(run.endCard ? { endCard: run.endCard } : {}),
+                ...(run.cutaways ? { cutaways: run.cutaways } : {}),
+                ...(!run.cutaways && run.cutawaysUnread ? { cutawaysUnread: run.cutawaysUnread } : {}),
             };
         }
         if (parkedAtFinalWatch(run)) {
@@ -1490,6 +1508,8 @@ export function stopLines(stop, runId, runUrl, videoPage) {
         const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
         const card = stop.endCard?.state === "ready" ? ["the end card"] : [];
         const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl);
+        const plan = stop.cutaways;
+        const planned = (approve) => (plan ? cutawayLines(plan, runId, { approve }) : [...cutawayUnreadLines(stop), approve]);
         const lines = [
             ...(stop.heldReason ? [stop.heldReason] : []),
             ...(pictures.length > 0
@@ -1498,7 +1518,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                     ...stopPictureText(pictures),
                     ...cardLines,
                     `Read them:    exodus video storyboard ${runId}`,
-                    `Approve them: exodus video approve ${runId}`,
+                    ...planned(`Approve them: exodus video approve ${runId}`),
                 ]
                 : stop.noPictureBeforeApproval
                     ? [
@@ -1507,13 +1527,13 @@ export function stopLines(stop, runId, runUrl, videoPage) {
                             : "Parked: the script and the voice are waiting for your yes. No take gets a picture before you approve.",
                         ...cardLines,
                         `Read them:    exodus video storyboard ${runId}`,
-                        `Approve them: exodus video approve ${runId}`,
+                        ...planned(`Approve them: exodus video approve ${runId}`),
                     ]
                     : [
                         "Parked: the storyboard is waiting for your yes.",
                         ...cardLines,
                         `Read it:    exodus video storyboard ${runId}`,
-                        ...(songCallsProblem(stop.songCalls) ? [] : [`Approve it: exodus video approve ${runId}`]),
+                        ...(songCallsProblem(stop.songCalls) ? [] : planned(`Approve it: exodus video approve ${runId}`)),
                     ]),
         ];
         if (stop.showAd) {
@@ -4831,7 +4851,11 @@ export async function storyboardFlow(runId, json, deps) {
         for (const scene of loose)
             lines.push(...sceneCardLines(scene));
     }
-    lines.push(...openingLines(cards.openings, runId, cards.openingsDigest));
+    lines.push(...openingLines(cards.openings, runId, cards.openingsDigest, false, cards.cutaways?.code));
+    if (cards.cutaways)
+        lines.push("", ...cutawayLines(cards.cutaways, runId));
+    else if (cards.cutawaysUnread)
+        lines.push("", cards.cutawaysUnread);
     if (!cards.openings && cards.openingPicked)
         lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
     const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId));
@@ -4874,8 +4898,8 @@ export async function storyboardFlow(runId, json, deps) {
     }
     if (!songCallsProblem(songCalls)) {
         lines.push("", logic?.open
-            ? `a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`
-            : `approve with: exodus video approve ${runId}`);
+            ? withItemsCode(`a block stops this storyboard. Fix it, or go on: exodus video approve ${runId} --accept-findings`, runId, cards.cutaways)
+            : withItemsCode(`approve with: exodus video approve ${runId}`, runId, cards.cutaways));
     }
     if (showAd) {
         lines.push(`send it back: exodus video flag ${runId} --note "what's wrong"`);
@@ -5038,13 +5062,19 @@ export async function approveFlow(runId, opts, deps) {
         ...(opts.auditionDigest ? { auditionDigest: opts.auditionDigest } : {}),
         ...(opts.maxUsd !== undefined ? { maxUsd: opts.maxUsd } : {}),
         ...(opts.opening !== undefined ? { opening: opts.opening, ...(opts.openingsDigest ? { openings: opts.openingsDigest } : {}) } : {}),
+        ...(opts.itemsCode !== undefined ? { items: opts.itemsCode } : {}),
     });
     if (!res.ok) {
         const refusal = errorResult(res, opts.json);
         const staleCut = !opts.json && videoApiError(res).includes("approve this cut anyway");
         if (!opts.json && videoApiError(res).includes("accept the findings")) {
             const opening = opts.opening !== undefined ? ` --opening ${opts.opening}${opts.openingsDigest ? ` --openings ${opts.openingsDigest}` : ""}` : "";
-            return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId}${opening} --accept-findings`] };
+            const items = opts.itemsCode ? ` --items ${opts.itemsCode}` : "";
+            return { ...refusal, lines: [...refusal.lines, `To go on anyway: exodus video approve ${runId}${opening}${items} --accept-findings`] };
+        }
+        if (!opts.json && asksForItemsCode(res)) {
+            const read = `Read the plan and its code: exodus video storyboard ${runId}`;
+            return { ...refusal, lines: [...(asksForItemsCode(res, "needs") ? [ITEMS_CODE_NEEDED] : refusal.lines), read] };
         }
         const waiting = opts.json || staleCut || videoApiError(res) === FINISH_STILL_CUTTING ? [] : await waitingLinesAfterRefusal(runId, deps);
         if (waiting.length > 0)
@@ -5943,6 +5973,73 @@ export async function dropShotFlow(runId, shot, json, deps) {
     return {
         code: 0,
         lines: [`Extra shot ${shot} dropped. It won't be made, and nothing was ordered.`, `See the rest: exodus video status ${runId}`],
+    };
+}
+export function itemsCodeOf(occurrences) {
+    const typed = occurrences.filter((occurrence) => occurrence.flag === "items");
+    if (typed.length === 0)
+        return undefined;
+    const value = typed[typed.length - 1].value?.trim().toLowerCase();
+    return value !== undefined && /^[0-9a-f]{16}$/.test(value) ? value : "bad";
+}
+export const ITEMS_CODE_REFUSALS = [
+    "Update Exodus to see this storyboard's plan of b-roll, inserts and overlays (in development, untested), then approve.",
+    "This plan of b-roll, inserts and overlays (in development, untested) changed since you read it. Read it again, then drop or approve.",
+];
+export const ITEMS_CODE_REFUSAL_CODES = ["CUTAWAY_APPROVE_NEEDS_CODE", "CUTAWAY_PLAN_CHANGED"];
+function asksForItemsCode(res, only) {
+    const pairs = ITEMS_CODE_REFUSAL_CODES.map((code, i) => [code, ITEMS_CODE_REFUSALS[i]]).slice(0, only === "needs" ? 1 : 2);
+    const code = res.data?.error?.code;
+    const message = videoApiError(res);
+    return pairs.some(([routeCode, sentence]) => code === routeCode || message.includes(sentence));
+}
+export const ITEMS_CODE_NEEDED = "Nothing was approved: this storyboard lists b-roll, inserts and overlays (in development, untested), and the approve needs the code printed under them.";
+const DROP_ITEM_NOT_ON_THIS_SERVER = "This Exodus server cannot drop an item of the plan yet, so nothing changed. Drop it on the video's page:";
+export async function dropItemFlow(runId, item, itemsCode, json, deps) {
+    const read = await deps.get(`${STORYBOARD_PATH}?runId=${encodeURIComponent(runId)}`);
+    if (!read.ok)
+        return errorResult(read, json);
+    const board = read.data;
+    const list = board?.cutaways;
+    const refuse = (line) => ({ code: 1, lines: json ? [JSON.stringify({ ok: false, error: line })] : [line] });
+    if (!list && board?.cutawaysUnread)
+        return refuse(board.cutawaysUnread);
+    if (!list)
+        return refuse(`This video's storyboard lists no b-roll, inserts or overlays (in development, untested), so nothing changed. Read it: exodus video storyboard ${runId}`);
+    const row = list.rows.find((one) => one.n === item);
+    if (!row)
+        return refuse(`This plan has no item ${item}, so nothing changed. Read it again: exodus video storyboard ${runId}`);
+    const readFirst = `Read the plan before you approve: exodus video storyboard ${runId}`;
+    if (row.dropped && itemsCode !== list.code) {
+        const line = ITEMS_CODE_REFUSALS[1];
+        const read = `Read the plan and its code: exodus video storyboard ${runId}`;
+        return { code: 1, lines: json ? [JSON.stringify({ ok: false, error: line })] : [line, read] };
+    }
+    if (row.dropped) {
+        const line = `Item ${item} is dropped already, so nothing changed. ${readFirst}`;
+        return { code: 0, lines: json ? [JSON.stringify({ ok: true, runId, item, dropped: "already" })] : [line] };
+    }
+    const res = await deps.post(CUTAWAY_PATH, { runId, key: row.key, items: itemsCode });
+    if (missingRouteLine(res, "exodus video drop-item")) {
+        const line = `${DROP_ITEM_NOT_ON_THIS_SERVER} ${customerRunPage(deps.dashboardUrl, runId)}`;
+        return { code: 1, lines: json ? [JSON.stringify({ ok: false, status: 404, error: line })] : [line] };
+    }
+    if (!res.ok) {
+        const refused = errorResult(res, json);
+        return !json && asksForItemsCode(res) ? { ...refused, lines: [...refused.lines, `Read the plan and its code: exodus video storyboard ${runId}`] } : refused;
+    }
+    const code = res.data?.code;
+    const newCode = typeof code === "string" && itemsCode === list.code ? code : undefined;
+    if (json)
+        return { code: 0, lines: [JSON.stringify({ ok: true, runId, item, ...(newCode ? { code: newCode } : {}) })] };
+    return {
+        code: 0,
+        lines: [
+            `Item ${item} dropped. It won't be made, and nothing was ordered.`,
+            ...(newCode
+                ? [`The plan's code is now ${newCode}.`, `Approve with: exodus video approve ${runId} --items ${newCode}`, `See the rest: exodus video storyboard ${runId}`]
+                : [readFirst]),
+        ],
     };
 }
 const DROP_CARD_NOT_ON_THIS_SERVER = "This Exodus server cannot drop the end card yet, so nothing changed. To keep the card out of the video, stop this video on its page before you approve:";
@@ -7226,6 +7323,8 @@ const VALUE_FLAGS = new Set([
     "persona",
     "opening",
     "openings",
+    "item",
+    "items",
 ]);
 const FIND_VALUE_FLAGS = new Set(["brand", "limit"]);
 const WRITE_VALUE_FLAGS = new Set(["kind", "people-max-usd"]);
@@ -7375,6 +7474,7 @@ export async function run(flags, occurrences) {
         "keep",
         "drop-shot",
         "drop-card",
+        "drop-item",
         "keep-going",
         "stop-here",
         "voices",
@@ -7502,6 +7602,9 @@ export async function run(flags, occurrences) {
         if (typeof opening === "number" && openingsDigest === undefined) {
             usage("--opening goes with --openings <code>, as exodus video storyboard prints it with the openings.");
         }
+        const itemsCode = itemsCodeOf(occurrences);
+        if (itemsCode === "bad")
+            usage("--items needs the code exodus video storyboard prints under the b-roll, inserts and overlays.");
         return printResult(await approveFlow(runId, {
             json,
             approveStaleCut: flags["approve-stale-cut"] === true,
@@ -7510,6 +7613,7 @@ export async function run(flags, occurrences) {
             ...(auditionDigest ? { auditionDigest } : {}),
             ...(maxUsd !== undefined ? { maxUsd: Number(maxUsd) } : {}),
             ...(typeof opening === "number" ? { opening, ...(typeof openingsDigest === "string" ? { openingsDigest } : {}) } : {}),
+            ...(typeof itemsCode === "string" ? { itemsCode } : {}),
         }, defaultDeps));
     }
     if (sub === "flag") {
@@ -7555,6 +7659,18 @@ export async function run(flags, occurrences) {
     }
     if (sub === "drop-card") {
         return printResult(await dropCardFlow(runId, json, defaultDeps));
+    }
+    if (sub === "drop-item") {
+        const itemRaw = flagString(flags, "item");
+        if (itemRaw === undefined)
+            usage("video drop-item needs --item <n>, the number exodus video storyboard lists the item by.");
+        const item = Number(itemRaw);
+        if (!Number.isInteger(item) || item < 1)
+            usage(`video drop-item --item must be a whole item number, not "${itemRaw}".`);
+        const itemsCode = itemsCodeOf(occurrences);
+        if (itemsCode === undefined || itemsCode === "bad")
+            usage("video drop-item needs --items <code>, the code exodus video storyboard prints under the plan.");
+        return printResult(await dropItemFlow(runId, item, itemsCode, json, defaultDeps));
     }
     if (sub === "keep") {
         const sceneRaw = flagString(flags, "scene");

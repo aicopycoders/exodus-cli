@@ -3058,6 +3058,28 @@ export async function swipeSheetPeopleFlow(
 }
 
 /**
+ * The swipe-runs route's code for its refusal of a start whose b-roll, inserts or overlays need a quote and carry none
+ * (convex/lib/workflow/cutawayStart.ts CUTAWAYS_NO_QUOTE_CODE, which this CLI cannot import; a test reads it there).
+ */
+export const CUTAWAYS_NO_QUOTE_CODE = "CUTAWAYS_NO_QUOTE";
+
+/**
+ * A short, stable part of that refusal's sentence (CUTAWAYS_NO_QUOTE there; a test reads it too), for a server that
+ * answers it with no code of its own (BAD_REQUEST), as dev did before the code.
+ */
+export const CUTAWAYS_NO_QUOTE_MARK = "so its start needs the price you saw";
+
+/**
+ * Said for a batch video that the server refused for want of a quote while the batch could not read one: the sheet gives
+ * it a look of its own, which the price does not price (batchQuoteOf). The server's own sentence names --max-usd, which a
+ * batch cannot pass, so the batch says it in its own words, with the command it names for a start it cannot make.
+ */
+export const batchOwnLookNoQuote = (swipeId: string) =>
+  `Swipe ${swipeId} has b-roll, inserts or overlays (in development, untested), and the sheet asks for a different look than ` +
+  "the swipe's. Its price can be read only in the swipe's look, and the server starts such a video only with its price, so " +
+  `nothing was started. Start it by itself, in the swipe's look, which shows its price first: exodus video swipe start ${swipeId}`;
+
+/**
  * The most a batch start of the swipe is held to: the price before the yes, read now (a free read), its picked most.
  * The price is worked out at the swipe's own look, so a start on another look (the sheet's "style") is not what it
  * priced, and goes unheld as before: a look drawn with a style master costs more than a live-action one, and the server
@@ -3065,8 +3087,13 @@ export async function swipeSheetPeopleFlow(
  * one) give none, and the start goes as before. A price that cannot be read (an error, an answer that does not read, a
  * most that is no dollar amount) is a problem: the batch starts nothing for that swipe and says why.
  */
-async function batchQuoteOf(swipeId: string, swipe: SwipeView, style: string | undefined, deps: VideoDeps): Promise<{ maxUsd?: number } | { problem: string }> {
-  if (style !== undefined && swipe.outcome.kind === "written" && style !== swipe.outcome.draft.style) return {};
+async function batchQuoteOf(
+  swipeId: string,
+  swipe: SwipeView,
+  style: string | undefined,
+  deps: VideoDeps,
+): Promise<{ maxUsd?: number; ownLook?: true } | { problem: string }> {
+  if (style !== undefined && swipe.outcome.kind === "written" && style !== swipe.outcome.draft.style) return { ownLook: true };
   const cannot = (why: string) => {
     const said = why.replace(/\s*\n\s*/g, " ").trim();
     return {
@@ -3589,7 +3616,11 @@ export async function swipeStartFlow(
     const error = isRecord(res.data) ? res.data.error : undefined;
     const message = typeof error === "string" ? error : isRecord(error) && typeof error.message === "string" ? error.message : "";
     const command = !json && res.status >= 400 && res.status < 500 ? songStopCommand(message, swipeId) : null;
-    const said = swipeError(res, json);
+    // The no-quote refusal keeps its code in --json, so a batch knows it without reading its words (startVideo).
+    const said =
+      json && isRecord(error) && error.code === CUTAWAYS_NO_QUOTE_CODE
+        ? failed(swipeErrorLine(res), true, { status: res.status, code: CUTAWAYS_NO_QUOTE_CODE })
+        : swipeError(res, json);
     return command ? { ...said, lines: [...said.lines, command] } : said;
   }
   const customer = customerAnswer<CustomerStart>(res.data);
@@ -5157,7 +5188,12 @@ async function startVideo(video: SheetVideo, run: SheetRunState, swipeId: string
   }
   if (started.ok !== true || typeof started.runId !== "string") {
     if (!sent || postRefused(started)) run.pending = null;
-    stopRun(video, run, outcome, errorOf(started), ctx);
+    const why = errorOf(started);
+    // A start not held to a price because of the sheet's own look, refused for want of one: the batch's own words. Only
+    // a refusal the server answered as one (a 4xx, nothing that may still finish); any other answer is said as it came.
+    const noQuote =
+      quoted.ownLook === true && postRefused(started) && (started.code === CUTAWAYS_NO_QUOTE_CODE || why.includes(CUTAWAYS_NO_QUOTE_MARK));
+    stopRun(video, run, outcome, noQuote ? batchOwnLookNoQuote(swipeId) : why, ctx);
     return;
   }
   takeRun(video, run, outcome, started.runId, typeof started.url === "string" && started.url ? started.url : null, ctx);

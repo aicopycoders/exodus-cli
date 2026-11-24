@@ -653,6 +653,9 @@ export declare function swipeSheetPriceFlow(swipeId: string, opts: SwipeOpts, de
 export declare const SONG_WHO_PAYS = "Who pays: the song, the pictures and the clips on your own Kie key, and the song's takes are heard on your ElevenLabs key. The text calls that plan the storyboard and write each picture and clip are on your model key: they are not in the price, and no number is shown for them.";
 export declare function sectionPageLines(lead: string, dashboardUrl: string, section?: string): string[];
 export declare function swipeSheetPeopleFlow(swipeId: string, count: number | null, maxUsd: number | null, opts: SwipeRunOptions, deps: VideoDeps): Promise<FlowResult>;
+export declare const CUTAWAYS_NO_QUOTE_CODE = "CUTAWAYS_NO_QUOTE";
+export declare const CUTAWAYS_NO_QUOTE_MARK = "so its start needs the price you saw";
+export declare const batchOwnLookNoQuote: (swipeId: string) => string;
 export declare function swipeSheetVoicesFlow(swipeId: string, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;
 export declare const LYRIC_LEFT_OUT_WHY_UNKNOWN = "Why it was left out was not kept for this lyric, made before reasons were kept. Your own lines say it.";
 export declare function swipeSheetLyricFlow(swipeId: string, maxUsd: number | null, opts: SwipeOpts, deps: VideoDeps): Promise<FlowResult>;

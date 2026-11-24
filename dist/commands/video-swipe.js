@@ -2049,9 +2049,14 @@ export async function swipeSheetPeopleFlow(swipeId, count, maxUsd, opts, deps) {
         ],
     };
 }
+export const CUTAWAYS_NO_QUOTE_CODE = "CUTAWAYS_NO_QUOTE";
+export const CUTAWAYS_NO_QUOTE_MARK = "so its start needs the price you saw";
+export const batchOwnLookNoQuote = (swipeId) => `Swipe ${swipeId} has b-roll, inserts or overlays (in development, untested), and the sheet asks for a different look than ` +
+    "the swipe's. Its price can be read only in the swipe's look, and the server starts such a video only with its price, so " +
+    `nothing was started. Start it by itself, in the swipe's look, which shows its price first: exodus video swipe start ${swipeId}`;
 async function batchQuoteOf(swipeId, swipe, style, deps) {
     if (style !== undefined && swipe.outcome.kind === "written" && style !== swipe.outcome.draft.style)
-        return {};
+        return { ownLook: true };
     const cannot = (why) => {
         const said = why.replace(/\s*\n\s*/g, " ").trim();
         return {
@@ -2420,7 +2425,9 @@ export async function swipeStartFlow(swipeId, ask, opts, deps, again = false, wa
         const error = isRecord(res.data) ? res.data.error : undefined;
         const message = typeof error === "string" ? error : isRecord(error) && typeof error.message === "string" ? error.message : "";
         const command = !json && res.status >= 400 && res.status < 500 ? songStopCommand(message, swipeId) : null;
-        const said = swipeError(res, json);
+        const said = json && isRecord(error) && error.code === CUTAWAYS_NO_QUOTE_CODE
+            ? failed(swipeErrorLine(res), true, { status: res.status, code: CUTAWAYS_NO_QUOTE_CODE })
+            : swipeError(res, json);
         return command ? { ...said, lines: [...said.lines, command] } : said;
     }
     const customer = customerAnswer(res.data);
@@ -3642,7 +3649,9 @@ async function startVideo(video, run, swipeId, outcome, ctx) {
     if (started.ok !== true || typeof started.runId !== "string") {
         if (!sent || postRefused(started))
             run.pending = null;
-        stopRun(video, run, outcome, errorOf(started), ctx);
+        const why = errorOf(started);
+        const noQuote = quoted.ownLook === true && postRefused(started) && (started.code === CUTAWAYS_NO_QUOTE_CODE || why.includes(CUTAWAYS_NO_QUOTE_MARK));
+        stopRun(video, run, outcome, noQuote ? batchOwnLookNoQuote(swipeId) : why, ctx);
         return;
     }
     takeRun(video, run, outcome, started.runId, typeof started.url === "string" && started.url ? started.url : null, ctx);

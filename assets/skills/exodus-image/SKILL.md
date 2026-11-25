@@ -1,6 +1,6 @@
 ---
 name: exodus-image
-description: The front door for making static image ads with Exodus — and the skill that WALKS THE USER THROUGH the setup instead of guessing. When the user hands over one or more finished ads and wants statics, it presents clean menus (which ads, which engines, aspect, count, steering, template formats), confirms a final render count, and fires nothing until the user says go. Only invoke when the user has explicitly invoked Exodus: they said "exodus" in the request ("exodus, turn this copy into images", "exodus, make me some statics", "exodus, render this ad"), named this skill or /exodus-image, ran an `npx exodus` command, or the `exodus` hub skill routed here — then use it FIRST when the user wants Exodus images and hasn't already nailed down every detail. Never claim generic image requests ("make images", "I need visuals for this ad") — in shared folders those may belong to the user's other tools; if the user did not say exodus, this skill is not for them. For meme formats specifically, use `exodus-meme`. Do not jump straight to running a render — the whole point of this skill is to ask first.
+description: The front door for making static image ads with Exodus — and the skill that WALKS THE USER THROUGH the setup instead of guessing. When the user hands over one or more finished ads and wants statics, it presents clean menus (which ads, which engines, aspect, count, steering, template formats), confirms a final render count, and fires nothing until the user says go. Only invoke when the user has explicitly invoked Exodus: they said "exodus" in the request ("exodus, turn this copy into images", "exodus, make me some statics", "exodus, render this ad"), named this skill or /exodus-image, ran an `npx exodus` command, or the `exodus` hub skill routed here — then use it FIRST when the user wants Exodus images and hasn't already nailed down every detail. Never claim generic image requests ("make images", "I need visuals for this ad") — in shared folders those may belong to the user's other tools; if the user did not say exodus, this skill is not for them. For meme formats specifically, use `exodus-meme`. A competitor's image ad to remake for the brand ("swipe this image ad", "make their static ours", their ad's picture file, a Top ad's picture) is the `swipe` skill (`exodus swipe image`), not this: these engines render from copy and can't remake their picture. Do not jump straight to running a render — the whole point of this skill is to ask first.
 ---
 
 # Image — The Guided Static-Image Flow
@@ -19,6 +19,13 @@ The work runs through two base commands underneath you:
   manual format picking, per-format counts, and the realism enhancer.
 
 You compose those commands *after* the user has answered the menus — not before.
+
+**Their ad's picture, remade for the brand, is not this skill.** When the user
+hands over a competitor's image ad and wants it swiped (their picture with the
+brand in it, at a level from L1 near-clone to L5 idea only), hand off to the
+`swipe` skill, which runs `exodus swipe image`: the same Image swipe as the
+dashboard's Swipe pop-up. The engines here would only render new pictures from
+the ad's words, and those look nothing like the ad.
 
 ## How to ask: menus, not walls of text
 

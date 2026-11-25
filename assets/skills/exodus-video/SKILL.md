@@ -571,7 +571,7 @@ figures or "no printed price" in its label, not only in its description:
 | Your own script | `Use my own script · no printed price` | Your lines word for word, made the way their ad is made, on your model key; people only when the script keeps their speaker's type. |
 | Step by step; the read past its limit or again (step 1); a start on its own (a refused start, step 5's check) | `Read the ad · no printed price`, `Read the rest · <what is left> · no printed price`, `Read it again · no printed price`, `Make the template · no printed price`, `Write it · no printed price`, `Start it · no printed price` | What the line without its yes printed that it buys, and who pays: each breakdown on the team's keys, each template and write on your model key. A write with people is the sheet's "Write it" row; a start of a kind with a saved sheet, the "Film it?" row. |
 | Mining (step 0) | `Mine them · no printed price` | Every active competitor on the watchlist, up to 50 in one run, on your Scrape Creators key. It starts at once. |
-| The bot again (step 5) | `Call the bot again · no printed price` | One more text swipe call, on your Genesis and model keys. |
+| The text swipe again (step 5) | `Swipe it again · no printed price` | One more text swipe, on your OpenRouter and Genesis keys. |
 | The song's price | `Make it · about $…, at most $…` | <size>, what it films as the price's head counts it (<n> clips, or about <a>, up to <m> video calls), each filmed at most twice: the song and the pictures before the storyboard stop, the filming after its yes. The at most is what the run is held to without a press. … Not in the price: text calls on your model key, and Exodus's checks, said apart. |
 | The song's first part (an admin) | `Make the first part · about $…, at most $…` | The song, the pictures and the clips of its first <s> s; the rest after a second yes (at most $…, priced again at that stop). The video in all never costs more than the whole video's at most. Exodus's checks, said apart. |
 | The song's roads | `Their song, your words · no printed price`, `Your own lines · no printed price` | 1 script now, on your model key; the video after your yes on its saved sheet, on your Kie and ElevenLabs keys. |
@@ -616,8 +616,10 @@ a second time.
 another place to find an ad to swipe, when the member wants to look there:
 `exodus top-ads search "<words>"` or `exodus top-ads list`, then `exodus
 top-ads show <id>` prints the ad's Meta Ad Library link. That link is a link
-like any other: step 1 reads it with `--url`, in quotes. The `exodus-top-ads`
-skill has the rest.
+like any other: step 1 reads it with `--url`, in quotes. Its words or its
+picture swiped for the brand, with no video, is the `swipe` skill instead
+(`exodus swipe text` or `exodus swipe image` with `--top-ad <id>`). The
+`exodus-top-ads` skill has the rest.
 
 ### 0. No ad named: find some
 
@@ -804,12 +806,12 @@ Send the sheet as one reply, its message as text first and its question after
 it (rule 2), then stop and wait. The message:
 
 > Read your ad: <length>, <who is in it>, <how it is cut>. (several ads: one sheet for all, a few words each)
-> Say "show sheet", "show script" or "why" · "personas": <N> saved, several make one video each, <noted only | written in by the text swipe bot> (only when the brand has some) · "mechanism" (only when step 5's path is open)
+> Say "show sheet", "show script" or "why" · "personas": <N> saved, several make one video each, <noted only | written in by the text swipe> (only when the brand has some) · "mechanism" (only when step 5's path is open)
 
 Its question (`AskUserQuestion`, header "Make it?"), its text:
 
 > <the kind the swipe makes> for <product> · Script <how close, in words> · Stop <at the storyboard, before the paid clips | at the end, with no final approve> · Music <off | on, on your ElevenLabs key>
-> Videos <n> = <a> ads × <p> personas: 1 <ad> × <persona>, 2 … (only when more than one) · Persona and mechanism: <the picks>, <written in by the text swipe bot | noted only: the videos differ only as two writes do> (only when picked)
+> Videos <n> = <a> ads × <p> personas: 1 <ad> × <persona>, 2 … (only when more than one) · Persona and mechanism: <the picks>, <written in by the text swipe | noted only: the videos differ only as two writes do> (only when picked)
 > Spent so far: $<X> on the team's keys for reading their ad (the template, on your model key: not printed). Make it?
 
 Its options: 1. the spending option (the table) 2. another way, only when
@@ -930,8 +932,8 @@ The rows:
   several picks, and "show all <N>" lists every one. "mechanism" asks the
   primer's mechanisms (step 2), the member's own words, or none.
 - **Persona and mechanism.** The video writer reads neither. When step 5's
-  path is open, the text swipe bot writes them into each video's lines, and
-  the rows say so (step 5). When it is closed, and for a video the bot does
+  path is open, the text swipe writes them into each video's lines, and
+  the rows say so (step 5). When it is closed, and for a video the swipe does
   not write, they are noted, not read: on "show sheet", a persona or a
   mechanism always carries "(noted, not used yet)", the primer's lead
   mechanism included, and videos for two personas differ only as two writes of
@@ -1004,7 +1006,7 @@ no music. With more than one product and none named, ask that one row first.
 
 ### 4. On the yes
 
-The yes covers the writes and the starts, and the bot calls when step 5
+The yes covers the writes and the starts, and the text swipes when step 5
 applies; nothing else (the read is done).
 
 **The saved sheet** (step 3's row) changes this: the yes of step 3 covers its
@@ -1493,36 +1495,42 @@ new words, or `prop=none`), then start again on their yes. A one-shot run
 whose checks find a problem stops for the member: show what `status` prints
 and ask.
 
-### 5. With a persona or a mechanism: the text swipe bot
+### 5. With a persona or a mechanism: the text swipe
 
-The video writer reads no persona and no mechanism. The `swipe` skill's bot
-does: it writes the ad's lines again with them in, and the write then makes
-those lines the way their ad is made.
+The video writer reads no persona and no mechanism. The text swipe does
+(`exodus swipe text`, the `swipe` skill's section 4, the same swipe as the
+dashboard's Swipe pop-up): it writes the ad's lines again with them in, and
+the write then makes those lines the way their ad is made.
 
-**When the path is open.** Before the sheet, check these three, all free:
+**When the path is open.** It runs on the member's own OpenRouter and Genesis
+keys, saved on the dashboard, and the server checks them before anything is
+paid. `npx @aicopycoders/exodus swipe --help` lists `swipe text` on a CLI that
+has it. When the first text swipe refuses with "Missing required key(s)", or
+the CLI has no `swipe text`, the path is closed and everything stays as
+above: the rows keep "(noted; the video writer does not read it yet)" and
+every write is the one "On the yes" gives. Say the refusal's own words once.
 
-- `.claude/skills/genesis-bots/scripts/genesis-stream.mjs` is in the folder.
-- `exodus keys status` (it prints key names, never values) shows
-  `GENESIS_API_KEY`, and `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`, as
-  "local ✓". When it cannot reach the dashboard, this does not hold.
-- `grep -l '^GENESIS_BASE_URL=' .env .claude/skills/genesis-bots/.env`, run
-  in the folder that holds `.claude/`, names at least one file. It prints
-  file names only, never a value. The helper needs this address, and
-  `exodus keys status` does not show it.
+**A brand with no primer.** The text swipe writes from the brand primer. Before
+the sheet, `npx @aicopycoders/exodus primer show` (free) says whether the
+brand has one. With none, don't wait for the swipe to refuse: say it plainly
+on the sheet, "Your brand has no primer yet, and the persona and mechanism
+are written in from it. Build it first with the `exodus-primer` skill, or I
+make these videos with them noted only." With a persona picked and no
+mechanism, a third way is open: the swipe with `--no-brand-info`, which swaps
+in only the brand's name and still writes the persona in (it never sends a
+mechanism). The old Genesis-bot path could run on product text alone; this
+one can't, and the member should hear that instead of a refusal.
 
-When one does not hold, the path is closed and everything stays as above:
-the rows keep "(noted; the video writer does not read it yet)" and every
-write is the one "On the yes" gives.
-
-**Which videos take it.** With the path open, the bot writes a video's lines
-when all three hold for that video, and "step 5 applies" means that video:
+**Which videos take it.** With the path open, the text swipe writes a video's
+lines when all three hold for that video, and "step 5 applies" means that
+video:
 
 - The member picked a persona for it, or a mechanism. The primer's lead
   mechanism that "just do it" picks stays noted only.
-- How close is 1, 2 or 3.
+- How close is any of 1 to 5.
 - The write would be `--mode whole-ad`. A note that sets `hook-only`,
   `their-format` or `new-look` keeps that write, and the persona and the
-  mechanism stay noted only: the bot never takes the place of the member's
+  mechanism stay noted only: the swipe never takes the place of the member's
   own script.
 
 Every other video is made as "On the yes" says, with the persona and the
@@ -1531,61 +1539,60 @@ mechanism noted only.
 **On the sheet, when the path is open.**
 
 - On "show sheet" and in "Change something", rows 1 and 2 read "(used through
-  the text swipe bot)" in place of "(noted; …)".
-- On "show sheet" and in "Change something", row 3 reads "1 Near-clone, 2 New
-  scene, same beats, 3 Same idea, new drama, 4 Same arc, 5 Pattern only (with
-  4 or 5, the persona and the mechanism are only noted)". Levels 1 to 3 are
-  the `swipe` skill's levels (its section 2), not the dial's: say so when the
-  member asks. A video the bot does not write takes the same number as its
-  `--closeness`.
-- The spending option's description adds, when the picks give the bot any
-  video: "Plus a text swipe call for each video (two at level 2 or 3), on your
-  own Genesis and model keys, no printed price." When only some videos take
-  it, name them ("for videos 1 and 3"). **It buys** on "show sheet" says the
-  same.
-- A reply that adds bot calls makes the buy bigger, so it is not the yes: a
-  persona or a mechanism added where the sheet had none, or, while a persona
-  or a mechanism is picked, how close moved from 1 to 2 or 3, or from 4 or 5
-  to 1, 2 or 3. A reply that moves how close to 4 or 5 while a persona or a
-  mechanism is picked is not the yes either: say that they will then be only
-  noted, and wait. One persona changed for another, with the same count, is
-  not a bigger buy.
+  the text swipe)" in place of "(noted; …)".
+- On "show sheet" and in "Change something", row 3 reads "1 Near-clone, 2
+  Close, 3 Reinterpreted, 4 Loose (same skeleton), 5 Inspired (only the
+  idea)". These are the `swipe` skill's levels L1 to L5 (its section 2), not
+  the dial's: say so when the member asks. A video the swipe does not write
+  takes the same number as its `--closeness`.
+- The spending option's description adds, when the picks give the swipe any
+  video: "Plus a text swipe for each video, on your own OpenRouter and
+  Genesis keys, no printed price." When only some videos take it, name them
+  ("for videos 1 and 3"). **It buys** on "show sheet" says the same.
+- A reply that adds swipes makes the buy bigger, so it is not the yes: a
+  persona or a mechanism added where the sheet had none. One persona changed
+  for another, with the same count, is not a bigger buy, and nor is how close
+  moving.
 
-**For each video the bot writes, on the yes:**
+**For each video the text swipe writes, on the yes:**
 
 1. The ad's lines: the Script part of `exodus video swipe status
-   <breakdownId> --full` (free), with who says each line. Keep each video's
-   files in a folder of its own, `swipes/<slug>/video-<n>/`, so no video
-   reads another's lines, and save the options answer as `options.md`, apart
-   from the lines.
-2. The PRODUCT block, built as the `swipe` skill's section 3 says, with that
-   video's persona and the mechanism. Begin it with the line `exodus video
-   swipe products` prints for the product being written (its name and
-   description).
-3. The bot, called as the `swipe` skill's section 4 says, with LEVEL from
-   row 3, one stream at a time, under that skill's "Security" rules. At level
-   2 or 3 its options call comes first; its options are short scenes, one
-   line each. The one round has no stop for the pick: take option 1 and send
-   its full SCENE text, as section 4 says. Section 4's retries and section
-   5's count and FIX call are each another paid call, and are not part of
-   this path. Run the helper so the shell's own time limit cannot cut it off
-   (a long timeout, or in the background), and wait for its "Done:" line or
-   its error.
-4. Save the bot's lines to a file, each line with its speaker label exactly
-   as the bot wrote it ("Alex: …"). Drop blank lines, a line "---", and a
-   first line that starts "Value mismatch —". When that first line comes,
-   tell the member in one sentence: it says why the scene and the product do
-   not fit, and may name a better level.
-5. `exodus video swipe write <breakdownId> --product <id> --mode their-format --script <file> --yes`.
-   No `--closeness`: the CLI refuses it with `their-format`, and the bot's
-   LEVEL carried the closeness. The write keeps each line word for word, and
-   its cast follows the file's speakers.
-6. The check below, then the start, as "On the yes" does.
+   <breakdownId> --full` (free), each line with who says it ("Alex: …").
+   Keep each video's files in a folder of its own, `swipes/<slug>/video-<n>/`,
+   so no video reads another's lines: save them as `lines.txt`.
+2. The swipe, one per video, at that video's level from row 3. It writes from
+   the brand primer on the server, under the `swipe` skill's "Security" rules:
 
-At level 2 the bot may give the lines to a new speaker named after the
-persona, in place of the ad's own; the cast follows the script. Say so in
-one line of the report for that video. For an ad with one speaker it still
-wrote one speaker, even when its options had several people in them.
+   ```bash
+   npx @aicopycoders/exodus swipe text --transcript @swipes/<slug>/video-<n>/lines.txt \
+     --brand-name "<their brand>" --piece transcript --levels "L<row 3>=1" \
+     [--persona "<that video's persona>"] [--mechanism "<the mechanism>"] \
+     --direction "Write it for <the product's name>: <its description, cut to its first sentence or two>." --json
+   ```
+
+   `--direction` holds at most 1,000 characters, as on the dashboard, and the
+   CLI refuses a longer one before anything is paid: keep the product to its
+   name and a sentence or two from `exodus video swipe products`, never its
+   whole description. The primer already carries the rest of the product's
+   facts.
+
+   Run it so the shell's own time limit cannot cut it off (a long timeout, or
+   in the background), and wait for its answer. Its `runs[0].swipes[0].copy`
+   is the new lines.
+3. Save those lines to `swipes/<slug>/video-<n>/swipe.txt`, each with its
+   speaker label ("Alex: …"). Drop blank lines. When a line comes back with no
+   label: on an ad with one speaker, give it that speaker; on an ad with
+   several, stop that video, show the member the lines, and ask who says
+   which.
+4. `exodus video swipe write <breakdownId> --product <id> --mode their-format --script swipes/<slug>/video-<n>/swipe.txt --yes`.
+   No `--closeness`: the CLI refuses it with `their-format`, and the swipe's
+   level carried the closeness. The write keeps each line word for word, and
+   its cast follows the file's speakers.
+5. The check below, then the start, as "On the yes" does.
+
+At level 2 and looser the swipe may give lines to a new speaker named after
+the persona, in place of the ad's own; the cast follows the script. Say so in
+one line of the report for that video.
 
 **The check is yours.** The write keeps the script's lines as they are and
 checks none of their claims, so after each write and before its start, read
@@ -1593,8 +1600,8 @@ every line of the script it prints, and its Direction, against (1) that
 video's persona, when one was picked, (2) the mechanism, when one was
 picked, and (3) the product's own facts. The facts are only these: the line
 `exodus video swipe products` prints for that product, and the product
-facts in the PRODUCT block you sent for that video. Never the ad's own
-claims (they were made for another product), and never the bot's. A picked
+facts in the brand primer the swipe wrote from (`exodus primer show`). Never the ad's own
+claims (they were made for another product), and never the swipe's. A picked
 mechanism's own words count as a fact for a line that says only what they
 say; a result beyond them needs a product fact.
 
@@ -1627,27 +1634,22 @@ only, as above. A write whose wait was cut off and is found again with `exodus
 video swipe show <swipeId>` (as "On the yes" says) gets this check too, on the
 script `show` prints, before its start.
 
-**Run so far.** Levels 1 and 2 of this path have been run for real, as far
-as the write. Level 3 has not.
+**Run so far.** This path is newly wired: it moved from the Genesis swipe
+bot to the dashboard's text swipe (COP-467) and has not yet been run for real
+through to a video. Say so when the member asks how well it works.
 
-**A bot call that fails** (the helper prints an error, or "stream completed
-but produced no content") stops that video only. Report it. Calling the bot
-again is paid again and needs the member's word, even when the helper's own
-error says "retry". Never use the partial lines a failed call leaves in its
-file. These count as failed calls too: a "Done:" line with
-`finish_reason=length`, which means the lines were cut short; an answer with
-no speaker lines in it; and a call the shell cut off before "Done:" or an
-error, which may have been paid all the same.
+**A swipe that fails** (the command prints a refusal, or the run ends
+"failed") stops that video only. Report it in the command's own words.
+Running the swipe again is paid again and needs the member's word. A wait the
+command gave up on is not a failure: the swipe goes on, so read it with
+`exodus swipe result <runId>`, never by running it again. These count as
+failed too: a run with no swipes in it, and lines with no speaker lines in
+them.
 
-Some failures stop every video the same way. The helper stops before it
-sends anything, and charges nothing, with "ERROR: GENESIS_BASE_URL is not
-set", "ERROR: GENESIS_API_KEY is not set" or "ERROR: no provider key found".
-A wrong model key prints `ERROR: provider_error: 401 …` and charges nothing.
-A Genesis key it refuses, a limit reached or a server fault prints `ERROR:
-HTTP 401`, `HTTP 429` or `HTTP 5…`. On one of these, make no further bot
-call. Tell the member what went wrong, and ask whether to fix it and go on,
-or to make the rest as "On the yes" says, with the persona and the mechanism
-noted only.
+A refusal before the swipe runs ("Missing required key(s)", "Add your brand
+primer first") charges nothing and stops every video the same way: say it
+once, and ask whether to fix it and go on, or to make the rest as "On the
+yes" says, with the persona and the mechanism noted only.
 
 ### A song ad: the Suno Pixar Song
 

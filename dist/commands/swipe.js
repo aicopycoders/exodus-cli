@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import { apiGet, apiPost } from "../lib/client.js";
 import { displayRunStatus, formatError } from "../lib/format.js";
+import { VALUE_FLAGS, runSwipeAd, swipeAdHelp } from "../lib/swipe-ad.js";
 export const helpText = `
-exodus swipe — Swipe pipeline lifecycle + competitor watchlist
+exodus swipe — swipe an ad for your brand; the Swipe pipeline lifecycle; your competitor watchlist
+
+${swipeAdHelp}
+
+The weekly Swipe pipeline:
 
 The Swipe pipeline produces a weekly Google Doc per brand of Mirror-style
 creative inspired by your watchlist's top competitor ads.
@@ -46,9 +51,22 @@ Examples:
   exodus swipe brands list
   exodus swipe brands add "AG1" --ig drinkag1 --fb 123456789 --cat supplements
 `.trim();
-export async function run(flags) {
+export async function run(flags, occurrences = []) {
     const positional = parsePositional();
     const [sub, ...rest] = positional;
+    if (sub === "text" || sub === "image" || sub === "whole" || sub === "add" || sub === "result") {
+        if (flags["help"]) {
+            console.log(swipeAdHelp);
+            return;
+        }
+        const result = await runSwipeAd(sub, swipeAdPositionals().slice(1), flags, occurrences);
+        const out = result.code === 0 && !result.usage ? console.log : console.error;
+        for (const line of result.lines)
+            out(line);
+        if (result.code !== 0)
+            process.exit(result.code);
+        return;
+    }
     if (sub === "run")
         return runRunPipeline(flags);
     if (sub === "mine")
@@ -82,6 +100,20 @@ export async function run(flags) {
     console.error(`Unknown subcommand: "${sub}"\n`);
     console.log(helpText);
     process.exit(1);
+}
+function swipeAdPositionals(args = process.argv.slice(3)) {
+    const out = [];
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg.startsWith("--")) {
+            const key = arg.slice(2).split("=", 1)[0] ?? "";
+            if (!arg.includes("=") && VALUE_FLAGS.has(key))
+                i++;
+            continue;
+        }
+        out.push(arg);
+    }
+    return out;
 }
 function parsePositional() {
     const args = process.argv.slice(3);

@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import { apiGet, apiPost } from "../lib/client.js";
 import { displayRunStatus, formatError } from "../lib/format.js";
+import type { FlagOccurrence } from "../lib/args.js";
+import { VALUE_FLAGS, runSwipeAd, swipeAdHelp } from "../lib/swipe-ad.js";
 
 export const helpText = `
-exodus swipe — Swipe pipeline lifecycle + competitor watchlist
+exodus swipe — swipe an ad for your brand; the Swipe pipeline lifecycle; your competitor watchlist
+
+${swipeAdHelp}
+
+The weekly Swipe pipeline:
 
 The Swipe pipeline produces a weekly Google Doc per brand of Mirror-style
 creative inspired by your watchlist's top competitor ads.
@@ -88,9 +94,23 @@ interface SwipeHistoryRow {
 
 export async function run(
   flags: Record<string, string | boolean>,
+  occurrences: FlagOccurrence[] = [],
 ): Promise<void> {
   const positional = parsePositional();
   const [sub, ...rest] = positional;
+
+  // COP-467: the dashboard's own swipe (Text, Image, Whole ad), on the member's keys.
+  if (sub === "text" || sub === "image" || sub === "whole" || sub === "add" || sub === "result") {
+    if (flags["help"]) {
+      console.log(swipeAdHelp);
+      return;
+    }
+    const result = await runSwipeAd(sub, swipeAdPositionals().slice(1), flags, occurrences);
+    const out = result.code === 0 && !result.usage ? console.log : console.error;
+    for (const line of result.lines) out(line);
+    if (result.code !== 0) process.exit(result.code);
+    return;
+  }
 
   // Lifecycle subcommands (new)
   if (sub === "run") return runRunPipeline(flags);
@@ -122,6 +142,22 @@ export async function run(
   console.error(`Unknown subcommand: "${sub}"\n`);
   console.log(helpText);
   process.exit(1);
+}
+
+// The swipe-an-ad subcommands' positionals: their flags know which of them take a value, so `--json <id>` and
+// `--no-brand-info <id>` keep the id (parsePositional below would take it as the flag's value).
+function swipeAdPositionals(args = process.argv.slice(3)): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2).split("=", 1)[0] ?? "";
+      if (!arg.includes("=") && VALUE_FLAGS.has(key)) i++;
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
 }
 
 // Argv parser: pull out positionals after the "swipe" command itself.

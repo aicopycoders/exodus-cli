@@ -1,6 +1,6 @@
 ---
 name: exodus-top-ads
-description: Read Exodus's Top ads, Top brands and Ad templates — the weekly chart of the best-performing ads from top brands, the brands behind them, and Luke's proven ad templates with real example ads and their scripts — through the read-only `npx @aicopycoders/exodus top-ads`, `top-brands` and `ad-templates` commands. Use it whenever an Exodus member wants ideas or proof from what's working for other brands right now, "exodus, show me top ads", "exodus, what's working in top ads this week", "exodus, find me a top ad about joint pain", "exodus, which brands are running the most ads", "exodus, find a template for a before-and-after ad", "exodus, show me template 3's scripts", or wants a Top ad to swipe into a video. Only invoke when the user has explicitly invoked Exodus: they said "exodus" in the request, named this skill or /exodus-top-ads, ran an `npx @aicopycoders/exodus top-ads`, `top-brands` or `ad-templates` command, or the `exodus` hub skill routed here. Never claim generic "top ads" or "ad library" asks without Exodus context; in shared folders those belong to the user's other tools. The member's OWN live Meta ads are `exodus-ads`; their tracked competitors' ads are the Mining page's swipe list, not this.
+description: Read Exodus's Top ads, Top brands and Ad templates — the weekly chart of the best-performing ads from top brands, the brands behind them, and Luke's proven ad templates with real example ads and their scripts — through the read-only `npx @aicopycoders/exodus top-ads`, `top-brands` and `ad-templates` commands. Use it whenever an Exodus member wants ideas or proof from what's working for other brands right now, "exodus, show me top ads", "exodus, what's working in top ads this week", "exodus, find me a top ad about joint pain", "exodus, which brands are running the most ads", "exodus, find a template for a before-and-after ad", "exodus, show me template 3's scripts", or wants a Top ad swiped for their brand (its words or its picture, which the `swipe` skill runs) or into a video. Only invoke when the user has explicitly invoked Exodus: they said "exodus" in the request, named this skill or /exodus-top-ads, ran an `npx @aicopycoders/exodus top-ads`, `top-brands` or `ad-templates` command, or the `exodus` hub skill routed here. Never claim generic "top ads" or "ad library" asks without Exodus context; in shared folders those belong to the user's other tools. The member's OWN live Meta ads are `exodus-ads`; their tracked competitors' ads are the Mining page's swipe list, not this.
 ---
 
 ```operator-guide
@@ -15,6 +15,11 @@ Read-only. Nothing here changes anything or spends the member's money.
   npx @aicopycoders/exodus ad-templates list [--json]
   npx @aicopycoders/exodus ad-templates show <number, name or id> [--json]
   npx @aicopycoders/exodus ad-templates search "<words>" [--json]
+
+Swipe a Top ad's words or its picture for the brand (the dashboard's swipe, L1–L5, on the member's keys):
+  npx @aicopycoders/exodus swipe text  --top-ad <id> --levels "L1=1"   → the words; see the swipe skill
+  npx @aicopycoders/exodus swipe image --top-ad <id> --levels "L1=1"   → the picture, remade for the brand
+  npx @aicopycoders/exodus swipe whole --top-ad <id> --levels "L1=1"   → both, as one whole ad
 
 Swipe a Top ad (or a template's example ad) into a video:
   npx @aicopycoders/exodus top-ads show <id>                  → prints its Meta Ad Library link
@@ -54,6 +59,10 @@ All three are read-only here. Following or hiding brands and making your own cop
 - "Show me all the templates" → `ad-templates list`
 
 When you're going to analyze rather than skim (comparing hooks across 20 ads, grouping angles), add `--json`.
+
+## Swiping a Top ad's words or picture
+
+"Swipe this one for my brand", its copy or its image: hand over to the `swipe` skill with the ad's id. It asks its five questions, then runs `npx @aicopycoders/exodus swipe text --top-ad <id>` (the words), `swipe image --top-ad <id>` (the picture, remade for the brand) or `swipe whole --top-ad <id>` (both), the same swipe as the dashboard's Swipe button on a Top ad, on the member's own keys. The id from the list's "id" column, the Meta ad id, or the Meta Ad Library link all work. A template's example ad goes by its link the same way.
 
 ## Swiping a Top ad into a video
 
@@ -100,6 +109,7 @@ Tell the member that plainly, in your own words: Top ads, Top brands and Ad temp
 
 - **The member's own live Meta ads and their numbers**: `exodus-ads`.
 - **Importing the member's own winning ads**: `exodus-winners`.
+- **Swiping its words or picture for the brand**: `swipe` (`exodus swipe text` or `exodus swipe image` with `--top-ad <id>`).
 - **Making the video**: `exodus-video` (`video swipe --url "<link>"`).
 - **Static image templates** (`exodus template`) and **video formats** (`exodus video --input-options`): different things that happen to share the word "template".
 - **Following, hiding, or copying a template**: done on the dashboard page.

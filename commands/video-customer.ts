@@ -224,15 +224,16 @@ export type StopEndCard =
   | { state: "none"; reason: string; note: string }
   | { state: "dropped"; note: string };
 
-/** COP-393: the check's state, in the stop's words. */
+/** COP-393: the check's state, in the stop's words: for the team's CLI only (`check: true`). */
 const END_CARD_CHECK_WORDS: Readonly<Record<string, string>> = { passed: "passed", failed: "failed", unchecked: "not checked" };
 
 /**
  * COP-393: the end card's lines at the stop, in line with the pictures' (COP-375: never its address; the page shows it):
- * its layout's name, its words by slot, the check's state, the server's one note, and how to drop it. A card not drawn
+ * its layout's name, its words by slot, the check's state for the team's CLI only (COP-470 part 14, Dani's rule: a
+ * member reads what is wrong, never what we check), the server's one note, and how to drop it. A card not drawn
  * says its reason and how the film ends; a dropped one says so. None when the server sent none.
  */
-export function endCardLines(card: StopEndCard | undefined, id: string, page: string): string[] {
+export function endCardLines(card: StopEndCard | undefined, id: string, page: string, opts: { check?: boolean } = {}): string[] {
   if (!card) return [];
   const label = "The end card: ";
   const under = " ".repeat(label.length);
@@ -244,7 +245,7 @@ export function endCardLines(card: StopEndCard | undefined, id: string, page: st
   return [
     `${label}${card.layout}. ${drawn ? `See it: ${page}` : "Its picture can't be shown here."}`,
     ...card.words.map((word) => `${under}${word.label}: ${word.words}`),
-    `${under}Check: ${END_CARD_CHECK_WORDS[card.check.state] ?? card.check.state}`,
+    ...(opts.check ? [`${under}Check: ${END_CARD_CHECK_WORDS[card.check.state] ?? card.check.state}`] : []),
     `${under}${card.note}`,
     ...(card.simpleNote ? [`${under}${card.simpleNote}`] : []),
     `Drop it:      exodus video drop-card ${id}`,

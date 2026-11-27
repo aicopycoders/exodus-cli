@@ -83,6 +83,7 @@ import {
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
+import { checksFlow } from "./video-checks.js";
 
 const VOICE_MODES = ["native", "voice-first"] as const;
 type VoiceMode = (typeof VOICE_MODES)[number];
@@ -222,6 +223,11 @@ The whole loop, in order:
        Prints the storyboard draft that was turned down. A record of what
        happened, thrown away by the system — never something to act on.
 
+     exodus video checks <runId>
+       How many checks ran on the video and how many passed, and what is
+       wrong, was kept, fixed or noted, in plain words. An admin's key
+       prints every saved answer whole.
+
   8. exodus video pull <runId> --out ./ad
      Writes every piece to that folder plus a manifest.json index.
 
@@ -303,6 +309,7 @@ The whole loop, in order:
 
 Usage:
   exodus video status <runId> [--rejected-draft] [--json]
+  exodus video checks <runId> [--json]
   exodus video wait <runId> [--json]
   exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
   exodus video song <runId> [--out <dir>] [--json]
@@ -2595,7 +2602,8 @@ export function stopLines(stop: ResolvedStop, runId: string, runUrl: string, vid
     const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
     // COP-393: the end card the lock asked for, named among what waits only when one is shown, and its lines.
     const card = stop.endCard?.state === "ready" ? ["the end card"] : [];
-    const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl);
+    // COP-470 part 14: the team's CLI keeps the card's check line; a member's has none.
+    const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl, { check: true });
     // B-roll, inserts and overlays: with a plan, the stop's list, its code and the approve that carries it, as the
     // storyboard prints it (cutawayLines), in place of the plain approve, which the server refuses without the code.
     const plan = stop.cutaways;
@@ -6930,7 +6938,7 @@ export async function storyboardFlow(
   else if (cards.cutawaysUnread) lines.push("", cards.cutawaysUnread);
   if (!cards.openings && cards.openingPicked) lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
   // COP-393: the end card the board drew, as status prints it.
-  const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId));
+  const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId), { check: true });
   if (cardLines.length > 0) lines.push("", ...cardLines);
 
   // #1845: the voices ride the storyboard stop, so a person sees who speaks with
@@ -10466,6 +10474,7 @@ export async function run(
   const runId = rest[0];
   const needsRunId = [
     "status",
+    "checks",
     "storyboard",
     "approve",
     "flag",
@@ -10509,6 +10518,8 @@ export async function run(
     }
     return printResult(await statusFlow(runId, json, defaultDeps));
   }
+  // COP-470: the saved answers of the video's checks (video-checks.ts).
+  if (sub === "checks") return printResult(await checksFlow(runId, json, defaultDeps));
   if (sub === "review") {
     const plan = parseReviewFlags(flags, occurrences);
     if (!plan.ok) usage(plan.line);

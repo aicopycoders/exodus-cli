@@ -18,6 +18,7 @@ import { customerAnswer, customerRunPage, listedWords, endCardLines, stopPicture
 import { planSwipeCommand, runSwipePlan } from "./video-swipe.js";
 import { runTemplateCommand } from "./video-template.js";
 import { runTemplateReviewCommand } from "./video-template-review.js";
+import { checksFlow } from "./video-checks.js";
 const VOICE_MODES = ["native", "voice-first"];
 function joinedOr(items) {
     if (items.length <= 1)
@@ -136,6 +137,11 @@ The whole loop, in order:
        Prints the storyboard draft that was turned down. A record of what
        happened, thrown away by the system — never something to act on.
 
+     exodus video checks <runId>
+       How many checks ran on the video and how many passed, and what is
+       wrong, was kept, fixed or noted, in plain words. An admin's key
+       prints every saved answer whole.
+
   8. exodus video pull <runId> --out ./ad
      Writes every piece to that folder plus a manifest.json index.
 
@@ -217,6 +223,7 @@ The whole loop, in order:
 
 Usage:
   exodus video status <runId> [--rejected-draft] [--json]
+  exodus video checks <runId> [--json]
   exodus video wait <runId> [--json]
   exodus video review <runId> (--accept | --reject) [--resolve "<key>|<accepted-as-is|waived>|<why>"] [--disagree "<key>|<words>"] [--grade <v>] [--media <v>] [--json]
   exodus video song <runId> [--out <dir>] [--json]
@@ -1507,7 +1514,7 @@ export function stopLines(stop, runId, runUrl, videoPage) {
     if (stop.at === "storyboard-gate") {
         const pictures = stop.noPictureBeforeApproval ? stopPictureLines(stop, videoPage || runUrl) : [];
         const card = stop.endCard?.state === "ready" ? ["the end card"] : [];
-        const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl);
+        const cardLines = endCardLines(stop.endCard, runId, videoPage || runUrl, { check: true });
         const plan = stop.cutaways;
         const planned = (approve) => (plan ? cutawayLines(plan, runId, { approve }) : [...cutawayUnreadLines(stop), approve]);
         const lines = [
@@ -4860,7 +4867,7 @@ export async function storyboardFlow(runId, json, deps) {
         lines.push("", cards.cutawaysUnread);
     if (!cards.openings && cards.openingPicked)
         lines.push("", `Take 1 starts with opening ${cards.openingPicked.n}: ${cards.openingPicked.name}.`);
-    const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId));
+    const cardLines = endCardLines(cards.endCard, runId, customerRunPage(deps.dashboardUrl, runId), { check: true });
     if (cardLines.length > 0)
         lines.push("", ...cardLines);
     const voiceRes = await deps
@@ -7467,6 +7474,7 @@ export async function run(flags, occurrences) {
     const runId = rest[0];
     const needsRunId = [
         "status",
+        "checks",
         "storyboard",
         "approve",
         "flag",
@@ -7504,6 +7512,8 @@ export async function run(flags, occurrences) {
         }
         return printResult(await statusFlow(runId, json, defaultDeps));
     }
+    if (sub === "checks")
+        return printResult(await checksFlow(runId, json, defaultDeps));
     if (sub === "review") {
         const plan = parseReviewFlags(flags, occurrences);
         if (!plan.ok)

@@ -2404,6 +2404,9 @@ exodus workflow run <workflowId|name> --input <field>=@script.txt --voices @voic
 exodus workflow run <workflowId|name> --input <field>=@script.txt --voice-treatment @voice-treatment.json --wait
                                                           same, with the video model speaking voices you WROTE
 exodus video status <runId>                               where it is, per scene
+exodus video checks <runId>                               how many checks ran on the video and how many
+                                                          passed, and what is wrong, kept, fixed or noted, in
+                                                          plain words; a record only
 exodus video wait <runId>                                 waits until the run stops for the member, fails or is
                                                           delivered (up to an hour), through the app's cut, and
                                                           prints where the run stopped and the next step, as the

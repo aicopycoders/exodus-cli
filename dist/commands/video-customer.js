@@ -8,7 +8,7 @@ export function speechSummaryLines(speech) {
     return [labels[speech.status], ...speech.issues.map(speechIssueText)];
 }
 const END_CARD_CHECK_WORDS = { passed: "passed", failed: "failed", unchecked: "not checked" };
-export function endCardLines(card, id, page) {
+export function endCardLines(card, id, page, opts = {}) {
     if (!card)
         return [];
     const label = "The end card: ";
@@ -23,7 +23,7 @@ export function endCardLines(card, id, page) {
     return [
         `${label}${card.layout}. ${drawn ? `See it: ${page}` : "Its picture can't be shown here."}`,
         ...card.words.map((word) => `${under}${word.label}: ${word.words}`),
-        `${under}Check: ${END_CARD_CHECK_WORDS[card.check.state] ?? card.check.state}`,
+        ...(opts.check ? [`${under}Check: ${END_CARD_CHECK_WORDS[card.check.state] ?? card.check.state}`] : []),
         `${under}${card.note}`,
         ...(card.simpleNote ? [`${under}${card.simpleNote}`] : []),
         `Drop it:      exodus video drop-card ${id}`,
